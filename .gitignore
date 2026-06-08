@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+config/properties_dev.ini
+logs/
+.idea/
+.vscode/
+venv/
