@@ -1,3 +1,11 @@
+---
+name: ♻️ Refactor
+about: 기존 코드를 개선하거나 구조를 변경합니다.
+title: "[REFACTOR] "
+labels: refactor
+assignees: ""
+---
+
 # ♻️ Refactor - <!--{ 작업 내용 }-->
 <!-- 위 작업내용 주석에 어떤 리팩토링인지 적어주세요-->
 

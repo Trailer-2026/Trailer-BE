@@ -1,3 +1,11 @@
+---
+name: ✨ Feature
+about: 새로운 기능을 제안합니다.
+title: "[FEAT] "
+labels: feature
+assignees: ""
+---
+
 # ✨ Feat - <!--{ 작업 내용 }-->
 <!-- 위 작업내용 주석에 어떤 기능인지 적어주세요-->
 

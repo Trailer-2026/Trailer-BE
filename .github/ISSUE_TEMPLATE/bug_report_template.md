@@ -1,3 +1,11 @@
+---
+name: 🐛 Bug Report
+about: 버그를 제보합니다.
+title: "[BUG] "
+labels: bug
+assignees: ""
+---
+
 # 🐛 Bug - <!--{ 작업 내용 }-->
 <!-- 위 작업내용 주석에 어떤 오류인지 적어주세요-->
 
