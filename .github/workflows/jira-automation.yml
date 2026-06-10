@@ -1,4 +1,4 @@
-name: GitHub 이슈 → Jira 이슈 생성 및 브랜치 자동화 (테스트)
+name: GitHub 이슈 → Jira 이슈 생성 및 브랜치 자동화 (테스트 2단계)
 on:
   issues:
     types:
@@ -8,66 +8,42 @@ jobs:
   create-jira-and-branch:
     name: Jira Task 생성 및 브랜치 생성
     runs-on: ubuntu-latest
-    # 명시적 권한 추가
     permissions:
       contents: write
       issues: write
       pull-requests: write
 
     steps:
-      # 1. 이 단계만 먼저 테스트합니다 (공식 액션)
       - name: dev 브랜치 체크아웃
         uses: actions/checkout@v4
         with:
           ref: dev
 
-      # 2. 아래 외부 액션들은 모두 주석 처리하여 다운로드 시도를 막습니다.
+      # [체크 1] 이 액션이 성공하는지 확인 (주석 해제)
+      - name: Github 이슈 마크다운을 Jira 마크다운 문법으로 변환
+        uses: peter-evans/jira2md@v1
+        id: md2jira
+        with:
+          input-text: |
+            ### Github Issue Link
+            - ${{ github.event.issue.html_url }}
+            ${{ github.event.issue.body }}
+          mode: md2jira
 
-      # - name: Github 이슈 마크다운을 Jira 마크다운 문법으로 변환
-      #   uses: peter-evans/jira2md@v1
-      #   id: md2jira
-      #   with:
-      #     input-text: |
-      #       ### Github Issue Link
-      #       - ${{ github.event.issue.html_url }}
-      #       ${{ github.event.issue.body }}
-      #     mode: md2jira
-
-      - name: 이슈 타입 추출 (단순 쉘 스크립트라 활성화 가능)
+      # [수정] 정규식 가독성 및 정확도 향상
+      - name: 이슈 타입 추출
         id: extract_issue_type
         run: |
-          title="${{ github.event.issue.title }}"
-          issue_type=$(echo "$title" | sed -n 's/^\\[\\([^]]*\\)\\].*/\\1/p' | tr '[:upper:]' '[:lower:]')
-          echo "issue_type=$issue_type" >> $GITHUB_OUTPUT
+          TITLE="${{ github.event.issue.title }}"
+          # [fix] 에서 fix만 추출하는 더 확실한 방법
+          TYPE=$(echo "$TITLE" | grep -oP '\[\K[^\]]+(?=\])' | tr '[:upper:]' '[:lower:]' | head -n 1)
+          echo "issue_type=$TYPE" >> $GITHUB_OUTPUT
+          echo "Extracted Type: $TYPE"
 
-      # - name: Jira Task 생성
-      #   id: create_jira_task
-      #   uses: fjogeleit/http-request-action@v1
-      #   with:
-      #     url: '${{ secrets.JIRA_BASE_URL }}/rest/api/2/issue'
-      #     method: 'POST'
-      #     username: '${{ secrets.JIRA_USER_EMAIL }}'
-      #     password: '${{ secrets.JIRA_API_TOKEN }}'
-      #     customHeaders: '{"Content-Type": "application/json"}'
-      #     data: '{"fields": {"project": {"key": "TEST"}, "issuetype": {"name": "Task"}, "summary": "Test"}}'
-
-      # - name: Jira 담당자 배정
-      #   uses: fjogeleit/http-request-action@v1
-      #   with:
-      #     url: '${{ secrets.JIRA_BASE_URL }}/rest/api/2/issue/TEST-1/assignee'
-      #     method: 'PUT'
-      #     username: '${{ secrets.JIRA_USER_EMAIL }}'
-      #     password: '${{ secrets.JIRA_API_TOKEN }}'
-
-      # - name: 담당자 할당 (GitHub 이슈)
-      #   uses: actions-cool/issues-helper@v3
-      #   with:
-      #     actions: 'add-assignees'
-      #     token: ${{ secrets.GITHUB_TOKEN }}
-      #     issue-number: ${{ github.event.issue.number }}
-      #     assignees: ${{ github.event.issue.user.login }}
-
-      - name: 테스트 로그 출력
+      - name: 테스트 결과 출력
         run: |
-          echo "Checkout success!"
-          echo "Issue Type: ${{ steps.extract_issue_type.outputs.issue_type }}"
+          echo "Jira 변환 결과: ${{ steps.md2jira.outputs.output-text }}"
+          echo "추출된 타입: ${{ steps.extract_issue_type.outputs.issue_type }}"
+
+      # 나머지 액션은 아직 주석 유지 (하나씩 풀면서 범인 찾기)
+      # - name: Jira Task 생성 ...
