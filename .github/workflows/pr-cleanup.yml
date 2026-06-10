@@ -1,59 +1,50 @@
-name: PR 머지 시 이슈 종료 및 정리
+name: PR 머지 시 이슈 자동 종료 (키워드 불필요)
+
 on:
   pull_request:
     types:
       - closed
 
 jobs:
-  cleanup:
-    # PR이 머지되었을 때만 실행 (그냥 닫힌 경우는 제외)
+  close-linked-issues:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
-      contents: write
       issues: write
+      contents: read
+      pull-requests: read
 
     steps:
-      - name: 이슈 번호 및 Jira 키 추출
-        id: extract_info
-        run: |
-          # 브랜치명 형식: feat/TRA-123 (이전 워크플로 기준)
-          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
-          
-          # 브랜치명에서 Jira 키 추출 (예: TRA-123)
-          JIRA_KEY=$(echo "$BRANCH_NAME" | grep -oP '[A-Z]+-[0-9]+')
-          echo "jira_key=$JIRA_KEY" >> $GITHUB_OUTPUT
-          
-          # PR 본문이나 제목에서 연결된 GitHub 이슈 번호 찾기 (없으면 수동 연결 필요)
-          # 여기서는 간단하게 PR 제목에 이슈번호가 있다고 가정하거나, 
-          # 아까 만든 이슈 자동화에서 댓글에 이슈번호를 남겼으므로 gh CLI로 찾을 수 있습니다.
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: GitHub 이슈 닫기 (gh CLI 사용)
+      - name: 브랜치명에서 Jira 키 추출 및 관련 이슈 종료
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 이 PR과 연결된 이슈들을 찾아서 모두 닫습니다.
-          # PR 설명에 "Closes #번호"가 있으면 자동으로 닫히지만, 
-          # 없을 경우를 대비해 직접 명령어를 실행할 수 있습니다.
+          # 1. 현재 PR의 브랜치명 가져오기 (예: feat/TRA-10)
+          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
           
-          PR_NUMBER=${{ github.event.pull_request.number }}
-          # 연결된 이슈 리스트 가져오기
-          ISSUES=$(gh pr view $PR_NUMBER --json closingIssuesReferences -q '.closingIssuesReferences[].number')
+          # 2. Jira 키 추출 (예: TRA-10)
+          JIRA_KEY=$(echo "$BRANCH_NAME" | grep -oP '[A-Z]+-[0-9]+' || echo "")
           
-          for ISSUE in $ISSUES; do
-            gh issue close $ISSUE --comment "PR이 머지되어 자동으로 이슈를 닫습니다."
-          done
+          if [ -z "$JIRA_KEY" ]; then
+            echo "브랜치명에서 Jira 키를 찾을 수 없습니다. (현재 브랜치: $BRANCH_NAME)"
+            exit 0
+          fi
+          
+          echo "Jira Key: $JIRA_KEY 에 연결된 GitHub 이슈를 검색합니다..."
 
-      - name: Jira Task 완료 상태로 변경 (Done)
-        if: steps.extract_info.outputs.jira_key != ''
-        run: |
-          # Jira에서 'Done' 상태의 ID를 알아야 합니다. (보통 31, 41 등 혹은 이름 "Done")
-          # transition ID는 프로젝트마다 다르므로 "Done"이라는 이름으로 시도합니다.
-          
-          JIRA_KEY="${{ steps.extract_info.outputs.jira_key }}"
-          
-          curl -s -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
-            -X POST \
-            -H "Content-Type: application/json" \
-            --data '{"transition": {"id": "Done"}}' \
-            "${{ secrets.JIRA_BASE_URL }}/rest/api/2/issue/$JIRA_KEY/transitions"
+          # 3. 해당 Jira 키를 포함하고 있는 GitHub 이슈 검색
+          # 아까 Jira 생성 워크플로가 이슈 댓글에 Jira 링크를 남겼으므로 검색이 가능합니다.
+          REPO="${{ github.repository }}"
+          ISSUE_NUMBERS=$(gh issue list --repo $REPO --search "$JIRA_KEY" --json number -q '.[].number')
+
+          if [ -z "$ISSUE_NUMBERS" ]; then
+            echo "해당 Jira 키($JIRA_KEY)가 언급된 이슈를 찾지 못했습니다."
+          else
+            for ISSUE in $ISSUE_NUMBERS; do
+              echo "Closing issue #$ISSUE"
+              gh issue close $ISSUE --repo $REPO --comment "PR 머지 및 브랜치($BRANCH_NAME) 삭제에 따라 연결된 이슈를 자동으로 닫습니다."
+            done
+          fi
