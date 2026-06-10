@@ -1,0 +1,59 @@
+name: PR 머지 시 이슈 종료 및 정리
+on:
+  pull_request:
+    types:
+      - closed
+
+jobs:
+  cleanup:
+    # PR이 머지되었을 때만 실행 (그냥 닫힌 경우는 제외)
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: 이슈 번호 및 Jira 키 추출
+        id: extract_info
+        run: |
+          # 브랜치명 형식: feat/TRA-123 (이전 워크플로 기준)
+          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+          
+          # 브랜치명에서 Jira 키 추출 (예: TRA-123)
+          JIRA_KEY=$(echo "$BRANCH_NAME" | grep -oP '[A-Z]+-[0-9]+')
+          echo "jira_key=$JIRA_KEY" >> $GITHUB_OUTPUT
+          
+          # PR 본문이나 제목에서 연결된 GitHub 이슈 번호 찾기 (없으면 수동 연결 필요)
+          # 여기서는 간단하게 PR 제목에 이슈번호가 있다고 가정하거나, 
+          # 아까 만든 이슈 자동화에서 댓글에 이슈번호를 남겼으므로 gh CLI로 찾을 수 있습니다.
+
+      - name: GitHub 이슈 닫기 (gh CLI 사용)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 이 PR과 연결된 이슈들을 찾아서 모두 닫습니다.
+          # PR 설명에 "Closes #번호"가 있으면 자동으로 닫히지만, 
+          # 없을 경우를 대비해 직접 명령어를 실행할 수 있습니다.
+          
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          # 연결된 이슈 리스트 가져오기
+          ISSUES=$(gh pr view $PR_NUMBER --json closingIssuesReferences -q '.closingIssuesReferences[].number')
+          
+          for ISSUE in $ISSUES; do
+            gh issue close $ISSUE --comment "PR이 머지되어 자동으로 이슈를 닫습니다."
+          done
+
+      - name: Jira Task 완료 상태로 변경 (Done)
+        if: steps.extract_info.outputs.jira_key != ''
+        run: |
+          # Jira에서 'Done' 상태의 ID를 알아야 합니다. (보통 31, 41 등 혹은 이름 "Done")
+          # transition ID는 프로젝트마다 다르므로 "Done"이라는 이름으로 시도합니다.
+          
+          JIRA_KEY="${{ steps.extract_info.outputs.jira_key }}"
+          
+          curl -s -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data '{"transition": {"id": "Done"}}' \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/2/issue/$JIRA_KEY/transitions"
