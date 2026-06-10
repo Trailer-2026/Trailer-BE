@@ -1,0 +1,26 @@
+name: '♻️ Refactor'
+description: '코드 리팩토링. 생성 시 Jira Task와 refactor/TRA-... 브랜치가 자동 생성됩니다.'
+title: '[refactor] '
+labels: [refactor]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: '📝 Description'
+      description: '어떤 리팩토링 작업인지 적어주세요'
+      placeholder: '리팩토링 작업 사항'
+    validations:
+      required: true
+  - type: textarea
+    id: todo
+    attributes:
+      label: '✅ To Do List'
+      description: 'PR 날릴 때 모두 체크되어야 합니다'
+      value: |
+        - [ ] 수정1
+        - [ ] 수정2
+  - type: textarea
+    id: etc
+    attributes:
+      label: '📚 Etc'
+      description: '작업 중 특이사항이 있으면 적어주세요'
