@@ -1,0 +1,54 @@
+# CodeRabbit 설정 파일
+# 레포지토리 루트에 이 파일을 추가하세요
+
+language: "ko-KR"
+
+reviews:
+  # MR 요약 자동 생성
+  high_level_summary: true
+  # 시(poem) 생성 끄기
+  poem: false
+  # 리뷰 상태 표시
+  review_status: true
+
+  auto_review:
+    # 자동 리뷰 활성화
+    enabled: true
+    # 드래프트 MR은 리뷰 스킵
+    drafts: false
+    # 리뷰 제외할 파일 패턴
+    path_filters:
+      - "!dist/**"
+      - "!build/**"
+      - "!node_modules/**"
+      - "!__pycache__/**"
+      - "!*.pyc"
+      - "!logs/**"
+      - "!**/*.min.js"
+      - "!**/*.lock"
+      - "!**/package-lock.json"
+
+  # 리뷰 시 참고할 커스텀 지침
+  path_instructions:
+    - path: "**/*.py"
+      instructions: |
+        - FastAPI + SQLAlchemy 1.4 프로젝트입니다
+        - 보안 취약점을 반드시 체크해주세요 (SQL Injection, XSS, SSRF)
+        - 에러 핸들링이 적절한지 확인해주세요
+        - 타입 힌트 사용을 권장해주세요
+        - DAO에서 commit 금지 (flush만), Service에서 commit
+        - Soft delete 패턴 확인 (deleted_at 필터링)
+    - path: "**/*.js"
+      instructions: |
+        - jQuery 기반 프론트엔드입니다
+        - SweetAlert2, DevExpress dxDataGrid 사용
+        - XSS 취약점을 확인해주세요
+        - 성능 이슈와 메모리 누수를 확인해주세요
+    - path: "**/*.html"
+      instructions: |
+        - Jinja2 SSR 템플릿입니다
+        - XSS 방지를 위한 이스케이핑을 확인해주세요
+        - 레이아웃 include 구조를 따르는지 확인해주세요
+
+chat:
+  auto_reply: true
