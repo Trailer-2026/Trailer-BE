@@ -1,0 +1,59 @@
+# CodeRabbit 설정 파일 (.coderabbit.yaml)
+language: "ko-KR"
+
+reviews:
+  high_level_summary: true
+  poem: false
+  review_status: true
+
+  auto_review:
+    enabled: true
+    drafts: false
+    # 리뷰 제외 패턴 (백엔드 전용)
+    path_filters:
+      - "!dist/**"
+      - "!build/**"
+      - "!node_modules/**"
+      - "!venv/**"
+      - "!.venv/**"
+      - "!__pycache__/**"
+      - "!*.pyc"
+      - "!logs/**"
+      - "!**/migrations/versions/**" # Alembic 마이그레이션 파일 제외 (선택사항)
+      - "!**/*.lock"
+      - "!**/requirements.txt"
+      - "!**/package-lock.json"
+
+  # 리뷰 시 참고할 커스텀 지침 (FastAPI 백엔드 최적화)
+  path_instructions:
+    - path: "**/*.py"
+      instructions: |
+        - **프레임워크**: FastAPI 및 SQLAlchemy 1.4 기반 프로젝트입니다.
+        - **데이터베이스 패턴**: 
+          - **DAO(Repository)** 계층에서는 `db.commit()`을 절대 호출하지 마세요. 대신 `db.flush()`를 사용해야 합니다.
+          - 모든 트랜잭션의 `db.commit()`은 **Service** 계층에서 처리해야 합니다.
+          - Soft Delete가 적용된 테이블의 경우, 조회 시 `deleted_at IS NULL` 필터링이 누락되지 않았는지 확인하세요.
+        - **타입 및 검증**:
+          - 모든 API 엔드포인트의 입력과 출력에는 Pydantic Schema(DTO)를 사용하고 타입 힌트를 엄격히 적용하세요.
+          - Optional 필드에 대한 처리가 적절한지 확인하세요.
+        - **보안 및 에러 처리**:
+          - SQL Injection 방지를 위해 반드시 SQLAlchemy의 ORM 또는 파라미터 바인딩을 사용하세요.
+          - `try-except` 블록이 너무 광범위하지 않은지, 에러 메시지에 민감한 정보가 포함되지 않았는지 체크하세요.
+          - FastAPI의 `HTTPException`을 사용하여 적절한 상태 코드(400, 403, 404 등)를 반환하는지 확인하세요.
+        - **성능**:
+          - N+1 문제가 발생할 가능성이 있는 관계 로딩(`joinedload`, `subqueryload`)을 체크하세요.
+
+    - path: "**/schemas/*.py"
+      instructions: |
+        - Pydantic 모델 설정입니다.
+        - `orm_mode = True` (SQLAlchemy 1.4) 또는 `from_attributes = True` (Pydantic v2) 설정이 적절한지 확인하세요.
+        - 필드 설명(description)과 예시(Example) 값이 문서화에 도움이 되도록 작성되었는지 확인하세요.
+
+    - path: "**/api/**/*.py"
+      instructions: |
+        - API 엔드포인트(Router) 정의 파일입니다.
+        - RESTful한 URL 설계인지, 적절한 HTTP Method(GET, POST, PUT, DELETE)를 사용했는지 확인하세요.
+        - 의존성 주입(`Depends`)을 통해 인증 및 DB 세션을 적절히 관리하는지 체크하세요.
+
+chat:
+  auto_reply: true

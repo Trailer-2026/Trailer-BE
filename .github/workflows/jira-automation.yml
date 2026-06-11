@@ -1,0 +1,113 @@
+name: GitHub 이슈 → Jira 이슈 생성 및 브랜치 자동화
+on:
+  issues:
+    types:
+      - opened
+
+jobs:
+  create-jira-and-branch:
+    name: Jira Task 생성 및 브랜치 생성
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: dev 브랜치 체크아웃
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Github 이슈 마크다운을 Jira 마크다운 문법으로 변환
+        uses: peter-evans/jira2md@v1
+        id: md2jira
+        with:
+          input-text: |
+            ### Github Issue Link
+            - ${{ github.event.issue.html_url }}
+            ${{ github.event.issue.body }}
+          mode: md2jira
+
+      - name: 이슈 정보 추출 및 제목 변환
+        id: info
+        run: |
+          TITLE="${{ github.event.issue.title }}"
+          TYPE=$(echo "$TITLE" | grep -oP '\[\K[^\]]+(?=\])' | tr '[:upper:]' '[:lower:]' | head -n 1)
+          TITLE_CLEAN=$(echo "$TITLE" | sed 's/^\[[^]]*\] //')
+          
+          echo "issue_type=$TYPE" >> $GITHUB_OUTPUT
+          echo "converted_title=[BE/$TYPE] $TITLE_CLEAN" >> $GITHUB_OUTPUT
+
+      - name: Jira Task 생성 (curl 사용)
+        id: create_jira
+        run: |
+          # Description 이스케이프 처리
+          DESCRIPTION=$(echo '${{ steps.md2jira.outputs.output-text }}' | jq -R -s .)
+          
+          RESPONSE=$(curl -s -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            --data "{
+              \"fields\": {
+                \"project\": { \"key\": \"${{ secrets.JIRA_PROJECT_KEY }}\" },
+                \"issuetype\": { \"name\": \"Task\" },
+                \"summary\": \"${{ steps.info.outputs.converted_title }}\",
+                \"description\": $DESCRIPTION
+              }
+            }" "${{ secrets.JIRA_BASE_URL }}/rest/api/2/issue")
+          
+          TASK_KEY=$(echo $RESPONSE | jq -r '.key')
+          echo "task_key=$TASK_KEY" >> $GITHUB_OUTPUT
+          echo "Created: $TASK_KEY"
+
+      - name: Jira 담당자 배정 (curl 사용)
+        run: |
+          declare -A MAP=(
+            ["dabeann"]="712020:2af901bf-3f26-4f22-9cc9-f8d597ac4209"
+            ["Johyeonwoooooooo"]="712020:fcaa418d-003c-4197-8417-0ef2bbee9e60"
+            ["changyunyeong"]="712020:cccc-3333"
+          )
+          ACCOUNT_ID=${MAP["${{ github.event.issue.user.login }}"]}
+          
+          if [ ! -z "$ACCOUNT_ID" ]; then
+            curl -s -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+              -X PUT \
+              -H "Content-Type: application/json" \
+              --data "{\"accountId\": \"$ACCOUNT_ID\"}" \
+              "${{ secrets.JIRA_BASE_URL }}/rest/api/2/issue/${{ steps.create_jira.outputs.task_key }}/assignee"
+          fi
+
+      - name: 브랜치 생성 및 푸시
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          BRANCH_NAME="${{ steps.info.outputs.issue_type }}/${{ steps.create_jira.outputs.task_key }}"
+          
+          git checkout dev
+          git pull origin dev
+          git checkout -b "$BRANCH_NAME"
+          git push origin "$BRANCH_NAME"
+
+      - name: GitHub 이슈 업데이트 (gh CLI 사용)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISSUE_NUMBER=${{ github.event.issue.number }}
+          TASK_KEY=${{ steps.create_jira.outputs.task_key }}
+          URL="${{ secrets.JIRA_BASE_URL }}/browse/$TASK_KEY"
+          BRANCH="${{ steps.info.outputs.issue_type }}/$TASK_KEY"
+          
+          # 담당자 지정
+          gh issue edit $ISSUE_NUMBER --add-assignee "${{ github.event.issue.user.login }}"
+          
+          # 댓글 추가
+          gh issue comment $ISSUE_NUMBER --body "✅ **Jira Task 생성 완료**: [$TASK_KEY]($URL)
+          🌿 **새 브랜치 생성**: \`$BRANCH\`
+          
+          **작업 시작 명령어:**
+          \`\`\`bash
+          git fetch origin && git checkout $BRANCH
+          \`\`\`"

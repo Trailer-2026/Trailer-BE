@@ -1,0 +1,22 @@
+name: Deploy to GCP VM
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GCP VM SSH 접속 후 배포
+        uses: appleboy/ssh-action@v1   # 최신 태그는 마켓플레이스에서 확인 후 고정
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -e
+            cd /home/dabin/Trailer-BE
+            git pull origin main
+            .venv/bin/pip install -r requirements.txt
+            sudo systemctl restart trailer-be

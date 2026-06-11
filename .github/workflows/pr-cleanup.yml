@@ -1,0 +1,50 @@
+name: PR 머지 시 이슈 자동 종료 (키워드 불필요)
+
+on:
+  pull_request:
+    types:
+      - closed
+
+jobs:
+  close-linked-issues:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 브랜치명에서 Jira 키 추출 및 관련 이슈 종료
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. 현재 PR의 브랜치명 가져오기 (예: feat/TRA-10)
+          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+          
+          # 2. Jira 키 추출 (예: TRA-10)
+          JIRA_KEY=$(echo "$BRANCH_NAME" | grep -oP '[A-Z]+-[0-9]+' || echo "")
+          
+          if [ -z "$JIRA_KEY" ]; then
+            echo "브랜치명에서 Jira 키를 찾을 수 없습니다. (현재 브랜치: $BRANCH_NAME)"
+            exit 0
+          fi
+          
+          echo "Jira Key: $JIRA_KEY 에 연결된 GitHub 이슈를 검색합니다..."
+
+          # 3. 해당 Jira 키를 포함하고 있는 GitHub 이슈 검색
+          # 아까 Jira 생성 워크플로가 이슈 댓글에 Jira 링크를 남겼으므로 검색이 가능합니다.
+          REPO="${{ github.repository }}"
+          ISSUE_NUMBERS=$(gh issue list --repo $REPO --search "$JIRA_KEY" --json number -q '.[].number')
+
+          if [ -z "$ISSUE_NUMBERS" ]; then
+            echo "해당 Jira 키($JIRA_KEY)가 언급된 이슈를 찾지 못했습니다."
+          else
+            for ISSUE in $ISSUE_NUMBERS; do
+              echo "Closing issue #$ISSUE"
+              gh issue close $ISSUE --repo $REPO --comment "PR 머지 및 브랜치($BRANCH_NAME) 삭제에 따라 연결된 이슈를 자동으로 닫습니다."
+            done
+          fi

@@ -1,0 +1,43 @@
+name: API 명세 노션 동기화 (dev 머지 시)
+
+on:
+  push:
+    branches:
+      - dev  # dev 브랜치에 push(머지 포함)가 일어날 때 실행
+
+jobs:
+  sync-notion:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 전체 Git 히스토리 체크아웃 (author_index.py의 git log 추적을 위해 필수)
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Python 설정
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # 3. 의존성 설치
+      # 스크립트가 main.app을 import하므로, 프로젝트 실행에 필요한 패키지들도 설치해야 합니다.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests fastapi  # 스크립트 실행에 필요한 최소 패키지
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      # 4. 노션 동기화 스크립트 실행
+      - name: Run Notion Sync
+        env:
+          # GitHub Secrets/Variables에 등록한 값들을 불러옵니다.
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ vars.NOTION_DATABASE_ID }}
+          # 스크립트 내부에서 main을 import할 때 DB 연결 등을 피하기 위한 변수
+          OPENAPI_EXPORT: "1"
+        run: |
+          # 스크립트 실행
+          python scripts/sync_notion.py
