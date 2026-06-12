@@ -9,3 +9,5 @@ google-cloud-storage     # 추가됨 (GCP 스토리지 필수)
 aiofiles                 # 추가됨 (정적 파일/ReDoc용)
 pydantic-settings        # 추가됨 (설정 관리용)
 PyMySQL==1.1.0           # 만약 MySQL도 쓴다면 유지, 안 쓰면 삭제 가능
+httpx==0.27.0
+pydantic-settings==2.2.1
