@@ -3,7 +3,9 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from core.response import CommonResponse
 from core.exceptions.base import AppException
-
+import traceback
+from utils.discord import send_discord_alarm, DiscordMessage, Embed
+from config.external import settings, is_production
 
 async def app_exception_handler(request: Request, exc: AppException):
     return JSONResponse(
@@ -50,4 +52,28 @@ async def general_exception_handler(request: Request, exc: Exception):
             message="서버 내부 오류가 발생했습니다.",
             code=500
         ).model_dump()
+    )
+
+
+async def global_exception_handler(request: Request, exc: Exception):
+    error_traceback = traceback.format_exc()
+
+    if is_production() and DISCORD_WEBHOOK_URL:
+        message = DiscordMessage(
+            content="🚨 **운영 서버 에러 발생**",
+            embeds=[
+                Embed(
+                    title=f"Error: {type(exc).__name__}",
+                    description=f"**Path:** {request.url.path}\n**Detail:** {str(exc)}\n\n**Traceback:**\n```python\n{error_traceback[:800]}```"
+                )
+            ]
+        )
+        await send_discord_alarm(DISCORD_WEBHOOK_URL, message)
+
+    # 로컬이거나 전송 실패 시 터미널 출력
+    print(error_traceback)
+
+    return JSONResponse(
+        status_code=500,
+        content={"message": "Internal Server Error"},
     )

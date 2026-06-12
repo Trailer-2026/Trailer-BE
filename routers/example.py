@@ -37,3 +37,7 @@ async def update(example_idx: int, request_data: ExampleUpdateRequest, db: Sessi
 async def delete(example_idx: int, db: Session = Depends(get_db)):
     example_service.delete(example_idx, db)
     return CommonResponse.success_response("삭제 성공")
+
+@app.get("/test")
+async def test():
+    return 1 / 0 # 에러 테스트용
