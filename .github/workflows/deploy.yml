@@ -18,5 +18,16 @@ jobs:
             set -e
             cd /home/dabin/Trailer-BE
             git pull origin main
+            
+            # 1. 기존에 추가된 [ALARM] 섹션이 있다면, 그 줄부터 파일 끝($)까지 삭제해서 초기화
+            # 이렇게 하면 수동으로 적어둔 윗부분 설정들은 안전하게 보존됩니다.
+            sed -i '/\[ALARM\]/,$d' config/properties_dev.ini
+            
+            # 2. 파일 끝에 깨끗하게 최신 설정 추가
+            echo "" >> config/properties_dev.ini
+            echo "[ALARM]" >> config/properties_dev.ini
+            echo "ENV=production" >> config/properties_dev.ini
+            echo "DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}" >> config/properties_dev.ini
+            
             .venv/bin/pip install -r requirements.txt
             sudo systemctl restart trailer-be

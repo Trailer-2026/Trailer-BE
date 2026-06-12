@@ -1,2 +1,15 @@
-# 외부 서비스 URL (필요에 따라 추가)
-# EXAMPLE_API_URL = "http://localhost:8080"
+import configparser
+import os
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+INI_PATH = os.path.join(BASE_DIR, 'config', 'properties_dev.ini')
+
+config = configparser.ConfigParser()
+config.read(INI_PATH)
+
+# [ALARM] 섹션이 없으면 기본값(local, None)을 가져옴
+ENV = config.get('ALARM', 'ENV', fallback='local')
+DISCORD_WEBHOOK_URL = config.get('ALARM', 'DISCORD_WEBHOOK_URL', fallback=None)
+
+def is_production():
+    return ENV == 'production'

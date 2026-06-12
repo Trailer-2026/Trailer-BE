@@ -9,7 +9,7 @@ from core.exceptions.base import AppException
 from core.exceptions.handlers import (
     app_exception_handler,
     http_exception_handler,
-    general_exception_handler,
+    global_exception_handler,
     validation_exception_handler,
 )
 from routers.example import router as example_router
@@ -27,7 +27,8 @@ app.add_middleware(
 app.add_exception_handler(AppException, app_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(Exception, general_exception_handler)
+app.add_exception_handler(Exception, global_exception_handler)
+
 
 app.include_router(example_router)
 
