@@ -9,7 +9,7 @@ from core.exceptions.base import AppException
 from core.exceptions.handlers import (
     app_exception_handler,
     http_exception_handler,
-    general_exception_handler,
+    global_exception_handler,
     validation_exception_handler,
 )
 from routers.example import router as example_router
