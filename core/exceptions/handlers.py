@@ -77,7 +77,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content=CommonResponse.fail_response(
-            message="서버 내부 오류가 발생했습니다. 관리자에게 문의하세요.",
+            message="서버 내부 오류가 발생했습니다.",
             code=500
         ).model_dump()
     )
