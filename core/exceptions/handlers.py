@@ -47,7 +47,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 # 4. 전역 500 에러 핸들러 (디스코드 알림 포함)
-async def global_exception_handler(request: Request, exc: Exception):
+async def general_exception_handler(request: Request, exc: Exception):
     error_traceback = traceback.format_exc()
 
     # 운영 환경일 때만 디스코드 전송
