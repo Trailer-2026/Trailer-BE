@@ -67,7 +67,7 @@ jobs:
           declare -A MAP=(
             ["dabeann"]="712020:2af901bf-3f26-4f22-9cc9-f8d597ac4209"
             ["Johyeonwoooooooo"]="712020:fcaa418d-003c-4197-8417-0ef2bbee9e60"
-            ["changyunyeong"]="712020:cccc-3333"
+            ["changyunyeong"]="712020:8b8ab450-e019-4366-9ade-867a005944f9"
           )
           ACCOUNT_ID=${MAP["${{ github.event.issue.user.login }}"]}
           
