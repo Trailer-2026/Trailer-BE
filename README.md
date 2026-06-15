@@ -128,3 +128,13 @@ See also: #456, #789
 [app]
 db.url = mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4
 ```
+
+---
+
+## 🕒 DB 타임존 설정
+
+시간 컬럼(`created_at` 등)을 한국 시간(KST) 기준으로 기록/조회하려면, 운영 DB에 아래를 한 번 실행하세요. (새 연결부터 적용됨)
+
+```sql
+ALTER DATABASE "{database}" SET timezone TO 'Asia/Seoul';
+```
