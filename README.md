@@ -87,7 +87,7 @@ async def create(request_data: XxxCreateRequest, db: Session = Depends(get_db)):
 
 ### ▶️ 동기화
 
-노션 동기화는 **GitHub Actions로 자동 실행**되므로 직접 돌릴 필요는 없습니다. 푸시하면 명세가 노션에 반영됩니다.
+노션 동기화는 **GitHub Actions로 자동 실행**되므로 직접 돌릴 필요는 없습니다. **`dev` 브랜치에 push(머지 포함)될 때** 명세가 노션에 반영됩니다 (`.github/workflows/sync-notion.yml`). 즉 피처 브랜치 작업이 `dev`로 머지되는 시점에 갱신됩니다.
 
 푸시 전에 내 엔드포인트가 잘 추출되는지 **로컬에서 미리 확인(선택)**:
 
