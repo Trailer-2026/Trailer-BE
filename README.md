@@ -85,17 +85,18 @@ async def create(request_data: XxxCreateRequest, db: Session = Depends(get_db)):
   - **`try/except`로 삼켜져** 실제로는 발생하지 않는 예외
 - 동적 메시지(f-string 변수)는 `"{변수}"` 형태로 표시되고, `422`(요청 형식 오류)·`500`(서버 오류)은 공통 안내로 처리됩니다.
 
-### ▶️ 동기화 실행
+### ▶️ 동기화
+
+노션 동기화는 **GitHub Actions로 자동 실행**되므로 직접 돌릴 필요는 없습니다. 푸시하면 명세가 노션에 반영됩니다.
+
+푸시 전에 내 엔드포인트가 잘 추출되는지 **로컬에서 미리 확인(선택)**:
 
 ```bash
 # 노션 호출 없이 추출 결과만 확인 (엔드포인트 목록)
 python scripts/sync_notion.py --dry-run
 
-# 코드에서 엔드포인트별로 추출된 에러 확인
+# 엔드포인트별로 추출된 에러 확인
 python scripts/error_index.py
-
-# 실제 동기화 (CI 또는 수동)
-NOTION_TOKEN=xxx NOTION_DATABASE_ID=xxx python scripts/sync_notion.py
 ```
 
 ---
