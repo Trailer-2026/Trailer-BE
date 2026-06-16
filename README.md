@@ -4,13 +4,13 @@ AI 기반 맞춤형 철도 여행 코스 추천, 실시간 관광 안내, 자동
 
 ## Requirements
 
-- **Python**: 3.12.3 (버전 변경 가능)
+- **Python**: 3.12.3
 
 ## 기술 스택
 
 - **Framework**: FastAPI
 - **ORM**: SQLAlchemy
-- **Database**: PostgreSQL
+- **Database**: PostgreSQL 17
 - **Server**: Uvicorn
 
 ## 프로젝트 구조

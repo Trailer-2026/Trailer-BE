@@ -17,4 +17,5 @@ parser.read(conf_dir, encoding="utf8")
 class Config():
     @staticmethod
     def read(section, property, default=None):
-        return parser.get(section, property) or default
+        # 섹션/키가 없어도(예: CI에서 properties_dev.ini 미존재) 예외 없이 default 반환
+        return parser.get(section, property, fallback=default) or default
