@@ -7,3 +7,7 @@ logs/
 .idea/
 .vscode/
 venv/
+
+
+*.mp4
+/services/video2D/cache
