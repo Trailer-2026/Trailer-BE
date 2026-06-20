@@ -52,6 +52,9 @@ def build_chromium_args(gpu_mode: str, disable_software_rasterizer: bool = False
     even when a real GPU and ``--ignore-gpu-blocklist`` are present.
     """
     args = list(CHROMIUM_BASE_ARGS)
+    if not sys.platform.startswith("win"):
+        # 리눅스 컨테이너(예: Modal)에서 root 로 실행 시 필요. /dev/shm 이 작아도 안전.
+        args += ["--no-sandbox", "--disable-dev-shm-usage"]
     if gpu_mode == "swiftshader":
         # Force the software path (useful as an explicit baseline / fallback).
         args += ["--use-angle=swiftshader"]
@@ -64,7 +67,12 @@ def build_chromium_args(gpu_mode: str, disable_software_rasterizer: bool = False
         "--enable-zero-copy",
     ]
     if gpu_mode in ("auto", "d3d11"):
-        args += ["--use-angle=d3d11"]
+        if sys.platform.startswith("win"):
+            args += ["--use-angle=d3d11"]
+        else:
+            # 리눅스/클라우드 GPU(NVIDIA T4 검증 완료): d3d11 은 존재하지 않아
+            # SwiftShader 로 폴백한다. vulkan 백엔드가 실제 GPU 를 잡는다.
+            args += ["--use-angle=vulkan", "--enable-features=Vulkan"]
     # gpu_mode == "default": let Chromium pick the ANGLE backend itself.
     if disable_software_rasterizer:
         args += ["--disable-software-rasterizer"]
