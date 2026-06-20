@@ -1,0 +1,37 @@
+{
+  "trip_title": "Seoul to Busan Trip",
+  "points": [
+    {
+      "name": "서울역",
+      "name_en": "Seoul Station",
+      "lat": 37.5547,
+      "lon": 126.9706,
+      "timestamp": "2026-06-13T09:00:00",
+      "photo": "C:\\Users\\Gamzadole\\Desktop\\Trailer-BE\\services\\videoMake\\assets\\photos\\seoul_station.jpg"
+    },
+    {
+      "name": "대전 성심당",
+      "name_en": "Daejeon Sungsimdang",
+      "lat": 36.3276,
+      "lon": 127.4273,
+      "timestamp": "2026-06-13T11:00:00",
+      "photo": "C:\\Users\\Gamzadole\\Desktop\\Trailer-BE\\services\\videoMake\\assets\\photos\\sungsimdang.jpg"
+    },
+    {
+      "name": "여수 엑스포",
+      "name_en": "Yeosu Expo",
+      "lat": 34.752,
+      "lon": 127.7489,
+      "timestamp": "2026-06-13T15:30:00",
+      "photo": "C:\\Users\\Gamzadole\\Desktop\\Trailer-BE\\services\\videoMake\\assets\\photos\\yeosu_expo.jpg"
+    },
+    {
+      "name": "부산 해운대",
+      "name_en": "Busan Haeundae",
+      "lat": 35.1587,
+      "lon": 129.1604,
+      "timestamp": "2026-06-13T19:00:00",
+      "photo": "C:\\Users\\Gamzadole\\Desktop\\Trailer-BE\\services\\videoMake\\assets\\photos\\haeundae.jpg"
+    }
+  ]
+}
