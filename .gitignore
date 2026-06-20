@@ -11,3 +11,5 @@ venv/
 
 *.mp4
 /services/video2D/cache
+/services/video3D/temp/
+/services/video3D/debug/
