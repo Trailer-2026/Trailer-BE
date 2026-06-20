@@ -366,10 +366,17 @@ def load_token() -> str | None:
 
 def find_font() -> Path | None:
     candidates = [
+        # Windows (로컬 개발)
         Path("C:/Windows/Fonts/malgun.ttf"),
         Path("C:/Windows/Fonts/malgunbd.ttf"),
         Path("C:/Windows/Fonts/arial.ttf"),
         Path("C:/Windows/Fonts/segoeui.ttf"),
+        # Linux 컨테이너(예: Modal) — 한글 라벨용 CJK 폰트. 위 Windows 경로가
+        # 없으면 여기로 폴백한다. 이미지에 fonts-noto-cjk / fonts-nanum 설치 필요.
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
+        Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     ]
     for candidate in candidates:
         if candidate.exists():
