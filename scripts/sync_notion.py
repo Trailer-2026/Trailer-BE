@@ -201,11 +201,41 @@ def _request_body_ref(request_body: dict) -> str:
     return ""
 
 
+def _ref_in_prop(prop: dict) -> str:
+    """속성에서 참조하는 스키마 이름을 찾는다($ref / allOf / anyOf / array items)."""
+    if not isinstance(prop, dict):
+        return ""
+    if "$ref" in prop:
+        return prop["$ref"].rsplit("/", 1)[-1]
+    for key in ("allOf", "anyOf", "oneOf"):
+        for sub in prop.get(key, []):
+            ref = _ref_in_prop(sub)
+            if ref:
+                return ref
+    if prop.get("type") == "array":
+        return _ref_in_prop(prop.get("items", {}))
+    return ""
+
+
+def _success_response_ref(op: dict) -> tuple:
+    """성공 응답(2xx)의 스키마 이름 → (status_code, ref). 없으면 (None, "")."""
+    responses = op.get("responses", {})
+    for code in ("200", "201"):
+        resp = responses.get(code)
+        if not resp:
+            continue
+        for media in resp.get("content", {}).values():
+            ref = media.get("schema", {}).get("$ref", "")
+            if ref:
+                return code, ref.rsplit("/", 1)[-1]
+    return None, ""
+
+
 # ---------------------------------------------------------------------------
 # 페이지 본문 블록 구성
 # ---------------------------------------------------------------------------
 
-def _build_blocks(op: dict, schemas: dict, errors: list | None = None) -> list[dict]:
+def _build_blocks(op: dict, schemas: dict, errors: list | None = None, message: str = "") -> list[dict]:
     blocks = []
 
     # 설명
@@ -235,12 +265,25 @@ def _build_blocks(op: dict, schemas: dict, errors: list | None = None) -> list[d
         else:
             blocks.append(_para("본문 있음 (스키마 미선언)"))
 
-    # Response (공통 규격)
+    # Response — response_model 이 선언돼 있으면 실제 스키마를 펼치고, 없으면 공통 엔벨로프
     blocks.append(_h3("Response"))
-    blocks.append(_para("모든 응답은 공통 엔벨로프로 감싸집니다. data 페이로드 형태는 "
-                        "라우트에 response_model 이 선언돼 있지 않아 자동 추출되지 않습니다 — "
-                        "정확한 형태는 /docs(Swagger) 또는 schemas/ 의 {Entity}Response 를 참고하세요."))
-    blocks.append(_code('{\n  "code": 200,\n  "message": "성공 메시지",\n  "data": { /* 엔드포인트별 페이로드 */ }\n}'))
+    if message:
+        blocks.append(_para(f'성공 시 message: "{message}"'))
+    status_code, resp_ref = _success_response_ref(op)
+    if resp_ref and schemas.get(resp_ref, {}).get("properties"):
+        blocks.append(_para(f"성공 응답({status_code}) 스키마: {resp_ref}"))
+        blocks.append(_table(["필드", "타입", "필수", "설명"], _expand_schema(resp_ref, schemas)))
+        # data 필드가 다른 스키마(페이로드)를 참조하면 한 단계 더 펼친다
+        data_prop = schemas.get(resp_ref, {}).get("properties", {}).get("data", {})
+        nested = _ref_in_prop(data_prop)
+        if nested and schemas.get(nested, {}).get("properties"):
+            blocks.append(_para(f"└ data 페이로드 스키마: {nested}"))
+            blocks.append(_table(["필드", "타입", "필수", "설명"], _expand_schema(nested, schemas)))
+    else:
+        blocks.append(_para("모든 응답은 공통 엔벨로프로 감싸집니다. 이 엔드포인트는 response_model 이 "
+                            "선언돼 있지 않아 data 페이로드 형태가 자동 추출되지 않습니다 — "
+                            "정확한 형태는 /docs(Swagger) 또는 schemas/ 의 {Entity}Response 를 참고하세요."))
+        blocks.append(_code('{\n  "code": 200,\n  "message": "성공 메시지",\n  "data": { /* 엔드포인트별 페이로드 */ }\n}'))
 
     # Errors — 코드에서 추출한 엔드포인트별 실제 메시지(있으면) + 공통 안내
     blocks.append(_h3("Errors"))
@@ -399,10 +442,12 @@ def sync():
 
     from error_index import build_error_index  # 코드 정적 분석 → 엔드포인트별 에러
     from author_index import build_author_index  # git 기록 → 엔드포인트별 원작자
+    from message_index import build_message_index  # 라우터 → 엔드포인트별 성공 메시지
 
     rows, schemas = extract()
     err_index = build_error_index()
     author_index = build_author_index()
+    msg_index = build_message_index()
     existing = _fetch_existing(db_id)
     spec_keys = {r["key"] for r in rows}
 
@@ -412,7 +457,8 @@ def sync():
         author = author_index.get((row["method"], row["path"]), "")
         props = _row_properties(row, author=author)
         errors = err_index.get((row["method"], row["path"]))
-        blocks = _build_blocks(row["op"], schemas, errors)
+        message = msg_index.get((row["method"], row["path"]), "")
+        blocks = _build_blocks(row["op"], schemas, errors, message)
         page_id = existing.get(row["key"])
         if page_id:
             res = _request("PATCH", f"{NOTION_API}/pages/{page_id}", json={"properties": props})
@@ -492,10 +538,12 @@ def rebuild():
 
     from error_index import build_error_index
     from author_index import build_author_index
+    from message_index import build_message_index
 
     rows, schemas = extract()
     err_index = build_error_index()
     author_index = build_author_index()
+    msg_index = build_message_index()
     existing = _fetch_existing(db_id)
 
     # 1) 기존 라이브 페이지 archive
@@ -509,7 +557,8 @@ def rebuild():
         author = author_index.get((row["method"], row["path"]), "")
         props = _row_properties(row, author=author)
         errors = err_index.get((row["method"], row["path"]))
-        blocks = _build_blocks(row["op"], schemas, errors)
+        message = msg_index.get((row["method"], row["path"]), "")
+        blocks = _build_blocks(row["op"], schemas, errors, message)
         res = _request("POST", f"{NOTION_API}/pages", json={
             "parent": {"database_id": db_id},
             "properties": props,
