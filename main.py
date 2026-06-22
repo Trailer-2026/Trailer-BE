@@ -12,7 +12,6 @@ from core.exceptions.handlers import (
     global_exception_handler,
     validation_exception_handler,
 )
-from routers.example import router as example_router
 from routers.auth import router as auth_router
 
 app = FastAPI()
@@ -31,7 +30,6 @@ app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, global_exception_handler)
 
 
-app.include_router(example_router)
 app.include_router(auth_router)
 
 
