@@ -1,4 +1,4 @@
-"""Modal T4 GPU 위에서 헤드리스 Chromium이 실제 GPU를 쓰는지 검증.
+"""Modal T4 GPU 위에서 헤드리스 Chromium이 실제 GPU를 쓰는지 검증. 
 
 로컬(이 레포)에서 실행:
     modal run modal_gpu_probe.py
