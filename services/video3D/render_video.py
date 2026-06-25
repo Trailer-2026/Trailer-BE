@@ -95,10 +95,13 @@ class RenderConfig:
     height: int
     fps: int
     map_seconds: float
+    move_seconds_per_km: float
+    max_video_seconds: float
     photo_seconds: float
     fade_seconds: float
     black_fade_seconds: float
     stop_seconds: float
+    arrival_hold_seconds: float
     photo_fade_in_seconds: float
     photo_hold_seconds: float
     photo_fade_out_seconds: float
@@ -110,11 +113,14 @@ DEFAULT_CONFIG = RenderConfig(
     width=1080,
     height=1920,
     fps=30,
-    map_seconds=11.0,
+    map_seconds=18.0,
+    move_seconds_per_km=0.05,
+    max_video_seconds=60.0,
     photo_seconds=1.8,
     fade_seconds=0.6,
     black_fade_seconds=0.25,
     stop_seconds=0.8,
+    arrival_hold_seconds=1.5,
     photo_fade_in_seconds=0.4,
     photo_hold_seconds=1.6,
     photo_fade_out_seconds=0.4,
@@ -126,11 +132,14 @@ QUALITY_FAST_CONFIG = RenderConfig(
     width=1080,
     height=1920,
     fps=30,
-    map_seconds=11.0,
+    map_seconds=18.0,
+    move_seconds_per_km=0.05,
+    max_video_seconds=60.0,
     photo_seconds=1.8,
     fade_seconds=0.6,
     black_fade_seconds=0.25,
     stop_seconds=0.8,
+    arrival_hold_seconds=1.5,
     photo_fade_in_seconds=0.4,
     photo_hold_seconds=1.6,
     photo_fade_out_seconds=0.4,
@@ -142,11 +151,14 @@ QUICK_CONFIG = RenderConfig(
     width=540,
     height=960,
     fps=15,
-    map_seconds=5.0,
+    map_seconds=9.0,
+    move_seconds_per_km=0.05,
+    max_video_seconds=60.0,
     photo_seconds=1.0,
     fade_seconds=0.4,
     black_fade_seconds=0.2,
     stop_seconds=0.5,
+    arrival_hold_seconds=1.5,
     photo_fade_in_seconds=0.25,
     photo_hold_seconds=0.8,
     photo_fade_out_seconds=0.25,
@@ -234,7 +246,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, help="출력 너비")
     parser.add_argument("--height", type=int, help="출력 높이")
     parser.add_argument("--fps", type=int, help="출력 FPS")
-    parser.add_argument("--map-seconds", type=float, help="3D 지도 구간 길이")
+    parser.add_argument("--map-seconds", type=float, help="3D 지도 구간 길이(폴백/레거시 경로용)")
+    parser.add_argument(
+        "--move-seconds-per-km",
+        type=float,
+        help="이동 속도(거리 비례). km당 초. 기본 0.05 (작을수록 빠름)",
+    )
+    parser.add_argument(
+        "--max-video-seconds",
+        type=float,
+        help="전체 영상 최대 길이(초). 초과하면 이동 구간을 압축해 맞춤. 기본 60",
+    )
     parser.add_argument("--photo-seconds", type=float, help="목적지 사진 유지 시간")
     parser.add_argument("--travel-data", type=Path, help="trackPoints/mediaPoints JSON 파일")
     parser.add_argument(
@@ -244,6 +266,11 @@ def parse_args() -> argparse.Namespace:
         help="배경음악(mp3 등) 파일 경로. travel data의 bgm 필드보다 우선합니다.",
     )
     parser.add_argument("--stop-seconds", type=float, help="사진 지점 지도 정지 시간")
+    parser.add_argument(
+        "--arrival-hold-seconds",
+        type=float,
+        help="사진이 없는 지점에 도착했을 때 머무는 최소 시간 (기본 1.5초)",
+    )
     parser.add_argument("--photo-fade-in-seconds", type=float, help="사진 fade in 시간")
     parser.add_argument("--photo-hold-seconds", type=float, help="사진 hold 시간")
     parser.add_argument("--photo-fade-out-seconds", type=float, help="사진 fade out 시간")
@@ -333,10 +360,25 @@ def build_config(args: argparse.Namespace) -> RenderConfig:
         height=args.height or base.height,
         fps=args.fps or base.fps,
         map_seconds=args.map_seconds or base.map_seconds,
+        move_seconds_per_km=(
+            args.move_seconds_per_km
+            if args.move_seconds_per_km is not None
+            else base.move_seconds_per_km
+        ),
+        max_video_seconds=(
+            args.max_video_seconds
+            if args.max_video_seconds is not None
+            else base.max_video_seconds
+        ),
         photo_seconds=args.photo_seconds or base.photo_seconds,
         fade_seconds=base.fade_seconds,
         black_fade_seconds=base.black_fade_seconds,
         stop_seconds=args.stop_seconds if args.stop_seconds is not None else base.stop_seconds,
+        arrival_hold_seconds=(
+            args.arrival_hold_seconds
+            if args.arrival_hold_seconds is not None
+            else base.arrival_hold_seconds
+        ),
         photo_fade_in_seconds=(
             args.photo_fade_in_seconds
             if args.photo_fade_in_seconds is not None
@@ -716,16 +758,38 @@ def allocate_move_durations(distances_km: list[float], total_seconds: float) -> 
     ]
 
 
+def stops_and_photos_seconds(
+    stop_points: list[MediaPoint],
+    config: RenderConfig,
+) -> float:
+    """Total non-move time: per-stop holds + per-photo fade/hold sequences.
+
+    Must mirror exactly what build_timeline_segments emits for holds and photos.
+    """
+    photo_seconds = (
+        config.photo_fade_in_seconds
+        + config.photo_hold_seconds
+        + config.photo_fade_out_seconds
+    )
+    total = 0.0
+    for point in stop_points:
+        total += config.stop_seconds if point.photos else config.arrival_hold_seconds
+        total += photo_seconds * len(point.photos)
+    return total
+
+
 def build_timeline_segments(
     track_points: list[TrackPoint],
     media_points: list[MediaPoint],
     config: RenderConfig,
 ) -> list[TimelineSegment]:
-    photo_points = [point for point in media_points if point.photos]
+    # Stop at every named place the user added, not just the ones with photos,
+    # so arrivals get a brief hold instead of being flown straight through.
+    stop_points = list(media_points)
     move_specs: list[tuple[int, int, float]] = []
     previous_index = 0
 
-    for media_point in photo_points:
+    for media_point in stop_points:
         if media_point.track_index > previous_index:
             move_specs.append(
                 (
@@ -746,15 +810,33 @@ def build_timeline_segments(
             )
         )
 
-    move_durations = allocate_move_durations(
-        [distance for _, _, distance in move_specs],
-        config.map_seconds,
-    )
+    distances = [distance for _, _, distance in move_specs]
+
+    # Distance-based pacing: each move takes `move_seconds_per_km` per km, so the
+    # camera keeps a consistent speed no matter how long the route is.
+    desired_move_total = sum(distances) * config.move_seconds_per_km
+
+    # Holds + photos are fixed by the points/photos the user added.
+    non_move_seconds = stops_and_photos_seconds(stop_points, config)
+
+    # Cap the whole video to max_video_seconds by compressing ONLY the moves
+    # (speeding them up like before), leaving holds/photos intact.
+    move_total = desired_move_total
+    if config.max_video_seconds > 0:
+        if desired_move_total + non_move_seconds > config.max_video_seconds:
+            move_total = max(0.0, config.max_video_seconds - non_move_seconds)
+            print(
+                f"[info] 전체 {desired_move_total + non_move_seconds:.1f}s > "
+                f"{config.max_video_seconds:.0f}s 상한 → 이동 구간을 "
+                f"{desired_move_total:.1f}s에서 {move_total:.1f}s로 압축"
+            )
+
+    move_durations = allocate_move_durations(distances, move_total)
     move_duration_iter = iter(move_durations)
     segments: list[TimelineSegment] = []
     previous_index = 0
 
-    for media_point in photo_points:
+    for media_point in stop_points:
         if media_point.track_index > previous_index:
             segments.append(
                 TimelineSegment(
@@ -765,12 +847,18 @@ def build_timeline_segments(
                 )
             )
 
+        # Points with photos: short hold (stop_seconds) before the photo sequence,
+        # which itself provides dwell time. Points without photos: hold at least
+        # arrival_hold_seconds so the place is actually visible before moving on.
+        hold_duration = (
+            config.stop_seconds if media_point.photos else config.arrival_hold_seconds
+        )
         segments.append(
             TimelineSegment(
                 type="map_hold",
                 track_index=media_point.track_index,
                 name=media_point.name,
-                duration=config.stop_seconds,
+                duration=hold_duration,
             )
         )
 
