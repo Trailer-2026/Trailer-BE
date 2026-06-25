@@ -269,7 +269,13 @@
       btn.disabled = true;
       const engineName = document.getElementById("engine").value === "modal"
         ? "Modal T4 (클라우드)" : "내 GPU (로컬)";
-      status.textContent = `⏳ 렌더링 중 — ${engineName}... (수 분 걸릴 수 있어요)`;
+      const startMs = Date.now();
+      const tick = () => {
+        const s = ((Date.now() - startMs) / 1000).toFixed(0);
+        status.textContent = `⏳ 렌더링 중 — ${engineName}... ${s}초 경과`;
+      };
+      tick();
+      const timer = setInterval(tick, 1000);
 
       const fd = new FormData();
       fd.append("points", JSON.stringify(points.map((p) => ({
@@ -291,7 +297,9 @@
         if (!res.ok) {
           status.textContent = "❌ 실패: " + (data.detail || res.statusText);
         } else {
-          status.textContent = "✅ 완료! [" + (data.engine || "local") + "]" +
+          const took = (data.elapsed_seconds != null)
+            ? ` ⏱ ${data.elapsed_seconds}초` : "";
+          status.textContent = "✅ 완료! [" + (data.engine || "local") + "]" + took +
             (data.bgm ? " (BGM: " + data.bgm + ")" : "");
           result.innerHTML =
             `<video src="${data.video_url}" controls autoplay loop></video>` +
@@ -300,6 +308,7 @@
       } catch (e) {
         status.textContent = "❌ 요청 실패: " + e.message;
       } finally {
+        clearInterval(timer);
         btn.disabled = false;
       }
     };

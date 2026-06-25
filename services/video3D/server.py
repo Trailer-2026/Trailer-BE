@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -225,6 +226,7 @@ async def api_render(
         output_marker = "local"
 
     # Render in a worker thread (subprocess blocks for minutes).
+    render_started = time.perf_counter()
     result = await asyncio.to_thread(
         subprocess.run,
         command,
@@ -233,6 +235,7 @@ async def api_render(
         text=True,
         timeout=RENDER_TIMEOUT_SECONDS,
     )
+    elapsed_seconds = round(time.perf_counter() - render_started, 1)
 
     stdout = result.stdout or ""
     stderr = result.stderr or ""
@@ -249,6 +252,7 @@ async def api_render(
             "video_url": f"/output/{output_name}",
             "engine": engine,
             "bgm": bgm_path.name if bgm_path else None,
+            "elapsed_seconds": elapsed_seconds,
             "log_tail": stdout[-2000:],
         }
     )
