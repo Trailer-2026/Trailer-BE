@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>3D 여행 영상 빌더</title>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: "Segoe UI", system-ui, sans-serif;
+      background: #0f1115; color: #e6e8eb; display: flex; height: 100vh; overflow: hidden;
+    }
+    #map { flex: 1 1 auto; height: 100%; }
+    #panel {
+      width: 440px; height: 100%; overflow-y: auto; padding: 18px;
+      background: #161a21; border-left: 1px solid #262b34;
+    }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .hint { font-size: 12px; color: #8b93a1; margin: 0 0 16px; line-height: 1.5; }
+    .section { margin-bottom: 20px; }
+    .section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #8b93a1; margin: 0 0 8px; }
+    .point {
+      border: 1px solid #2b313c; border-radius: 10px; padding: 12px; margin-bottom: 10px; background: #1b2029;
+    }
+    .point .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .point .idx {
+      width: 24px; height: 24px; border-radius: 50%; background: #3b82f6; color: #fff;
+      display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex: 0 0 auto;
+    }
+    .point .coord { font-size: 11px; color: #8b93a1; }
+    input[type="text"], select {
+      width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #2b313c;
+      background: #0f1115; color: #e6e8eb; font-size: 13px;
+    }
+    .btn {
+      border: none; border-radius: 8px; padding: 9px 14px; font-size: 13px; font-weight: 600;
+      cursor: pointer; background: #2b313c; color: #e6e8eb;
+    }
+    .btn:hover { background: #333a47; }
+    .btn.primary { background: #3b82f6; color: #fff; width: 100%; padding: 12px; font-size: 14px; }
+    .btn.primary:disabled { background: #2b313c; color: #6b7280; cursor: not-allowed; }
+    .btn.tiny { padding: 4px 8px; font-size: 12px; }
+    .btn.danger { background: #3a2326; color: #f87171; }
+    .thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .thumbs img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; border: 1px solid #2b313c; }
+    .filebtn { display: inline-block; margin-top: 6px; }
+    .filebtn input { display: none; }
+    label.field { display: block; font-size: 12px; color: #8b93a1; margin-bottom: 4px; }
+    .bgm-row { display: flex; gap: 8px; align-items: center; }
+    .bgm-row select { flex: 1; }
+    .check { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 8px; }
+    #status { font-size: 13px; margin-top: 12px; min-height: 18px; color: #8b93a1; white-space: pre-wrap; }
+    #result video { width: 100%; border-radius: 10px; margin-top: 12px; background: #000; }
+    .warn { color: #fbbf24; font-size: 12px; }
+    a.dl { color: #60a5fa; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="panel">
+    <h1>3D 여행 영상 빌더</h1>
+    <p class="hint">
+      지도를 <b>클릭</b>해서 GPS 지점을 원하는 만큼 추가하세요. 각 지점에 이름과 사진을 넣고,
+      BGM을 고른 뒤 <b>영상 만들기</b>를 누르면 영상에 음악이 함께 입혀집니다.
+    </p>
+
+    <div class="section">
+      <h2>GPS 지점 (<span id="count">0</span>)</h2>
+      <div id="points"></div>
+      <button class="btn tiny" id="add-manual">+ 좌표 직접 입력</button>
+      <button class="btn tiny danger" id="clear-all">전체 지우기</button>
+    </div>
+
+    <div class="section">
+      <h2>배경음악 (BGM)</h2>
+      <div class="bgm-row">
+        <select id="bgm"><option value="">(없음)</option></select>
+        <button class="btn tiny" id="bgm-play" type="button">▶ 미리듣기</button>
+      </div>
+      <audio id="bgm-audio" style="display:none"></audio>
+    </div>
+
+    <div class="section">
+      <h2>렌더 엔진</h2>
+      <select id="engine">
+        <option value="local">내 GPU (로컬)</option>
+        <option value="modal">Modal T4 (클라우드)</option>
+      </select>
+      <p class="hint" style="margin:6px 0 0">
+        로컬: 이 PC의 GPU로 렌더. Modal: 클라우드 T4 GPU로 렌더(modal 로그인 필요, 콜드스타트로 처음엔 느릴 수 있음).
+      </p>
+      <label class="check"><input type="checkbox" id="quick" /> 빠른 테스트 모드 (저화질·빠름)</label>
+      <button class="btn primary" id="render" style="margin-top:12px">영상 만들기</button>
+      <div id="status"></div>
+      <div id="result"></div>
+    </div>
+  </div>
+
+  <script>
+    const MAPBOX_TOKEN = "__MAPBOX_TOKEN__";
+    const points = []; // { lat, lng, name, marker, photos: File[] }
+    let map = null;
+
+    // ---------- Map ----------
+    function initMap() {
+      if (!MAPBOX_TOKEN) {
+        document.getElementById("map").innerHTML =
+          '<div style="padding:24px;color:#fbbf24;font-family:sans-serif">' +
+          'MAPBOX_ACCESS_TOKEN이 설정되지 않아 지도를 표시할 수 없습니다.<br>' +
+          '오른쪽의 "+ 좌표 직접 입력"으로 지점을 추가하세요.</div>';
+        return;
+      }
+      mapboxgl.accessToken = MAPBOX_TOKEN;
+      map = new mapboxgl.Map({
+        container: "map",
+        style: "mapbox://styles/mapbox/standard",
+        center: [127.5, 36.3],
+        zoom: 6,
+      });
+      map.on("load", () => {
+        map.addSource("route", { type: "geojson", data: emptyLine() });
+        map.addLayer({
+          id: "route-line", type: "line", source: "route",
+          paint: { "line-color": "#3b82f6", "line-width": 3 },
+        });
+      });
+      map.on("click", (e) => addPoint(e.lngLat.lat, e.lngLat.lng));
+    }
+
+    function emptyLine() {
+      return { type: "Feature", geometry: { type: "LineString", coordinates: [] } };
+    }
+
+    function refreshMap() {
+      if (!map || !map.getSource("route")) return;
+      map.getSource("route").setData({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: points.map((p) => [p.lng, p.lat]) },
+      });
+    }
+
+    // ---------- Points ----------
+    function addPoint(lat, lng) {
+      const p = { lat, lng, name: "", photos: [], marker: null };
+      if (map) {
+        const el = document.createElement("div");
+        const marker = new mapboxgl.Marker({ color: "#3b82f6" })
+          .setLngLat([lng, lat]).addTo(map);
+        p.marker = marker;
+      }
+      points.push(p);
+      renderPoints();
+      refreshMap();
+    }
+
+    function removePoint(i) {
+      if (points[i].marker) points[i].marker.remove();
+      points.splice(i, 1);
+      renderPoints();
+      refreshMap();
+    }
+
+    function movePoint(i, dir) {
+      const j = i + dir;
+      if (j < 0 || j >= points.length) return;
+      [points[i], points[j]] = [points[j], points[i]];
+      renderPoints();
+      refreshMap();
+    }
+
+    function renderPoints() {
+      const wrap = document.getElementById("points");
+      wrap.innerHTML = "";
+      points.forEach((p, i) => {
+        const card = document.createElement("div");
+        card.className = "point";
+        card.innerHTML = `
+          <div class="row">
+            <div class="idx">${i + 1}</div>
+            <input type="text" placeholder="지점 이름 (예: 서울역)" value="${escapeHtml(p.name)}" />
+            <button class="btn tiny" data-act="up">↑</button>
+            <button class="btn tiny" data-act="down">↓</button>
+            <button class="btn tiny danger" data-act="del">✕</button>
+          </div>
+          <div class="coord">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</div>
+          <label class="filebtn btn tiny">＋ 사진 추가
+            <input type="file" accept="image/*" multiple />
+          </label>
+          <div class="thumbs"></div>
+        `;
+        card.querySelector('input[type="text"]').addEventListener("input", (e) => {
+          p.name = e.target.value;
+        });
+        card.querySelector('[data-act="up"]').onclick = () => movePoint(i, -1);
+        card.querySelector('[data-act="down"]').onclick = () => movePoint(i, 1);
+        card.querySelector('[data-act="del"]').onclick = () => removePoint(i);
+        card.querySelector('input[type="file"]').addEventListener("change", (e) => {
+          for (const f of e.target.files) p.photos.push(f);
+          renderPoints();
+        });
+        const thumbs = card.querySelector(".thumbs");
+        p.photos.forEach((f, k) => {
+          const img = document.createElement("img");
+          img.src = URL.createObjectURL(f);
+          img.title = "클릭하면 삭제";
+          img.onclick = () => { p.photos.splice(k, 1); renderPoints(); };
+          thumbs.appendChild(img);
+        });
+        wrap.appendChild(card);
+      });
+      document.getElementById("count").textContent = points.length;
+    }
+
+    function escapeHtml(s) {
+      return (s || "").replace(/[&<>"']/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    // ---------- BGM ----------
+    async function loadBgm() {
+      const sel = document.getElementById("bgm");
+      try {
+        const res = await fetch("/api/bgm");
+        const list = await res.json();
+        for (const t of list) {
+          const opt = document.createElement("option");
+          opt.value = t.file;
+          opt.textContent = t.artist ? `${t.title} — ${t.artist}` : t.title;
+          sel.appendChild(opt);
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    let previewTimer = null;
+    document.getElementById("bgm-play").onclick = () => {
+      const file = document.getElementById("bgm").value;
+      const audio = document.getElementById("bgm-audio");
+      if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+      if (!file) return;
+      if (!audio.paused && audio.dataset.file === file) { audio.pause(); return; }
+      audio.src = "/api/bgm/preview?file=" + encodeURIComponent(file);
+      audio.dataset.file = file;
+      audio.currentTime = 0;
+      audio.play();
+      // 미리듣기는 10초만 재생하고 멈춤
+      previewTimer = setTimeout(() => { audio.pause(); previewTimer = null; }, 10000);
+    };
+
+    // ---------- Controls ----------
+    document.getElementById("add-manual").onclick = () => {
+      const lat = parseFloat(prompt("위도 (latitude)", "37.5547"));
+      const lng = parseFloat(prompt("경도 (longitude)", "126.9706"));
+      if (Number.isFinite(lat) && Number.isFinite(lng)) addPoint(lat, lng);
+    };
+    document.getElementById("clear-all").onclick = () => {
+      while (points.length) removePoint(0);
+    };
+
+    document.getElementById("render").onclick = async () => {
+      const status = document.getElementById("status");
+      const result = document.getElementById("result");
+      result.innerHTML = "";
+      if (points.length < 2) { status.textContent = "⚠ GPS 지점을 최소 2개 추가하세요."; return; }
+
+      const btn = document.getElementById("render");
+      btn.disabled = true;
+      const engineName = document.getElementById("engine").value === "modal"
+        ? "Modal T4 (클라우드)" : "내 GPU (로컬)";
+      status.textContent = `⏳ 렌더링 중 — ${engineName}... (수 분 걸릴 수 있어요)`;
+
+      const fd = new FormData();
+      fd.append("points", JSON.stringify(points.map((p) => ({
+        latitude: p.lat, longitude: p.lng, name: p.name,
+      }))));
+      fd.append("bgm", document.getElementById("bgm").value);
+      fd.append("quick", document.getElementById("quick").checked ? "true" : "false");
+      fd.append("engine", document.getElementById("engine").value);
+      const owners = [];
+      points.forEach((p, i) => p.photos.forEach((f) => {
+        fd.append("photos", f);
+        owners.push(i);
+      }));
+      fd.append("photo_points", JSON.stringify(owners));
+
+      try {
+        const res = await fetch("/api/render", { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok) {
+          status.textContent = "❌ 실패: " + (data.detail || res.statusText);
+        } else {
+          status.textContent = "✅ 완료! [" + (data.engine || "local") + "]" +
+            (data.bgm ? " (BGM: " + data.bgm + ")" : "");
+          result.innerHTML =
+            `<video src="${data.video_url}" controls autoplay loop></video>` +
+            `<a class="dl" href="${data.video_url}" download>⬇ 영상 다운로드</a>`;
+        }
+      } catch (e) {
+        status.textContent = "❌ 요청 실패: " + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    initMap();
+    loadBgm();
+  </script>
+</body>
+</html>
