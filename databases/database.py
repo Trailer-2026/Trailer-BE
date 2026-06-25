@@ -18,7 +18,7 @@ else:
         logger.warning(f"설정 파일을 읽을 수 없어 더미 DB URL을 사용합니다: {e}")
         SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 
-# DB 엔진 설정 (SQLite와 MySQL은 connect_args가 다를 수 있어 조건부 처리)
+# DB 엔진 설정 (sqlite는 sync_notion 인메모리용, 그 외는 PostgreSQL)
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
     engine = create_engine(SQLALCHEMY_DATABASE_URL)
 else:
@@ -28,7 +28,6 @@ else:
         pool_recycle=3600,
         pool_size=20,
         max_overflow=10,
-        connect_args={"charset": "utf8mb4"}
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
