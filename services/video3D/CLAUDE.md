@@ -54,14 +54,14 @@ There is **no test suite, linter, or build step.** Verification is done by rende
 ### Data model (Python → browser)
 Input is `trackPoints` + `mediaPoints` (see `assets/travel_data.json`):
 - `trackPoints` — the full GPS path. Plain track points do **not** produce markers or stops.
-- `mediaPoints` — named places that index into trackPoints via `trackIndex`. A media point with `photos` triggers a stop + photo sequence; without photos the camera passes through without stopping.
+- `mediaPoints` — named places that index into trackPoints via `trackIndex`. **Every media point is a stop**: with `photos` it holds `stop_seconds` then plays the photo sequence; without photos it holds `arrival_hold_seconds` (default 1.5s) so the place is still visible. Plain trackPoints (no media point) are flown through.
 
 `load_raw_travel_data` → `validate_travel_data` (lenient: bad media points warn and are skipped, missing photos warn and are dropped, duplicate trackIndex merges photos) → `travel_data_for_browser` serializes it and injects it as `window.TRAVEL_DATA` via `page.add_init_script`. `map_animation.js` re-normalizes this defensively (`normalizeTrackPoints` / `normalizeMediaPoints`) and falls back to `defaultRoutePoints` (Seoul→Busan) if absent.
 
 ### Timeline (the core abstraction)
 `build_timeline_segments` converts track + media points into an ordered list of `TimelineSegment`s of three types:
-- `map_move` — camera flies between two track indices. Duration is allocated proportionally to Haversine distance across all moves, summing to `map_seconds` (`allocate_move_durations`, with a per-segment floor).
-- `map_hold` — camera sits at a stop point (`stop_seconds`).
+- `map_move` — camera flies between two track indices. **Pacing is distance-based**: total move time = `sum(distance_km) * move_seconds_per_km` (default 0.05 → consistent speed regardless of route length), then split proportionally to Haversine distance (`allocate_move_durations`, per-segment floor). **60s cap**: if `move_total + holds + photos > max_video_seconds` (default 60), only the moves are compressed (sped up) to fit; holds/photos are untouched. `stops_and_photos_seconds()` computes the non-move time used for the cap. `map_seconds` is now only the fallback for the no-media single move + the legacy `render_map_frames` path.
+- `map_hold` — camera sits at a stop point (`stop_seconds` if it has photos, else `arrival_hold_seconds`).
 - `photo` — a photo fade-in / hold / fade-out, composited in Python over the last held map frame.
 
 `render_timeline_frames` (the active render path) walks the segments, calling the matching browser function per frame and capturing the result. **Note:** `render_map_frames` + the older single-`renderFrame(progress)` continuous-camera path still exist and are described in `README.md`'s "카메라 구간" section, but `run()` calls `render_timeline_frames`, not `render_map_frames`. Don't assume the README's progress-based camera bands are what executes.
