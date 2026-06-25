@@ -71,7 +71,7 @@ app = modal.App("trailer-video3d-render", image=image)
     # 로컬 services/video3D/.env 를 그대로 컨테이너 환경변수로 주입 (MAPBOX_ACCESS_TOKEN)
     secrets=[modal.Secret.from_dotenv(HERE)],
 )
-def render(mode: str = "quality"):
+def render(mode: str = "quality", travel_data: str = ""):
     import os
     import subprocess
     import sys
@@ -85,8 +85,11 @@ def render(mode: str = "quality"):
     if mode == "quality-fast":
         cmd.append("--quality-fast")
     # mode == "quality": 플래그 없음 = 최고 품질(무손실 cdp-png, map-render 대기)
+    # travel_data 가 주어지면 빌더가 만든 동적 경로/사진/BGM(json 의 bgm 필드) 사용.
+    if travel_data:
+        cmd += ["--travel-data", travel_data]
 
-    print(f"=== 렌더 시작 (mode={mode}) ===")
+    print(f"=== 렌더 시작 (mode={mode}, travel_data={travel_data or 'default'}) ===")
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
     elapsed = time.time() - t0
@@ -117,10 +120,10 @@ def render(mode: str = "quality"):
 
 
 @app.local_entrypoint()
-def main(mode: str = "quality"):
+def main(mode: str = "quality", travel_data: str = ""):
     from datetime import datetime
 
-    result = render.remote(mode)
+    result = render.remote(mode, travel_data)
 
     out_dir = HERE / "output"
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -237,6 +237,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--map-seconds", type=float, help="3D 지도 구간 길이")
     parser.add_argument("--photo-seconds", type=float, help="목적지 사진 유지 시간")
     parser.add_argument("--travel-data", type=Path, help="trackPoints/mediaPoints JSON 파일")
+    parser.add_argument(
+        "--bgm",
+        type=Path,
+        default=None,
+        help="배경음악(mp3 등) 파일 경로. travel data의 bgm 필드보다 우선합니다.",
+    )
     parser.add_argument("--stop-seconds", type=float, help="사진 지점 지도 정지 시간")
     parser.add_argument("--photo-fade-in-seconds", type=float, help="사진 fade in 시간")
     parser.add_argument("--photo-hold-seconds", type=float, help="사진 hold 시간")
@@ -1301,6 +1307,96 @@ def require_ffmpeg() -> str:
     return ffmpeg
 
 
+def resolve_bgm_path(
+    cli_bgm: Path | None,
+    raw_travel_data: dict[str, object],
+    source_path: Path | None,
+) -> Path | None:
+    """Pick the BGM file: --bgm wins, else travel data's `bgm` field. None if absent."""
+    candidate: Path | None = None
+    if cli_bgm is not None:
+        candidate = cli_bgm
+    else:
+        raw_bgm = raw_travel_data.get("bgm")
+        if isinstance(raw_bgm, str) and raw_bgm.strip():
+            candidate = Path(raw_bgm.strip())
+
+    if candidate is None:
+        return None
+
+    resolved = resolve_project_path(candidate, source_path)
+    if not resolved.exists():
+        print(f"[warn] BGM 파일을 찾을 수 없어 무음으로 진행합니다: {candidate}")
+        return None
+    return resolved
+
+
+def mux_bgm_into_video(
+    ffmpeg: str,
+    video_path: Path,
+    bgm_path: Path,
+    fade_out_seconds: float = 2.0,
+) -> None:
+    """Mux BGM into an already-rendered silent video (in place).
+
+    Video is stream-copied (no re-encode); audio is looped to fill the video and
+    cut to the video length with -shortest, with an optional fade-out tail.
+    """
+    duration = video_duration_seconds(video_path)
+
+    audio_filters: list[str] = []
+    if duration and fade_out_seconds > 0 and duration > fade_out_seconds:
+        fade_start = max(0.0, duration - fade_out_seconds)
+        audio_filters.append(f"afade=t=out:st={fade_start:.3f}:d={fade_out_seconds:.3f}")
+
+    muxed_path = video_path.with_name(f"{video_path.stem}.bgm{video_path.suffix}")
+    command = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(video_path),
+        "-stream_loop",
+        "-1",
+        "-i",
+        str(bgm_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+        "-movflags",
+        "+faststart",
+    ]
+    if audio_filters:
+        command += ["-af", ",".join(audio_filters)]
+    command.append(str(muxed_path))
+
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        muxed_path.unlink(missing_ok=True)
+        stderr = result.stderr[-3000:] if result.stderr else ""
+        raise RuntimeError(f"BGM 합성 실패:\n{stderr}")
+
+    muxed_path.replace(video_path)
+
+
+def video_duration_seconds(video_path: Path) -> float | None:
+    metadata = ffprobe_metadata(video_path)
+    raw_duration = metadata.get("duration")
+    if raw_duration is None:
+        return None
+    try:
+        return float(raw_duration)
+    except (TypeError, ValueError):
+        return None
+
+
 def encode_video(ffmpeg: str, config: RenderConfig, output_path: Path) -> None:
     input_pattern = str(FRAMES_DIR / "frame_%06d.png")
     command = [
@@ -2067,6 +2163,7 @@ def run() -> int:
         args.bearing_test_route,
     )
     track_points, media_points = validate_travel_data(raw_travel_data, travel_data_path)
+    bgm_path = resolve_bgm_path(args.bgm, raw_travel_data, travel_data_path)
     browser_travel_data = travel_data_for_browser(track_points, media_points)
     timeline_segments = build_timeline_segments(track_points, media_points, config)
     full_timeline_frames = timeline_total_frames(timeline_segments, config)
@@ -2103,6 +2200,7 @@ def run() -> int:
     )
     print_timeline_summary(timeline_segments, config)
     print(f"FFmpeg pipe: yes, preset={args.x264_preset}, crf={args.crf}")
+    print(f"BGM: {bgm_path.name if bgm_path else 'none'}")
     print("Mapbox token loaded: yes")
     print(f"출력 예정 파일: {output_path}")
 
@@ -2132,6 +2230,11 @@ def run() -> int:
         )
         close_seconds = frame_writer.close()
         perf.add_stage("ffmpeg_encode_and_finalize", close_seconds)
+        if bgm_path is not None and not args.benchmark_frames:
+            bgm_started = time.perf_counter()
+            mux_bgm_into_video(ffmpeg, output_path, bgm_path)
+            perf.add_stage("bgm_mux", time.perf_counter() - bgm_started)
+            print(f"BGM 합성 완료: {bgm_path.name}")
         cleanup_temp()
         probe = ffprobe_metadata(output_path)
         print_metadata(output_path, output_id, frame_count, config, probe)
