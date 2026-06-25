@@ -1,3 +1,8 @@
 playwright>=1.50,<2
 python-dotenv>=1.0,<2
 Pillow>=10,<13
+
+# Builder server (server.py + builder.html)
+fastapi>=0.110,<1
+uvicorn>=0.29,<1
+python-multipart>=0.0.9
