@@ -193,10 +193,14 @@ class TimelineSegment:
     fade_in_seconds: float = 0.0
     hold_seconds: float = 0.0
     fade_out_seconds: float = 0.0
-    # map_move: whether to "settle" (zoom in toward the point) at the end of the
-    # move. False = stay at cruise framing so it can flow into a map_pause without
-    # a close-up. map_pause reuses the move's cruise frame frozen at the point.
-    settle: bool = True
+    # map_move camera framing flags:
+    #   settle_start — zoom IN flourish at the move's start (leaving a close-up
+    #     stop). False = begin at cruise (departing a photo-less pause) so the map
+    #     doesn't pop bigger when movement resumes.
+    #   settle_end — zoom IN toward the point at the move's end (arriving at a
+    #     close-up stop). False = stay at cruise to flow into a map_pause.
+    settle_start: bool = True
+    settle_end: bool = True
 
 
 DEFAULT_TRAVEL_DATA = {
@@ -839,6 +843,9 @@ def build_timeline_segments(
     move_duration_iter = iter(move_durations)
     segments: list[TimelineSegment] = []
     previous_index = 0
+    # Whether the point a move departs FROM is a close-up stop. The route start
+    # counts as close-up so the opening move keeps its zoom-in flourish.
+    previous_closeup = True
 
     for media_point in stop_points:
         has_photos = bool(media_point.photos)
@@ -849,11 +856,14 @@ def build_timeline_segments(
                     start_track_index=previous_index,
                     end_track_index=media_point.track_index,
                     duration=next(move_duration_iter),
-                    # Settle (zoom in) only when this point has photos to show.
-                    # Photo-less points keep the cruise framing for a quick pause.
-                    settle=has_photos,
+                    # Zoom-in at start only when leaving a close-up; zoom-in at end
+                    # only when arriving at a point that has photos to show.
+                    settle_start=previous_closeup,
+                    settle_end=has_photos,
                 )
             )
+
+        previous_closeup = has_photos
 
         if has_photos:
             # Close-up stop: hold stop_seconds, then play the photo sequence.
@@ -876,7 +886,8 @@ def build_timeline_segments(
                     track_index=media_point.track_index,
                     name=media_point.name,
                     duration=config.arrival_hold_seconds,
-                    settle=False,
+                    settle_start=False,
+                    settle_end=False,
                 )
             )
 
@@ -2094,14 +2105,15 @@ def render_timeline_frames(
                     try:
                         render_started = time.perf_counter()
                         frame_info = page.evaluate(
-                            "([startIndex, endIndex, progress, waitMode, settle]) => "
-                            "window.renderRouteSegment(startIndex, endIndex, progress, waitMode, settle)",
+                            "([startIndex, endIndex, progress, waitMode, settleStart, settleEnd]) => "
+                            "window.renderRouteSegment(startIndex, endIndex, progress, waitMode, settleStart, settleEnd)",
                             [
                                 segment.start_track_index,
                                 segment.end_track_index,
                                 progress,
                                 render_wait_mode,
-                                segment.settle,
+                                segment.settle_start,
+                                segment.settle_end,
                             ],
                         )
                         render_call_ms = (time.perf_counter() - render_started) * 1000.0
@@ -2131,13 +2143,14 @@ def render_timeline_frames(
                     try:
                         render_started = time.perf_counter()
                         frame_info = page.evaluate(
-                            "([startIndex, endIndex, progress, waitMode, settle]) => "
-                            "window.renderRouteSegment(startIndex, endIndex, progress, waitMode, settle)",
+                            "([startIndex, endIndex, progress, waitMode, settleStart, settleEnd]) => "
+                            "window.renderRouteSegment(startIndex, endIndex, progress, waitMode, settleStart, settleEnd)",
                             [
                                 segment.start_track_index,
                                 segment.end_track_index,
                                 1.0,
                                 render_wait_mode,
+                                False,
                                 False,
                             ],
                         )

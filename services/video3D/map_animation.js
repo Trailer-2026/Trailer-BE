@@ -1105,23 +1105,34 @@ function applySceneForProgress(progress, useSmoothing) {
   };
 }
 
-function segmentCameraZoom(segmentKm, progress, settle = true) {
+function segmentCameraZoom(segmentKm, progress, settleStart = true, settleEnd = true) {
   const zoomOutT = easeInOut(clamp(progress / 0.22, 0, 1));
-  // settle === false: skip the end zoom-in so the camera stays at cruise framing
-  // (used for photo-less "pause" points that should not close up).
-  const finishZoomT = settle ? easeInOut(clamp((progress - 0.78) / 0.22, 0, 1)) : 0;
+  // settleEnd === false: skip the end zoom-in so the camera stays at cruise.
+  const finishZoomT = settleEnd ? easeInOut(clamp((progress - 0.78) / 0.22, 0, 1)) : 0;
   const cruiseZoom = segmentKm > 180 ? 8.4 : segmentKm > 45 ? 9.8 : 11.7;
-  const movingZoom = lerp(12.4, cruiseZoom, zoomOutT);
+  // settleStart === false: begin at cruise (no 12.4 zoom-in flourish) so a move
+  // that departs from a photo-less pause doesn't pop bigger before settling.
+  const startZoom = settleStart ? 12.4 : cruiseZoom;
+  const movingZoom = lerp(startZoom, cruiseZoom, zoomOutT);
   return lerp(movingZoom, 14.2, finishZoomT);
 }
 
-function segmentAheadDistance(segmentKm, progress) {
+function segmentAheadDistance(segmentKm, progress, settleStart = true) {
   const zoomOutT = easeInOut(clamp(progress / 0.22, 0, 1));
   const farDistance = segmentKm > 180 ? 5200 : segmentKm > 45 ? 3600 : 1600;
-  return lerp(650, farDistance, zoomOutT);
+  // settleStart === false: keep the far look-ahead from the start so the camera
+  // center doesn't jump when resuming from a pause.
+  const startAhead = settleStart ? 650 : farDistance;
+  return lerp(startAhead, farDistance, zoomOutT);
 }
 
-function applyRouteSegment(startTrackIndex, endTrackIndex, segmentProgress, settle = true) {
+function applyRouteSegment(
+  startTrackIndex,
+  endTrackIndex,
+  segmentProgress,
+  settleStart = true,
+  settleEnd = true
+) {
   const startIndex = Math.round(clamp(startTrackIndex, 0, routePoints.length - 1));
   const endIndex = Math.round(clamp(endTrackIndex, 0, routePoints.length - 1));
   const progress = clamp(segmentProgress, 0, 1);
@@ -1132,11 +1143,11 @@ function applyRouteSegment(startTrackIndex, endTrackIndex, segmentProgress, sett
   const routeFraction = routeFractionForDistance(distanceKm);
   const point = pointAtDistanceKm(distanceKm);
   const segmentKm = Math.abs(endDistance - startDistance);
-  const aheadDistance = segmentAheadDistance(segmentKm, progress);
+  const aheadDistance = segmentAheadDistance(segmentKm, progress, settleStart);
   const offsetCenter = offsetCoordinate(point.coord, point.bearing, aheadDistance);
-  // settle === false: keep looking ahead (don't recenter onto the point) so a
+  // settleEnd === false: keep looking ahead (don't recenter onto the point) so a
   // photo-less pause stays in the moving framing instead of closing up.
-  const finishCenterT = settle
+  const finishCenterT = settleEnd
     ? easeInOut(clamp((progress - 0.82) / 0.18, 0, 1)) * 0.45
     : 0;
   const center = interpolateCoord(offsetCenter, point.coord, finishCenterT);
@@ -1163,8 +1174,10 @@ function applyRouteSegment(startTrackIndex, endTrackIndex, segmentProgress, sett
 
   map.jumpTo({
     center,
-    zoom: segmentCameraZoom(segmentKm, progress, settle),
-    pitch: lerp(60, 67, easeInOut(clamp(progress / 0.25, 0, 1))),
+    zoom: segmentCameraZoom(segmentKm, progress, settleStart, settleEnd),
+    // settleStart === false: start at cruise pitch (67) instead of the post-stop
+    // 60→67 ramp, so departing a pause doesn't tilt.
+    pitch: lerp(settleStart ? 60 : 67, 67, easeInOut(clamp(progress / 0.25, 0, 1))),
     bearing: bearingState.bearing
   });
 
@@ -1224,7 +1237,8 @@ window.renderRouteSegment = async function (
   endTrackIndex,
   segmentProgress,
   waitMode = "map-render",
-  settle = true
+  settleStart = true,
+  settleEnd = true
 ) {
   if (!renderReady || !map) {
     throw new Error("Map is not initialized.");
@@ -1232,7 +1246,13 @@ window.renderRouteSegment = async function (
 
   renderFrameCounter += 1;
   const renderStart = performance.now();
-  const scene = applyRouteSegment(startTrackIndex, endTrackIndex, segmentProgress, settle);
+  const scene = applyRouteSegment(
+    startTrackIndex,
+    endTrackIndex,
+    segmentProgress,
+    settleStart,
+    settleEnd
+  );
   const renderEventReady = await waitForRenderMode(waitMode);
   const renderWaitMs = performance.now() - renderStart;
 
