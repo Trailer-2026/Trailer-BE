@@ -37,6 +37,16 @@ conda run -n trailer3d python render_video.py --bearing-test-route    # short sh
 
 Outputs auto-increment: `output/travel_3d_1.mp4`, `_2.mp4`, … (existing files are never overwritten — `next_output_path()`).
 
+### BGM
+`--bgm <path>` (or a top-level `"bgm": "..."` field in the travel-data JSON; `--bgm` wins) muxes a music track into the rendered video. The video is rendered silent as before, then `mux_bgm_into_video()` runs a second FFmpeg pass that stream-copies the video (`-c:v copy`, no re-encode), loops the audio to fill the duration (`-stream_loop -1 ... -shortest`), re-encodes audio to AAC 192k, and adds a 2s fade-out. BGM files live in `bgm/` (gitignored — Pixabay license restricts redistribution; see `bgm/CREDITS.md`). Skipped for `--benchmark-frames`.
+
+### Builder server (`server.py` + `builder.html`)
+A FastAPI app for building renders interactively instead of hand-editing JSON. `GET /` serves `builder.html` (Mapbox token injected server-side via `__MAPBOX_TOKEN__`); click the map to add GPS points, attach photos per point, pick a BGM track, and choose a **render engine**. `POST /api/render` saves uploaded photos to `assets/uploads/<job>/`, writes a `travel_data.json` (with the `bgm` field), then dispatches on the `engine` form field:
+- `engine=local` → subprocess `render_video.py` (`sys.executable`, trailer3d env); output parsed from `"출력 예정 파일:"`.
+- `engine=modal` → subprocess `modal run modal_render.py --travel-data <rel> --mode {quality|quality-fast}`; output parsed from the entrypoint's `"저장 위치:"` line. `modal_render.py`'s `render()`/`main()` take a `travel_data` arg and pass `--travel-data` into the container; the `assets/` (uploads) and `bgm/` dirs ride along via `add_local_dir`, and BGM is picked up from the JSON's `bgm` field inside the container.
+
+`GET /api/bgm` lists tracks with cleaned display names (`bgm_display_name()` parses Pixabay attribution filenames). Run from this directory: `conda run -n trailer3d python -m uvicorn server:app --port 8200` (needs `fastapi`/`uvicorn`/`python-multipart`, added to `requirements.txt`; `modal` must be installed + logged in for the Modal engine).
+
 There is **no test suite, linter, or build step.** Verification is done by rendering (use `--quick` or `--benchmark-frames`) and inspecting `output/` and `debug/` images. `--save-frames` dumps the individual frames to `frames/`.
 
 ## Architecture
