@@ -1,0 +1,16 @@
+# Builder uploads (user-supplied photos + generated travel_data.json)
+assets/uploads/
+
+# Working dirs
+frames/
+output/
+
+# BGM audio — Pixabay Content License allows use in videos but restricts
+# standalone redistribution, so keep the audio files local (not committed).
+# CREDITS.md is tracked so attribution stays in the repo.
+bgm/*.m4a
+bgm/*.aac
+bgm/*.wav
+bgm/*.ogg
+bgm/*.flac
+!bgm/CREDITS.md
