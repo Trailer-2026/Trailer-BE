@@ -1105,9 +1105,11 @@ function applySceneForProgress(progress, useSmoothing) {
   };
 }
 
-function segmentCameraZoom(segmentKm, progress) {
+function segmentCameraZoom(segmentKm, progress, settle = true) {
   const zoomOutT = easeInOut(clamp(progress / 0.22, 0, 1));
-  const finishZoomT = easeInOut(clamp((progress - 0.78) / 0.22, 0, 1));
+  // settle === false: skip the end zoom-in so the camera stays at cruise framing
+  // (used for photo-less "pause" points that should not close up).
+  const finishZoomT = settle ? easeInOut(clamp((progress - 0.78) / 0.22, 0, 1)) : 0;
   const cruiseZoom = segmentKm > 180 ? 8.4 : segmentKm > 45 ? 9.8 : 11.7;
   const movingZoom = lerp(12.4, cruiseZoom, zoomOutT);
   return lerp(movingZoom, 14.2, finishZoomT);
@@ -1119,7 +1121,7 @@ function segmentAheadDistance(segmentKm, progress) {
   return lerp(650, farDistance, zoomOutT);
 }
 
-function applyRouteSegment(startTrackIndex, endTrackIndex, segmentProgress) {
+function applyRouteSegment(startTrackIndex, endTrackIndex, segmentProgress, settle = true) {
   const startIndex = Math.round(clamp(startTrackIndex, 0, routePoints.length - 1));
   const endIndex = Math.round(clamp(endTrackIndex, 0, routePoints.length - 1));
   const progress = clamp(segmentProgress, 0, 1);
@@ -1132,7 +1134,11 @@ function applyRouteSegment(startTrackIndex, endTrackIndex, segmentProgress) {
   const segmentKm = Math.abs(endDistance - startDistance);
   const aheadDistance = segmentAheadDistance(segmentKm, progress);
   const offsetCenter = offsetCoordinate(point.coord, point.bearing, aheadDistance);
-  const finishCenterT = easeInOut(clamp((progress - 0.82) / 0.18, 0, 1)) * 0.45;
+  // settle === false: keep looking ahead (don't recenter onto the point) so a
+  // photo-less pause stays in the moving framing instead of closing up.
+  const finishCenterT = settle
+    ? easeInOut(clamp((progress - 0.82) / 0.18, 0, 1)) * 0.45
+    : 0;
   const center = interpolateCoord(offsetCenter, point.coord, finishCenterT);
   const bearingState = smoothBearingForFrame(
     routeFraction,
@@ -1157,7 +1163,7 @@ function applyRouteSegment(startTrackIndex, endTrackIndex, segmentProgress) {
 
   map.jumpTo({
     center,
-    zoom: segmentCameraZoom(segmentKm, progress),
+    zoom: segmentCameraZoom(segmentKm, progress, settle),
     pitch: lerp(60, 67, easeInOut(clamp(progress / 0.25, 0, 1))),
     bearing: bearingState.bearing
   });
@@ -1217,7 +1223,8 @@ window.renderRouteSegment = async function (
   startTrackIndex,
   endTrackIndex,
   segmentProgress,
-  waitMode = "map-render"
+  waitMode = "map-render",
+  settle = true
 ) {
   if (!renderReady || !map) {
     throw new Error("Map is not initialized.");
@@ -1225,7 +1232,7 @@ window.renderRouteSegment = async function (
 
   renderFrameCounter += 1;
   const renderStart = performance.now();
-  const scene = applyRouteSegment(startTrackIndex, endTrackIndex, segmentProgress);
+  const scene = applyRouteSegment(startTrackIndex, endTrackIndex, segmentProgress, settle);
   const renderEventReady = await waitForRenderMode(waitMode);
   const renderWaitMs = performance.now() - renderStart;
 

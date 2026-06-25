@@ -120,7 +120,7 @@ DEFAULT_CONFIG = RenderConfig(
     fade_seconds=0.6,
     black_fade_seconds=0.25,
     stop_seconds=0.8,
-    arrival_hold_seconds=1.5,
+    arrival_hold_seconds=0.7,
     photo_fade_in_seconds=0.4,
     photo_hold_seconds=1.6,
     photo_fade_out_seconds=0.4,
@@ -139,7 +139,7 @@ QUALITY_FAST_CONFIG = RenderConfig(
     fade_seconds=0.6,
     black_fade_seconds=0.25,
     stop_seconds=0.8,
-    arrival_hold_seconds=1.5,
+    arrival_hold_seconds=0.7,
     photo_fade_in_seconds=0.4,
     photo_hold_seconds=1.6,
     photo_fade_out_seconds=0.4,
@@ -158,7 +158,7 @@ QUICK_CONFIG = RenderConfig(
     fade_seconds=0.4,
     black_fade_seconds=0.2,
     stop_seconds=0.5,
-    arrival_hold_seconds=1.5,
+    arrival_hold_seconds=0.7,
     photo_fade_in_seconds=0.25,
     photo_hold_seconds=0.8,
     photo_fade_out_seconds=0.25,
@@ -193,6 +193,10 @@ class TimelineSegment:
     fade_in_seconds: float = 0.0
     hold_seconds: float = 0.0
     fade_out_seconds: float = 0.0
+    # map_move: whether to "settle" (zoom in toward the point) at the end of the
+    # move. False = stay at cruise framing so it can flow into a map_pause without
+    # a close-up. map_pause reuses the move's cruise frame frozen at the point.
+    settle: bool = True
 
 
 DEFAULT_TRAVEL_DATA = {
@@ -837,6 +841,7 @@ def build_timeline_segments(
     previous_index = 0
 
     for media_point in stop_points:
+        has_photos = bool(media_point.photos)
         if media_point.track_index > previous_index:
             segments.append(
                 TimelineSegment(
@@ -844,23 +849,36 @@ def build_timeline_segments(
                     start_track_index=previous_index,
                     end_track_index=media_point.track_index,
                     duration=next(move_duration_iter),
+                    # Settle (zoom in) only when this point has photos to show.
+                    # Photo-less points keep the cruise framing for a quick pause.
+                    settle=has_photos,
                 )
             )
 
-        # Points with photos: short hold (stop_seconds) before the photo sequence,
-        # which itself provides dwell time. Points without photos: hold at least
-        # arrival_hold_seconds so the place is actually visible before moving on.
-        hold_duration = (
-            config.stop_seconds if media_point.photos else config.arrival_hold_seconds
-        )
-        segments.append(
-            TimelineSegment(
-                type="map_hold",
-                track_index=media_point.track_index,
-                name=media_point.name,
-                duration=hold_duration,
+        if has_photos:
+            # Close-up stop: hold stop_seconds, then play the photo sequence.
+            segments.append(
+                TimelineSegment(
+                    type="map_hold",
+                    track_index=media_point.track_index,
+                    name=media_point.name,
+                    duration=config.stop_seconds,
+                )
             )
-        )
+        else:
+            # No close-up: just freeze the moving (cruise) frame at the point for
+            # arrival_hold_seconds, then keep going.
+            segments.append(
+                TimelineSegment(
+                    type="map_pause",
+                    start_track_index=previous_index,
+                    end_track_index=media_point.track_index,
+                    track_index=media_point.track_index,
+                    name=media_point.name,
+                    duration=config.arrival_hold_seconds,
+                    settle=False,
+                )
+            )
 
         for photo_path in media_point.photos:
             segments.append(
@@ -2076,13 +2094,51 @@ def render_timeline_frames(
                     try:
                         render_started = time.perf_counter()
                         frame_info = page.evaluate(
-                            "([startIndex, endIndex, progress, waitMode]) => "
-                            "window.renderRouteSegment(startIndex, endIndex, progress, waitMode)",
+                            "([startIndex, endIndex, progress, waitMode, settle]) => "
+                            "window.renderRouteSegment(startIndex, endIndex, progress, waitMode, settle)",
                             [
                                 segment.start_track_index,
                                 segment.end_track_index,
                                 progress,
                                 render_wait_mode,
+                                segment.settle,
+                            ],
+                        )
+                        render_call_ms = (time.perf_counter() - render_started) * 1000.0
+                        render_wait_ms = (
+                            float(frame_info.get("renderWaitMs") or 0.0)
+                            if isinstance(frame_info, dict)
+                            else 0.0
+                        )
+                        capture_and_write_map_frame(
+                            frame_started,
+                            render_call_ms,
+                            render_wait_ms,
+                        )
+                    except Exception as error:
+                        print(f"프레임 {frame_index:06d} 렌더링 실패: {error}")
+                        raise
+                continue
+
+            if segment.type == "map_pause":
+                # Freeze the cruise (non-settle) arrival frame at the point — no
+                # close-up — for the hold duration, then continue moving.
+                frame_count = frame_count_for_seconds(segment.duration, config.fps)
+                for _ in range(frame_count):
+                    if benchmark_done():
+                        break
+                    frame_started = time.perf_counter()
+                    try:
+                        render_started = time.perf_counter()
+                        frame_info = page.evaluate(
+                            "([startIndex, endIndex, progress, waitMode, settle]) => "
+                            "window.renderRouteSegment(startIndex, endIndex, progress, waitMode, settle)",
+                            [
+                                segment.start_track_index,
+                                segment.end_track_index,
+                                1.0,
+                                render_wait_mode,
+                                False,
                             ],
                         )
                         render_call_ms = (time.perf_counter() - render_started) * 1000.0
