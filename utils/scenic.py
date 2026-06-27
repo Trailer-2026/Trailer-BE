@@ -5,7 +5,7 @@ SCENIC_NATURAL_CATEGORIES = {"water", "waterway", "peak", "natural_view"}
 
 # 창밖에서 실제로 보이는 가시 범위(m)와 진행 방향 허용 각도(도).
 # 거리 컷오프로 멀리 있는 스팟을, heading ±허용각으로 이미 지나간(뒤편) 스팟을 거른다.
-VISIBLE_RADIUS_M = 500
+VISIBLE_RADIUS_M = 1500
 HEADING_TOLERANCE_DEG = 100
 
 # 좌표 거리 계산
