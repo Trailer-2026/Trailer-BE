@@ -1,9 +1,13 @@
 import logging
-from sqlalchemy import and_, or_, insert
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
+from databases.daos import station_dao
 from databases.models.scenic_spot import ScenicSpot
 from databases.models.scenic_spot_segment import ScenicSpotSegment
-from utils.scenic import haversine_m, SCENIC_NATURAL_CATEGORIES
+from utils.scenic import (
+    haversine_m, bearing_deg, angle_diff_deg,
+    SCENIC_NATURAL_CATEGORIES, VISIBLE_RADIUS_M, HEADING_TOLERANCE_DEG,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +28,10 @@ def search_on_segment(
 ) -> list[dict]:
     """출발역→도착역 구간에서 보이는 자연 관광지를 거리순 top_n개 반환.
 
-    segment를 1차 필터로 잡고(출발/도착역 양방향 매칭 → 진행 방향 좌/우 확정), 해당 관광지를
-    현재 좌표 기준 haversine 거리(지구 곡면 위 두 좌표 사이의 최단 거리를 구하는 공식)로 정렬해 item으로 매핑한다.
+    segment를 1차 필터로 잡고(출발/도착역 양방향 매칭 → 진행 방향 좌/우 확정), 창밖에서 실제로
+    보이는 후보만 남긴다: 현재 좌표 기준 haversine 거리 VISIBLE_RADIUS_M(가시 범위) 이내 +
+    진행 방향(도착역 방위) 기준 HEADING_TOLERANCE_DEG 이내(앞~옆, 이미 지나간 뒤편 제외).
+    남은 후보를 거리순 top_n개로 매핑한다.
     좌/우는 노선과 무관한 기하 속성이라 노선 구분 없이 출발/도착역만으로 방향을 판별한다.
     """
     # segment = '관광지가 어느 역 구간에서 어느 쪽 창으로 보이는가'(정의: ScenicSpotSegment 모델 참조).
@@ -58,12 +64,25 @@ def search_on_segment(
         ScenicSpot.scenic_spot_idx.in_(side_by_spot.keys()),
     ).all()
 
-    # 관광지마다 현재 좌표 기준 haversine(구면 실거리, m)을 계산해 (거리, 관광지, segment)로 묶음
+    # 진행 방향(heading): "도착역 = 내 앞"으로 보고 현재→도착역 방위각으로 잡는다.
+    # 도착역 좌표가 없으면 heading=None → 방향 필터는 생략하고 거리 필터만 적용(fallback).
+    dest = station_dao.coord_by_name(db, to_station)
+    heading = bearing_deg(lat, lng, dest[0], dest[1]) if dest else None
+    if dest is None:
+        logger.warning("역 좌표 없음, heading 필터 생략 (거리만 적용): %s", to_station)
+
+    # 창밖에서 실제로 보이는 후보만 통과: 가시 거리 이내 + 진행 방향 앞~옆
     matches: list[tuple[float, ScenicSpot, ScenicSpotSegment]] = []
     for spot in spots:
-        seg = side_by_spot[spot.scenic_spot_idx]
         distance_m = haversine_m(lat, lng, spot.lat, spot.lng)
-        matches.append((distance_m, spot, seg))
+        if distance_m > VISIBLE_RADIUS_M:
+            continue  # 가시 범위 밖
+        if heading is not None and (
+            angle_diff_deg(bearing_deg(lat, lng, spot.lat, spot.lng), heading)
+            > HEADING_TOLERANCE_DEG
+        ):
+            continue  # 진행 방향 뒤편 = 이미 지나감
+        matches.append((distance_m, spot, side_by_spot[spot.scenic_spot_idx]))
 
     # 가까운 순 정렬 후 아래에서 top_n개만 사용
     matches.sort(key=lambda m: m[0])
@@ -78,22 +97,3 @@ def search_on_segment(
             "side": _resolve_side(seg, from_station, to_station),
         })
     return results
-
-
-def count(db: Session) -> int:
-    """삭제되지 않은 관광지 row 수. (시드 여부 판단용)"""
-    return db.query(ScenicSpot).filter(ScenicSpot.deleted_at.is_(None)).count()
-
-
-def bulk_insert(db: Session, mappings: list[dict]) -> None:
-    """관광지 row를 일괄 적재한다. (시드 전용, flush만 — commit은 서비스가 담당)"""
-    if not mappings:
-        return
-    db.execute(insert(ScenicSpot), mappings)
-    db.flush()
-
-
-def idx_by_osm_uid(db: Session) -> dict[str, int]:
-    """osm_uid → scenic_spot_idx 매핑. (bulk 적재 직후 segment FK 연결용)"""
-    rows = db.query(ScenicSpot.osm_uid, ScenicSpot.scenic_spot_idx).all()
-    return {osm_uid: idx for osm_uid, idx in rows}
