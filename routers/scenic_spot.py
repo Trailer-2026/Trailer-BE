@@ -22,8 +22,8 @@ router = APIRouter(prefix="/api/scenic-spots", tags=["관광지 수집"])
 async def get_nearby(
     lat: float = Query(..., description="현재 위도(거리 계산 기준)", example=36.59683),
     lng: float = Query(..., description="현재 경도(거리 계산 기준)", example=127.33874),
-    from_station: str = Query(..., description="출발역", example="오송"),
-    to_station: str = Query(..., description="도착역", example="대전"),
+    from_station: str = Query(..., description="출발역", example="오송역"),
+    to_station: str = Query(..., description="도착역", example="대전역"),
     db: Session = Depends(get_db),
 ):
     result = scenic_spot_service.find_nearby(db, lat, lng, from_station, to_station)
