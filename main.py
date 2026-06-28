@@ -4,6 +4,8 @@ setup_logging()
 
 import logging
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from starlette.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -18,8 +20,17 @@ from routers.auth import router as auth_router
 from routers.scenic_spot import router as scenic_spot_router
 
 logger = logging.getLogger(__name__)
+from routers.fcm import router as fcm_router
+from utils.firebase import init_firebase
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_firebase()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,6 +48,7 @@ app.add_exception_handler(Exception, global_exception_handler)
 
 app.include_router(auth_router)
 app.include_router(scenic_spot_router)
+app.include_router(fcm_router)
 
 
 @app.get("/")

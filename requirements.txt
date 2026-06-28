@@ -11,3 +11,4 @@ pydantic-settings        # 추가됨 (설정 관리용)
 httpx==0.27.0
 pydantic-settings==2.2.1
 PyJWT==2.9.0            # 추가됨 (자체 JWT 발급/검증용)
+firebase-admin          # 추가됨 (FCM 푸시 알림)
