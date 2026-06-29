@@ -2,6 +2,8 @@
 from utils.logging_config import setup_logging
 setup_logging()
 
+import logging
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -15,6 +17,9 @@ from core.exceptions.handlers import (
     validation_exception_handler,
 )
 from routers.auth import router as auth_router
+from routers.scenic_spot import router as scenic_spot_router
+
+logger = logging.getLogger(__name__)
 from routers.fcm import router as fcm_router
 from routers.route import router as route_router
 from routers.station import router as station_router
@@ -45,6 +50,7 @@ app.add_exception_handler(Exception, global_exception_handler)
 
 
 app.include_router(auth_router)
+app.include_router(scenic_spot_router)
 app.include_router(fcm_router)
 app.include_router(station_router)
 app.include_router(train_router)
