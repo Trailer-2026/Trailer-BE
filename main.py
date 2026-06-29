@@ -17,6 +17,7 @@ from core.exceptions.handlers import (
 from routers.auth import router as auth_router
 from routers.fcm import router as fcm_router
 from routers.station import router as station_router
+from routers.train import router as train_router
 from utils.firebase import init_firebase
 
 
@@ -45,6 +46,7 @@ app.add_exception_handler(Exception, global_exception_handler)
 app.include_router(auth_router)
 app.include_router(fcm_router)
 app.include_router(station_router)
+app.include_router(train_router)
 
 
 @app.get("/")
