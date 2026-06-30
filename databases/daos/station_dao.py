@@ -32,6 +32,24 @@ def get_by_idx(db: Session, station_idx: int) -> Station | None:
     ).first()
 
 
+def nearest(db: Session, lat: float, lng: float, require_nat_code: bool = True) -> Station | None:
+    """좌표에서 가장 가까운 역(soft-delete 제외). 기차 추천용이라 기본 nat_code 보유 역만.
+
+    소규모(전국 246역)라 위경도 제곱거리로 Python에서 최근접을 고른다(대권거리 불필요).
+    """
+    q = db.query(Station).filter(
+        Station.deleted_at.is_(None),
+        Station.latitude.isnot(None),
+        Station.longitude.isnot(None),
+    )
+    if require_nat_code:
+        q = q.filter(Station.nat_code.isnot(None))
+    rows = q.all()
+    if not rows:
+        return None
+    return min(rows, key=lambda s: (s.latitude - lat) ** 2 + (s.longitude - lng) ** 2)
+
+
 def get_stations(db: Session, query: str | None = None) -> list[Station]:
     """역 목록을 역명 오름차순으로 조회한다.
 
