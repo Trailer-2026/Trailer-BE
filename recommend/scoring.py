@@ -29,7 +29,7 @@ def _multi_hot(themes: list[Theme]) -> tuple[float, ...]:
 
 
 def score_places(
-    places: list,                       # list[databases.models.place.Place]
+    places: list,                       # 추천지 객체 목록 (utils.tour_place.LivePlace)
     themes: list[Theme],
     weights: dict[Theme, float] | None = None,
 ) -> list[ScoredPlace]:

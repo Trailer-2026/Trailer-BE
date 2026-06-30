@@ -85,6 +85,30 @@ def area_based_list(
     return _items(body), int(body.get("totalCount") or 0)
 
 
+def location_based_list(
+    *,
+    lat: float,
+    lng: float,
+    radius_m: int = 20000,  # locationBasedList2 최대 20km
+    content_type_id: int | None = None,
+    num_of_rows: int = 100,
+    page_no: int = 1,
+    arrange: str = "E",  # E: 거리순(가까운 순)
+) -> tuple[list[dict], int]:
+    """위치기반 관광정보 조회(locationBasedList2). (items, totalCount) 반환.
+
+    item에 dist(중심으로부터 거리 m)가 추가로 들어온다. mapX=경도, mapY=위도.
+    """
+    params = {
+        "numOfRows": num_of_rows, "pageNo": page_no, "arrange": arrange,
+        "mapX": lng, "mapY": lat, "radius": radius_m,
+    }
+    if content_type_id is not None:
+        params["contentTypeId"] = content_type_id
+    body = _get("locationBasedList2", params)
+    return _items(body), int(body.get("totalCount") or 0)
+
+
 def category_code(
     *,
     content_type_id: int | None = None,

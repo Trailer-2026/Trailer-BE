@@ -15,6 +15,7 @@
 무조건 리턴 보장: 가는편 기본 왕복(직통 or 환승)을 항상 첫 번째로 반환한다.
 """
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 
@@ -109,6 +110,38 @@ def _legs(dep_nat: str, arr_nat: str, ymd: str, nail_pass: bool = False) -> tupl
     if nail_pass:
         trains = tuple(t for t in trains if _nail_eligible(t["grade"]))
     return trains
+
+
+def _safe_fetch(dep_nat: str, arr_nat: str, ymd: str) -> None:
+    try:
+        train_api.fetch_trains(dep_nat, arr_nat, ymd)  # lru_cache 워밍
+    except Exception:
+        pass
+
+
+def _prefetch_segments(dep, arr, groups, stops, go_date, back_date) -> None:
+    """이번 추천에 필요한 모든 (출발,도착,날짜) 구간을 병렬로 미리 받아 캐시를 데운다.
+
+    이후 _journey/_via_pair의 순차 호출은 전부 캐시 히트가 되어 빨라진다.
+    fetch_trains는 등급 필터 전 원본이라 내일로 여부와 무관하게 공유된다.
+    """
+    pairs = {
+        (dep.nat_code, arr.nat_code, go_date),
+        (arr.nat_code, dep.nat_code, back_date),
+    }
+    members = {s.station_idx: s for g in groups for s in g}.values()
+    for m in members:
+        if m.station_idx in (dep.station_idx, arr.station_idx) or not m.nat_code:
+            continue
+        pairs.add((dep.nat_code, m.nat_code, go_date))
+        pairs.add((m.nat_code, arr.nat_code, go_date))
+        pairs.add((arr.nat_code, m.nat_code, back_date))
+        pairs.add((m.nat_code, dep.nat_code, back_date))
+    for c in stops:
+        pairs.add((dep.nat_code, c.nat_code, go_date))
+        pairs.add((c.nat_code, arr.nat_code, go_date))
+    with ThreadPoolExecutor(max_workers=min(16, len(pairs))) as ex:
+        list(ex.map(lambda p: _safe_fetch(*p), pairs))
 
 
 def _earliest(trains: tuple, not_before: datetime) -> dict | None:
@@ -265,6 +298,10 @@ def recommend(
     by_name = {s.station_name: s for s in all_stations}
     groups = _resolve_groups(by_name)
 
+    # 필요한 모든 구간을 병렬 prefetch → 이후 순차 로직은 캐시 히트로 즉답
+    stops = _candidate_stops(all_stations, dep, arr)
+    _prefetch_segments(dep, arr, groups, stops, go_date, back_date)
+
     # 오는편(공통): 도착→출발, 직통 or 환승
     back_picks, back_via, _ = _journey(arr, dep, back_date, back_start, groups, nail_pass)
     back_segs = [_to_train(t) for t in back_picks]
@@ -285,7 +322,7 @@ def recommend(
 
     # 2) 관광 경유(1곳): 지리적 중간역에 2~6h 체류
     stopovers = []
-    for c in _candidate_stops(all_stations, dep, arr):
+    for c in stops:
         pair = _via_pair(dep.nat_code, arr.nat_code, c.nat_code, go_date, go_start, MIN_STAY, MAX_STAY, nail_pass)
         if not pair:
             continue

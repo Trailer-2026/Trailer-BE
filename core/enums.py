@@ -1,14 +1,11 @@
 import enum
 
-from sqlalchemy.dialects.postgresql import ENUM
-
 
 class Theme(str, enum.Enum):
-    """선호하는 여행지 타입 (PostgreSQL ENUM `theme`).
+    """선호하는 여행지 타입. 추천 엔진·스키마·TourAPI 분류 매핑이 공유한다.
 
-    User.theme(선호 타입)·Place.themes(추천지 태그)·추천 엔진이 공유한다.
-    정의 순서는 SQL ENUM 순서와 일치해야 한다. value는 한글이 아닌 영문 키로
-    저장하며, 한글 라벨은 프론트/응답에서 매핑한다(주석 참고).
+    value는 영문 키, 한글 라벨은 THEME_LABELS로 매핑한다. (관광 데이터는 실시간
+    TourAPI 호출이라 DB ENUM 타입은 더 이상 쓰지 않는다.)
     """
 
     NATURE = "NATURE"          # 산/자연
@@ -32,17 +29,3 @@ THEME_LABELS = {
     Theme.CULTURE: "문화예술",
     Theme.THEME_PARK: "테마파크",
 }
-
-
-# PostgreSQL 네이티브 ENUM 타입. station.py의 train_grade/rail_region과 동일하게
-# 실제 타입(theme)은 외부 DDL에서 생성하므로 create_type=False (중복 생성 방지).
-# 이 프로젝트는 레포에 .sql/ create_all이 없고 DDL을 DB에 직접 적용한다.
-# 신규 `theme` 타입 생성 DDL 예시:
-#   CREATE TYPE theme AS ENUM
-#     ('NATURE','OCEAN','HISTORY','CITY','HEALING','FOOD','CULTURE','THEME_PARK');
-_theme_enum = ENUM(
-    Theme,
-    name="theme",
-    values_callable=lambda enum_cls: [member.value for member in enum_cls],
-    create_type=False,
-)

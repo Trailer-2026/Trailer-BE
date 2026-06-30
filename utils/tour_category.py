@@ -2,7 +2,7 @@
 
 categoryCode2 트리(권위 코드표)를 근거로 cat3/cat2 코드를 명시 매핑한다.
 우선순위: cat3 특수 매핑 > cat2 기본값 > contentTypeId 보강. 다중 태그 허용.
-레포츠(A03/contentType 28)는 8개 테마에 잘 안 맞아 시딩 대상에서 제외(seed_places).
+레포츠(A03/contentType 28)는 8개 테마에 잘 안 맞아 수집 대상에서 제외한다.
 """
 from core.enums import Theme
 
@@ -80,6 +80,15 @@ def themes_for(
         out.add(Theme.FOOD)
 
     return sorted(out, key=lambda t: t.value)
+
+
+# 숙박(contentTypeId=32) cat3 → 유형 라벨
+LODGING_TYPE = {
+    "B02010100": "관광호텔", "B02010500": "콘도미니엄", "B02010600": "유스호스텔",
+    "B02010700": "펜션", "B02010900": "모텔", "B02011000": "민박",
+    "B02011100": "게스트하우스", "B02011200": "홈스테이",
+    "B02011300": "서비스드레지던스", "B02011600": "한옥",
+}
 
 
 def stay_minutes(content_type_id: int | str | None, themes: list[Theme]) -> int:
