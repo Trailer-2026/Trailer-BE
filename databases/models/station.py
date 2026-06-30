@@ -62,6 +62,11 @@ class Station(BaseModel):
 
     station_idx = Column(BigInteger, primary_key=True, autoincrement=True, comment="PK")
     station_name = Column(String(100), nullable=False, unique=True, comment="역명")
+    nat_code = Column(
+        String(12),
+        unique=True,
+        comment="TAGO 열차정보 API(GetStrtpntAlocFndTrainInfo) 역코드(NAT). 일부 역(예: 평택지제) 미존재→NULL",
+    )
     latitude = Column(Float, comment="위도")
     longitude = Column(Float, comment="경도")
     region = Column(_rail_region_enum, comment="관리 본부")
