@@ -41,7 +41,6 @@ class LivePlace:
     lat: float
     lng: float
     themes: list[Theme]
-    avg_stay_min: int
     image_url: str | None
     content_id: str
 
@@ -77,7 +76,6 @@ def _to_live(item: dict) -> LivePlace | None:
         lat=lat,
         lng=lng,
         themes=themes,
-        avg_stay_min=tour_category.stay_minutes(ct, themes),
         image_url=(item.get("firstimage") or None),
         content_id=cid,
     )

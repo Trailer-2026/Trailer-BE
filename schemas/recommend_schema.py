@@ -74,7 +74,6 @@ class RecommendedPlace(BaseModel):
     lat: float = Field(..., description="위도")
     lng: float = Field(..., description="경도")
     themes: list[Theme] = Field(..., description="테마 태그")
-    avg_stay_min: int = Field(..., description="평균 체류시간(분)")
     preference_score: float = Field(..., description="선호도 점수(가중 코사인 유사도)")
     reason: str = Field(..., description="추천 이유 한 줄 설명")
 
@@ -97,7 +96,6 @@ class DayPlan(BaseModel):
     day_no: int = Field(..., description="여행 일자 (1=Day1)")
     date: str | None = Field(None, description="배정 날짜 (YYYYMMDD). 날짜 지정 전 null")
     places: list[RecommendedPlace] = Field(..., description="방문 순서대로의 추천지 목록")
-    est_travel_minutes: int = Field(..., description="Day 내부 예상 이동시간(분)")
     lodging: Lodging | None = Field(
         None,
         description="그 날 밤 숙소. 지역 이동이 없으면 전날과 동일 숙소가 반복되고, "
@@ -112,7 +110,6 @@ class Course(BaseModel):
     origin_station_idx: int = Field(..., description="출발·복귀 역 station_idx")
     days: list[DayPlan] = Field(..., description="Day별 일정")
     total_preference_score: float = Field(..., description="코스 전체 선호도 점수 합")
-    total_travel_minutes: int = Field(..., description="코스 전체 예상 이동시간(분)")
     is_round_trip_closed: bool = Field(..., description="마지막 day에서 출발지로 복귀(순환 닫힘) 여부")
     note: str | None = Field(None, description="비고")
 

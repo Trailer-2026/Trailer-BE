@@ -19,7 +19,6 @@ class ScoredPlace:
     lat: float
     lng: float
     themes: list[Theme]
-    avg_stay_min: int
     score: float
     image_url: str | None = None
 

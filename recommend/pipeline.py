@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 
 from core.enums import THEME_LABELS, Theme
-from recommend import clustering, constraints, routing
+from recommend import clustering, routing
 from recommend.types import Cluster, ScoredPlace
 from schemas.recommend_schema import Course, DayPlan, RecommendedPlace, SearchCriteria
 
@@ -24,14 +24,13 @@ def build_courses(
 
     다중 테마는 scoring 단계(가중 코사인)에서 이미 반영된 score 순위를 사용한다.
     코스 3개는 점수 랭크를 인터리브해 '겹치지 않는' 풀로 나눠 만든다(각 코스가 상위권을
-    고루 갖되 장소는 달라짐). 각 코스: kmeans(k=일수) → constraints → 하루 최대 3곳 캡
+    고루 갖되 장소는 달라짐). 각 코스: kmeans(k=일수) → 하루 최대 3곳 캡
     → NN+2-opt → 마지막 day 출발지 복귀. origin은 현지 기준점(도착지) 좌표.
     """
     if not scored or k < 1:
         return []
 
     selected = set(criteria.themes or [])
-    required = list(criteria.waypoint_place_idxs or [])
 
     # 코스 3개 × 일수 × 하루 3곳 만큼의 상위 후보를 작업셋으로 (다중 테마면 테마별 균형)
     working = _select_working(scored, selected, _NUM_COURSES * k * _MAX_PER_DAY)
@@ -43,9 +42,6 @@ def build_courses(
         if not bucket:
             continue
         clusters = clustering.kmeans_by_geo(bucket, k)
-        clusters = constraints.apply(
-            clusters, criteria.max_travel_minutes, required, criteria.use_naeilpass
-        )
         # 하루 최대 _MAX_PER_DAY곳으로 제한(선호도 상위만 남김)
         for cl in clusters:
             if len(cl.members) > _MAX_PER_DAY:
@@ -114,21 +110,17 @@ def _assemble(
     go = _parse_ymd(criteria.go_date)
 
     days: list[DayPlan] = []
-    total_travel = 0
     total_score = 0.0
     for idx, cl in enumerate(ordered):
         route = routing.two_opt(routing.nearest_neighbor(cl.members))
         if idx == len(ordered) - 1:  # 마지막 day → 출발지 복귀 방향
             route = routing.close_cycle(route, origin)
-        day_min = round(routing.path_length(route) / 30.0 * 60.0)
-        total_travel += day_min
         total_score += sum(p.score for p in route)
         days.append(
             DayPlan(
                 day_no=idx + 1,
                 date=_fmt_ymd(go + timedelta(days=idx)) if go else None,
                 places=[_to_reco(p, selected) for p in route],
-                est_travel_minutes=day_min,
             )
         )
 
@@ -137,7 +129,6 @@ def _assemble(
         origin_station_idx=criteria.origin_station_idx,
         days=days,
         total_preference_score=round(total_score, 4),
-        total_travel_minutes=total_travel,
         is_round_trip_closed=bool(criteria.round_trip),
         note=None,
     )
@@ -151,7 +142,6 @@ def _to_reco(p: ScoredPlace, selected: set[Theme]) -> RecommendedPlace:
         lat=p.lat,
         lng=p.lng,
         themes=p.themes,
-        avg_stay_min=p.avg_stay_min,
         preference_score=round(p.score, 4),
         reason=_reason(p, selected),
     )

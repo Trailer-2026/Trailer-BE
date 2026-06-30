@@ -55,10 +55,6 @@ _CT = {
     "39": [Theme.FOOD],     # 음식점
 }
 
-# 체류시간(분) 휴리스틱 — TourAPI는 체류시간을 주지 않으므로 콘텐츠 유형으로 추정
-_STAY_BY_TYPE = {12: 90, 14: 60, 15: 120, 38: 60, 39: 60}
-_STAY_DEFAULT = 60
-
 
 def themes_for(
     content_type_id: int | str | None,
@@ -89,13 +85,3 @@ LODGING_TYPE = {
     "B02011100": "게스트하우스", "B02011200": "홈스테이",
     "B02011300": "서비스드레지던스", "B02011600": "한옥",
 }
-
-
-def stay_minutes(content_type_id: int | str | None, themes: list[Theme]) -> int:
-    """평균 체류시간(분) 추정. 테마파크면 길게."""
-    if Theme.THEME_PARK in themes:
-        return 180
-    try:
-        return _STAY_BY_TYPE.get(int(content_type_id), _STAY_DEFAULT)
-    except (TypeError, ValueError):
-        return _STAY_DEFAULT

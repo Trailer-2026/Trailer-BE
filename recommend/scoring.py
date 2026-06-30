@@ -72,7 +72,6 @@ def _to_scored(p, score: float) -> ScoredPlace:
         lat=p.lat,
         lng=p.lng,
         themes=list(p.themes or []),
-        avg_stay_min=p.avg_stay_min,
         score=score,
         image_url=p.image_url,
     )
