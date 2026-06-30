@@ -32,6 +32,15 @@ from utils import train_api
 
 logger = logging.getLogger(__name__)
 
+# 내일로패스 미적용(제외): SRT만 (수서고속철도 운영, 코레일 아님). train_service와 동일 정책.
+# KTX 계열은 횟수 제한은 있으나 탑승 가능하므로 포함한다.
+_NAIL_EXCLUDED_PREFIX = ("SRT",)
+
+
+def _nail_eligible(grade: str) -> bool:
+    return not grade.startswith(_NAIL_EXCLUDED_PREFIX)
+
+
 # 관광 경유(지리적 중간역에 체류)
 MIN_STAY = timedelta(hours=2)
 MAX_STAY = timedelta(hours=6)
@@ -91,12 +100,15 @@ def _station(db: Session, idx: int, label: str) -> Station:
     return s
 
 
-def _legs(dep_nat: str, arr_nat: str, ymd: str) -> tuple:
+def _legs(dep_nat: str, arr_nat: str, ymd: str, nail_pass: bool = False) -> tuple:
     try:
-        return train_api.fetch_trains(dep_nat, arr_nat, ymd)
+        trains = train_api.fetch_trains(dep_nat, arr_nat, ymd)
     except Exception as e:
         logger.warning("구간 API 실패 %s->%s %s: %s", dep_nat, arr_nat, ymd, e)
         raise ExternalServiceException("열차 시간표 조회에 실패했습니다.")
+    if nail_pass:
+        trains = tuple(t for t in trains if _nail_eligible(t["grade"]))
+    return trains
 
 
 def _earliest(trains: tuple, not_before: datetime) -> dict | None:
@@ -117,12 +129,12 @@ def _to_train(d: dict) -> RouteTrain:
     )
 
 
-def _via_pair(dep_nat, arr_nat, via_nat, ymd, start, min_gap, max_gap):
+def _via_pair(dep_nat, arr_nat, via_nat, ymd, start, min_gap, max_gap, nail_pass=False):
     """출발→경유→도착 2구간 연결(같은 역 환승/관광용). 간격 만족 시 (leg1, leg2)."""
-    leg1 = _earliest(_legs(dep_nat, via_nat, ymd), start)
+    leg1 = _earliest(_legs(dep_nat, via_nat, ymd, nail_pass), start)
     if not leg1:
         return None
-    leg2 = _earliest(_legs(via_nat, arr_nat, ymd), leg1["arr_time"] + min_gap)
+    leg2 = _earliest(_legs(via_nat, arr_nat, ymd, nail_pass), leg1["arr_time"] + min_gap)
     if not leg2:
         return None
     if leg2["dep_time"] - leg1["arr_time"] > max_gap:
@@ -130,7 +142,7 @@ def _via_pair(dep_nat, arr_nat, via_nat, ymd, start, min_gap, max_gap):
     return leg1, leg2
 
 
-def _transfer_via_group(dep, arr, group, ymd, start):
+def _transfer_via_group(dep, arr, group, ymd, start, nail_pass=False):
     """클러스터(group) 안에서 출발→[하차역]→[승차역]→도착 환승을 찾는다.
 
     하차역≠승차역(서울역 도착→용산역 출발)이면 이동 버퍼를 더한다.
@@ -139,12 +151,12 @@ def _transfer_via_group(dep, arr, group, ymd, start):
     members = [s for s in group if s.station_idx not in (dep.station_idx, arr.station_idx)]
     best = None
     for a in members:  # 하차역
-        leg1 = _earliest(_legs(dep.nat_code, a.nat_code, ymd), start)
+        leg1 = _earliest(_legs(dep.nat_code, a.nat_code, ymd, nail_pass), start)
         if not leg1:
             continue
         for d in members:  # 승차역
             gap = TRANSFER_MIN if a.station_idx == d.station_idx else CLUSTER_MOVE
-            leg2 = _earliest(_legs(d.nat_code, arr.nat_code, ymd), leg1["arr_time"] + gap)
+            leg2 = _earliest(_legs(d.nat_code, arr.nat_code, ymd, nail_pass), leg1["arr_time"] + gap)
             if not leg2:
                 continue
             if leg2["dep_time"] - leg1["arr_time"] > TRANSFER_MAX:
@@ -156,18 +168,18 @@ def _transfer_via_group(dep, arr, group, ymd, start):
     return best
 
 
-def _journey(dep: Station, arr: Station, ymd: str, start: datetime, groups: list[list[Station]]):
+def _journey(dep: Station, arr: Station, ymd: str, start: datetime, groups: list[list[Station]], nail_pass=False):
     """단일 여정을 직통 우선, 없으면 거점 클러스터 환승으로 구한다.
 
     반환: (picks: list[dict], via_label: str|None, note: str|None)
     """
-    direct = _earliest(_legs(dep.nat_code, arr.nat_code, ymd), start)
+    direct = _earliest(_legs(dep.nat_code, arr.nat_code, ymd, nail_pass), start)
     if direct:
         return [direct], None, None
 
     best = None  # (total, leg1, leg2, label)
     for group in groups:
-        r = _transfer_via_group(dep, arr, group, ymd, start)
+        r = _transfer_via_group(dep, arr, group, ymd, start, nail_pass)
         if r and (best is None or r[3] < best[0]):
             best = (r[3], r[0], r[1], r[2])
     if best:
@@ -233,8 +245,12 @@ def recommend(
     back_date: str,
     go_time: str | None = None,
     back_time: str | None = None,
+    nail_pass: bool = False,
 ) -> list[RouteCandidate]:
-    """직통/환승/경유 왕복 경로 후보를 반환한다. 기본 왕복은 항상 첫 번째로 보장된다."""
+    """직통/환승/경유 왕복 경로 후보를 반환한다. 기본 왕복은 항상 첫 번째로 보장된다.
+
+    nail_pass=True면 내일로패스 적용 열차(KTX 계열·SRT 제외)로만 경로를 구성한다.
+    """
     go = _parse_date(go_date)
     back = _parse_date(back_date)
     if back.date() < go.date():
@@ -250,7 +266,7 @@ def recommend(
     groups = _resolve_groups(by_name)
 
     # 오는편(공통): 도착→출발, 직통 or 환승
-    back_picks, back_via, _ = _journey(arr, dep, back_date, back_start, groups)
+    back_picks, back_via, _ = _journey(arr, dep, back_date, back_start, groups, nail_pass)
     back_segs = [_to_train(t) for t in back_picks]
     back_note = (
         f"오는편 {back_via} 환승" if back_via
@@ -258,7 +274,7 @@ def recommend(
     )
 
     # 1) 기본 왕복: 가는편 직통 or 환승 (무조건 리턴 보장의 바닥)
-    go_picks, go_via, _ = _journey(dep, arr, go_date, go_start, groups)
+    go_picks, go_via, _ = _journey(dep, arr, go_date, go_start, groups, nail_pass)
     main_type = "환승" if go_via else "직통"
     go_note = (
         f"가는편 {go_via} 환승" if go_via
@@ -270,7 +286,7 @@ def recommend(
     # 2) 관광 경유(1곳): 지리적 중간역에 2~6h 체류
     stopovers = []
     for c in _candidate_stops(all_stations, dep, arr):
-        pair = _via_pair(dep.nat_code, arr.nat_code, c.nat_code, go_date, go_start, MIN_STAY, MAX_STAY)
+        pair = _via_pair(dep.nat_code, arr.nat_code, c.nat_code, go_date, go_start, MIN_STAY, MAX_STAY, nail_pass)
         if not pair:
             continue
         leg1, leg2 = pair

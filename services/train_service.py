@@ -14,10 +14,10 @@ from utils import train_api
 
 logger = logging.getLogger(__name__)
 
-# 내일로패스 미적용(제외) 등급 prefix: KTX 계열 전체 + SRT.
-# 나머지(무궁화호·누리로·ITX-새마을·ITX-마음·ITX-청춘)는 패스 적용 대상.
-# "KTX-산천(A-type)" 등 변형까지 잡으려고 정확매칭 대신 prefix로 거른다.
-_NAIL_EXCLUDED_PREFIX = ("KTX", "SRT")
+# 내일로패스 미적용(제외): SRT만. SRT는 코레일이 아닌 수서고속철도(SR) 운영이라 패스 불가.
+# KTX 계열은 횟수 제한(좌석 1일 1회·총 2회)은 있으나 '탑승 가능'하므로 결과에 포함한다.
+# (횟수 제한은 여정 전체 단위 규칙이라 단일 구간 검색에서는 강제하지 않는다.)
+_NAIL_EXCLUDED_PREFIX = ("SRT",)
 
 
 def _nail_eligible(grade: str) -> bool:
