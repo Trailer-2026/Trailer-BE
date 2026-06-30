@@ -4,6 +4,7 @@
 역(station)은 관광데이터가 아니므로 DB를 그대로 쓴다.
 """
 import logging
+import math
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -23,6 +24,11 @@ _DEFAULT_CTYPES = (12, 14, 39)   # 테마 미선택 시 기본 조회
 _LODGING_CT = 32
 _RADIUS_M = 20000                # locationBasedList2 최대 반경(20km)
 _AREA_CODES = [1, 2, 3, 4, 5, 6, 7, 8, 31, 32, 33, 34, 35, 36, 37, 38, 39]  # 시도
+
+# 한 시도가 이 정도(대각 퍼짐, km) 이상이면 부분권으로 분리한다.
+# 큰 도(경북·강원 등)의 해안권(포항·강릉)이 내륙 중심에 묻혀 도착역 후보에서 빠지는 것을 막는다.
+_SUBCLUSTER_KM = 60.0
+_MAX_SUBCLUSTERS = 3
 
 
 @dataclass
@@ -138,34 +144,101 @@ def nearest_lodging(lat: float, lng: float, radius_m: int = _RADIUS_M) -> Lodgin
     )
 
 
-def _scan_area(area: int, primary: int, selected: set) -> tuple[int, tuple[float, float]] | None:
+@dataclass
+class AreaScan:
+    """시도 area 1곳의 라이브 스캔 결과 — 도착지 후보 점수화(recommend.destination) 입력."""
+
+    area_code: int
+    centroid: tuple[float, float]
+    theme_counts: dict[Theme, int]   # 테마별 장소 수(themeVector)
+    total: int                       # 좌표 보유 장소 총수
+
+
+def _area_items(area: int, ct: int) -> list[dict]:
     try:
         items, _ = tour_api.area_based_list(
-            area_code=area, content_type_id=primary, num_of_rows=50, arrange="O",
+            area_code=area, content_type_id=ct, num_of_rows=50, arrange="O",
         )
-    except Exception:
-        return None
-    pts = []
-    for it in items:
-        lp = _to_live(it)
-        if not lp:
-            continue
-        if selected and not (set(lp.themes) & selected):
-            continue
-        pts.append((lp.lat, lp.lng))
-    if not pts:
-        return None
-    return len(pts), (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+        return items
+    except Exception as e:
+        logger.warning("TourAPI 지역기반(area=%s, ct=%s) 실패: %s", area, ct, e)
+        return []
 
 
-def pick_dense_anchor(themes: list[Theme]) -> tuple[float, float] | None:
-    """도착지 미지정 시 AI 자동 선택 — 시도별 실시간 조회(병렬)로 테마 후보가 가장 많은 지역 중심."""
-    primary = sorted(_ctypes_for(themes))[0]  # 대표 콘텐츠 유형 1개로 지역 스캔
-    selected = set(themes or [])
+def scan_area_profiles(themes: list[Theme]) -> list[AreaScan]:
+    """도착지 미지정 시 AI 자동 선택용 — 시도별 테마분포를 실시간 스캔(병렬).
+
+    선택 테마(없으면 기본)의 contentType들로 각 area를 조회한다. 큰 도는 한 중심으로 뭉치면
+    해안권(포항·강릉)이 내륙 평균에 묻히므로, 점들을 지리적으로 부분권(해안/내륙 등)으로
+    분리해 **각 부분권을 별도 후보**로 낸다. recommend.destination이 이 분포로 도착지를 점수화한다.
+    """
+    ctypes = sorted(_ctypes_for(themes))
+    jobs = [(area, ct) for area in _AREA_CODES for ct in ctypes]
     with ThreadPoolExecutor(max_workers=8) as ex:
-        results = list(ex.map(lambda a: _scan_area(a, primary, selected), _AREA_CODES))
-    best, best_n = None, -1
-    for r in results:
-        if r and r[0] > best_n:
-            best_n, best = r[0], r[1]
-    return best
+        results = list(ex.map(lambda j: _area_items(j[0], j[1]), jobs))
+
+    # area별로 (위도, 경도, 테마들) 점을 모은다.
+    agg: dict[int, list] = {}
+    for (area, _ct), items in zip(jobs, results):
+        pts = agg.setdefault(area, [])
+        for it in items:
+            lp = _to_live(it)
+            if not lp:
+                continue
+            pts.append((lp.lat, lp.lng, tuple(lp.themes)))
+
+    profiles: list[AreaScan] = []
+    for area, pts in agg.items():
+        if not pts:
+            continue
+        for cluster in _split_clusters(pts):   # 부분권 분리(퍼짐 작으면 1개 그대로)
+            if not cluster:
+                continue
+            centroid = (
+                sum(p[0] for p in cluster) / len(cluster),
+                sum(p[1] for p in cluster) / len(cluster),
+            )
+            counts: dict[Theme, int] = {}
+            for _, _, themes_t in cluster:
+                for t in themes_t:
+                    counts[t] = counts.get(t, 0) + 1
+            profiles.append(AreaScan(area, centroid, counts, len(cluster)))
+    return profiles
+
+
+def _split_clusters(pts: list) -> list[list]:
+    """시도 내 점들을 지리적 부분권으로 분리. 퍼짐이 작으면 1개 그대로."""
+    k = _cluster_k(pts)
+    if k <= 1:
+        return [pts]
+    return [g for g in _kmeans_geo(pts, k) if g]
+
+
+def _cluster_k(pts: list) -> int:
+    """점들의 대각 퍼짐(km)을 보고 부분권 수를 정한다(작으면 1, 넓으면 최대 _MAX_SUBCLUSTERS)."""
+    lats = [p[0] for p in pts]
+    lngs = [p[1] for p in pts]
+    diag_km = math.hypot((max(lats) - min(lats)) * 111.0, (max(lngs) - min(lngs)) * 88.0)
+    return max(1, min(_MAX_SUBCLUSTERS, round(diag_km / _SUBCLUSTER_KM)))
+
+
+def _kmeans_geo(pts: list, k: int, iters: int = 12) -> list[list]:
+    """결정적 k-means(위경도). 정렬 시드라 같은 입력 → 같은 분할(비결정 요소 없음)."""
+    ordered = sorted(pts)
+    centers = [ordered[i * len(ordered) // k][:2] for i in range(k)]
+    groups: list[list] = [[] for _ in range(k)]
+    for _ in range(iters):
+        groups = [[] for _ in range(k)]
+        for p in pts:
+            j = min(range(k), key=lambda c: (p[0] - centers[c][0]) ** 2 + (p[1] - centers[c][1]) ** 2)
+            groups[j].append(p)
+        new = []
+        for i, g in enumerate(groups):
+            if g:
+                new.append((sum(x for x, _, _ in g) / len(g), sum(y for _, y, _ in g) / len(g)))
+            else:
+                new.append(centers[i])
+        if new == centers:
+            break
+        centers = new
+    return groups

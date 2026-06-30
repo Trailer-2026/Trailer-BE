@@ -50,6 +50,26 @@ def nearest(db: Session, lat: float, lng: float, require_nat_code: bool = True) 
     return min(rows, key=lambda s: (s.latitude - lat) ** 2 + (s.longitude - lng) ** 2)
 
 
+def nearest_major(db: Session, lat: float, lng: float) -> Station | None:
+    """좌표에서 가장 가까운 '대도시' 역(KTX 정차). 운행역 결정 실패 시 폴백용.
+
+    KTX 정차역(is_ktx)을 우선 고른다. 없으면 nat_code 보유역, 그래도 없으면 전체 역.
+    역명 하드코딩 없이 is_ktx 생성 컬럼으로 거점 대도시역을 데이터 기반으로 정의한다.
+    """
+    for cond in (Station.is_ktx.is_(True), Station.nat_code.isnot(None), None):
+        q = db.query(Station).filter(
+            Station.deleted_at.is_(None),
+            Station.latitude.isnot(None),
+            Station.longitude.isnot(None),
+        )
+        if cond is not None:
+            q = q.filter(cond)
+        rows = q.all()
+        if rows:
+            return min(rows, key=lambda s: (s.latitude - lat) ** 2 + (s.longitude - lng) ** 2)
+    return None
+
+
 def get_stations(db: Session, query: str | None = None) -> list[Station]:
     """역 목록을 역명 오름차순으로 조회한다.
 

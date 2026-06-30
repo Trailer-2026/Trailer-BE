@@ -117,12 +117,29 @@ class Course(BaseModel):
     note: str | None = Field(None, description="비고")
 
 
-class RecommendResponse(BaseModel):
-    """AI 코스 추천 응답 — 도착지·왕복 기차 경로·코스 후보(A/B/C)를 함께 반환."""
+class DestinationPlan(BaseModel):
+    """도착지 1곳 + 출발↔도착지 왕복 기차 경로 + 코스 묶음.
 
-    destination_station_idx: int = Field(..., description="도착역 station_idx (지정 또는 AI 선택)")
+    - 도착역 지정 시: courses에 코스 후보 A/B/C가 모두 담긴다.
+    - 도착역 미지정(AI 자동) 시: 후보 도착지마다 코스 1개 + score(종합 점수).
+    """
+
+    destination_station_idx: int = Field(..., description="도착역 station_idx")
     destination_name: str = Field(..., description="도착역명")
-    auto_selected: bool = Field(..., description="도착지를 AI가 자동 선택했는지 여부")
-    routes: list[RouteCandidate] = Field(..., description="출발↔도착 왕복 기차 경로 후보(가는편/오는편)")
-    courses: list[Course] = Field(..., description="추천 코스 후보(A/B/C)")
+    score: float | None = Field(None, description="AI 자동 선택 시 도착지 종합 점수(지정 시 null)")
+    routes: list[RouteCandidate] = Field(..., description="출발↔이 도착지 왕복 기차 경로 후보")
+    courses: list[Course] = Field(..., description="이 도착지 기준 코스(지정=A/B/C, 자동=1개)")
     note: str | None = Field(None, description="비고(예: 기차 경로 조회 실패, 현지 여행)")
+
+
+class RecommendResponse(BaseModel):
+    """AI 코스 추천 응답 — 도착지별 경로·코스 묶음 목록.
+
+    - auto_selected=false(도착역 지정): destinations 길이 1, 그 안에 코스 A/B/C.
+    - auto_selected=true(도착역 미지정): theme+party 기준으로 고른 서로 다른 권역의
+      도착지 후보 최대 3곳, 각 코스 1개.
+    """
+
+    auto_selected: bool = Field(..., description="도착지를 AI가 자동 선택했는지 여부")
+    destinations: list[DestinationPlan] = Field(..., description="도착지별 경로·코스 묶음")
+    note: str | None = Field(None, description="비고(전체 수준 안내)")
