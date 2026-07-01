@@ -13,6 +13,7 @@ from schemas.recommend_schema import (
     RecommendResponse,
     SearchCriteria,
 )
+from schemas.route_schema import StopoverPlace
 from services import route_service
 from utils import tour_place
 
@@ -23,6 +24,12 @@ _LODGING_MOVE_KM = 25.0
 
 # 도착역 자동 선택 2단계 중 Phase A(거친 시도 선별)에서 정밀 재점수할 후보 수.
 _SHORTLIST_N = 5
+
+# 경유역 인근 관광지: '역 근처'로 제한할 조회 반경(m)과 노출 개수.
+_VIA_RADIUS_M = 3000
+_VIA_PLACES_N = 3
+# 자동 경유(도착역만 지정)일 때 최종 노출할 경유 후보 수.
+_STOPOVER_N = 3
 
 
 def recommend_courses(db: Session, criteria: SearchCriteria) -> RecommendResponse:
@@ -247,11 +254,54 @@ def _fetch_routes(db: Session, origin, dest, criteria: SearchCriteria) -> tuple[
             db, origin.station_idx, dest.station_idx,
             criteria.go_date, criteria.back_date, criteria.go_time, criteria.back_time,
             nail_pass=criteria.use_naeilpass,
+            via_station_idx=criteria.via_station_idx,
         )
+        routes = _enrich_stopovers(db, routes, criteria)
         return routes, None
     except Exception as e:
         logger.warning("기차 경로 조회 실패: %s", e)
         return [], "기차 경로를 불러오지 못했습니다(코스만 제공)."
+
+
+def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
+    """경유 경로마다 '역 근처' 추천 관광지를 붙이고, 자동 경유는 테마 관련도로 상위만 남긴다.
+
+    - 각 경유역 주변을 역 인근(_VIA_RADIUS_M)으로만 스캔해, 선택 테마와 겹치는 관광지 수를
+      '테마 관련도 점수'로 쓰고(스캔 결과는 stopover_places 노출에도 재사용), 역에서 가까운 순
+      상위 _VIA_PLACES_N개를 그 경유 경로에 붙인다.
+    - 사용자가 경유역을 지정(via_station_idx)했으면 경유 경로는 이미 그 역 하나뿐 → 그대로 유지.
+    - 자동 경유(도착역만 지정)면 테마 관련도 내림차순(동점 시 이동시간 오름차순)으로 정렬해
+      상위 _STOPOVER_N개만 남기고 나머지 경유는 버린다. 직통/환승(non-경유)은 항상 유지·선두.
+    """
+    via_routes = [r for r in routes if r.route_type == "경유" and r.via_station_idx is not None]
+    if not via_routes:
+        return routes
+
+    scored = []  # (route, theme_score)
+    for r in via_routes:
+        st = station_dao.get_by_idx(db, r.via_station_idx)
+        if st is None or st.latitude is None or st.longitude is None:
+            scored.append((r, -1))  # 좌표 없어 스캔 불가 → 점수 -1로 자동 경유 정렬 맨 뒤로
+            continue
+        places = tour_place.live_places(st.latitude, st.longitude, criteria.themes, radius_m=_VIA_RADIUS_M)
+        places.sort(key=lambda p: haversine(st.latitude, st.longitude, p.lat, p.lng))
+        r.stopover_places = [
+            StopoverPlace(
+                place_idx=p.place_idx, name=p.name, region=p.region,
+                lat=p.lat, lng=p.lng, themes=p.themes, image_url=p.image_url,
+            )
+            for p in places[:_VIA_PLACES_N]
+        ]
+        scored.append((r, len(places)))  # 역 근처 테마 관광지 수 = 테마 관련도
+
+    if criteria.via_station_idx is not None:
+        return routes  # 지정 경유: 단일 경유 경로 그대로
+
+    # 자동 경유: 테마 관련도↓, 동점 시 이동시간↑ 순으로 상위 N개만 남긴다.
+    # id() 집합으로 살릴 경유를 표시하되, 직통/환승(non-경유)은 조건에서 항상 통과시켜 유지·선두.
+    scored.sort(key=lambda x: (-x[1], x[0].total_travel_minutes))
+    keep = {id(r) for r, _ in scored[:_STOPOVER_N]}
+    return [r for r in routes if r.route_type != "경유" or id(r) in keep]
 
 
 def _trip_days(go_date: str, back_date: str) -> int:

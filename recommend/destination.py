@@ -88,16 +88,18 @@ def rank_and_diversify(
     finalScore = WEIGHT_THEME*theme_fit + wAge*age_fit + WEIGHT_ACCESS*access_fit - group_penalty.
     (어린이 동반 시 wAge↑·wAccess↓.) 이동거리 상한(maxAllowed) 초과 후보는 제외한다.
     """
+    # 어린이 동반이면 연령적합↑·접근성↓로 가중치를 바꿔 끼운다(테마 상수 WEIGHT_*_CHILD).
     w_age = WEIGHT_AGE_CHILD if party.child > 0 else WEIGHT_AGE
     w_access = WEIGHT_ACCESS_CHILD if party.child > 0 else WEIGHT_ACCESS
-    limit = _max_distance(nights, max_travel_minutes)
+    limit = _max_distance(nights, max_travel_minutes)  # 이 거리를 넘는 후보는 아예 탈락
 
     scored: list[AreaProfile] = []
     for p in profiles:
+        # 관광지 0곳이거나 역 매핑 실패(station None)면 도착지가 될 수 없어 스킵
         if p.total <= 0 or p.station is None:
             continue
         p.distance_km = haversine(origin[0], origin[1], p.centroid[0], p.centroid[1])
-        if p.distance_km > limit:
+        if p.distance_km > limit:  # 너무 멀면(당일치기에 부적합 등) 제외
             continue
         sh = _shares(p.theme_counts, p.total)
         p.theme_fit = _theme_fit(sh, themes)
@@ -131,15 +133,17 @@ def _theme_fit(shares: dict[Theme, float], themes: list[Theme]) -> float:
     """
     if not themes:
         return 1.0
-    sel = [shares.get(t, 0.0) for t in themes]
+    sel = [shares.get(t, 0.0) for t in themes]  # 선택 테마별 지역 내 비중
     tot = sum(sel)
-    if tot <= 0.0:
+    if tot <= 0.0:  # 선택 테마가 지역에 하나도 없음 → 부적합
         return 0.0
+    # 선택 테마 안에서 다시 정규화(합=1)해 '선택 테마들끼리의 균형'만 본다.
+    # 기하평균이라 한 테마라도 비중 0이면 곱이 0 → 전체 0(균형 붕괴에 민감).
     m = len(themes)
     prod = 1.0
     for s in sel:
         prod *= s / tot
-    return m * (prod ** (1.0 / m))
+    return m * (prod ** (1.0 / m))  # ×m: 완전 균형(각 1/m)일 때 1이 되도록 스케일 복원
 
 
 def _age_fit(shares: dict[Theme, float], party: Party) -> float:

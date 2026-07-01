@@ -6,7 +6,8 @@
 연결성(환승)과 관광(경유)을 분리한다:
   · 직통        : 1열차
   · 환승 연결   : 직통이 없을 때 철도 거점에서 갈아타기 → 연결성 확보
-  · 관광 경유   : 지리적 중간역에 길게(2h~6h) 체류 → 관광 (다음 단계 TourAPI가 활용)
+  · 관광 경유   : 중간역에 길게(2h~6h) 체류 → 관광. 사용자가 경유역(via_station_idx)을
+                 지정하면 그 역을 첫 경유 후보로 보장하고, 없으면 지리적 중간역을 자동 선정.
 
 환승 거점은 "클러스터"로 둔다. 서울·용산·청량리는 한 도시의 다른 터미널이므로
 한 그룹으로 묶고 역간 이동 버퍼를 준다(강릉→서울 도착, 용산→여수 출발 같은 환승).
@@ -47,11 +48,14 @@ MIN_STAY = timedelta(hours=2)
 MAX_STAY = timedelta(hours=6)
 MAX_DETOUR_RATIO = 1.4
 MAX_CANDIDATES = 6
-TOP_STOPOVERS = 3
+# 경유역은 출발·도착 양쪽에서 충분히 떨어져야 의미가 있다(서울→용산→타지역처럼 사실상 같은 도시인 역을 경유로 세지 않기 위함). 
+# 각 구간이 직선거리의 이 비율 이상, 그리고 최소 이 절대거리(km) 이상이어야 후보로 인정한다.
+MIN_LEG_RATIO = 0.2
+MIN_LEG_KM = 25.0
 
 # 환승 연결(철도 거점에서 갈아타기)
 TRANSFER_MIN = timedelta(minutes=20)   # 같은 역 환승 최소 시간
-CLUSTER_MOVE = timedelta(minutes=40)   # 같은 도시 다른 터미널 이동 버퍼(예: 서울역↔용산역)
+CLUSTER_MOVE = timedelta(minutes=40)   # 같은 도시의 다른 기차역으로 갈아탈 때 최소 40분의 이동 여유를 확보(예: 서울역↔용산역) 열차가 서울 중심이라 필요함
 TRANSFER_MAX = timedelta(hours=5)      # 최대 환승 대기(거점간 열차가 하루 몇 편뿐이라 넉넉히)
 # 환승 거점 클러스터. 한 그룹 안의 역들은 도시 내 다른 터미널로 보고 상호 환승 허용.
 # 한국 철도는 서울·용산 중심 방사형이라 지리로 자르지 않고 전부 시도. DB에 없으면 무시.
@@ -129,15 +133,17 @@ def _prefetch_segments(dep, arr, groups, stops, go_date, back_date) -> None:
         (dep.nat_code, arr.nat_code, go_date),
         (arr.nat_code, dep.nat_code, back_date),
     }
-    members = {s.station_idx: s for g in groups for s in g}.values()
+    members = {s.station_idx: s for g in groups for s in g}.values()  # 전 그룹 거점역 중복 제거
     for m in members:
         if m.station_idx in (dep.station_idx, arr.station_idx) or not m.nat_code:
             continue
+        # 환승 거점 m: 가는편(dep→m→arr)·오는편(arr→m→dep) 양방향 4구간을 모두 데운다.
         pairs.add((dep.nat_code, m.nat_code, go_date))
         pairs.add((m.nat_code, arr.nat_code, go_date))
         pairs.add((arr.nat_code, m.nat_code, back_date))
         pairs.add((m.nat_code, dep.nat_code, back_date))
     for c in stops:
+        # 관광 경유 후보 c: 가는편 dep→c→arr 2구간만 필요(오는편은 경유 없이 직통/환승).
         pairs.add((dep.nat_code, c.nat_code, go_date))
         pairs.add((c.nat_code, arr.nat_code, go_date))
     with ThreadPoolExecutor(max_workers=min(16, len(pairs))) as ex:
@@ -145,6 +151,8 @@ def _prefetch_segments(dep, arr, groups, stops, go_date, back_date) -> None:
 
 
 def _earliest(trains: tuple, not_before: datetime) -> dict | None:
+    # not_before(직전 열차 도착 + 환승/체류 최소간격) 이후 출발하는 가장 이른 열차 1편.
+    # 경로를 늘 "가능한 한 빨리" 잇기 위해 최소 대기 열차를 고른다.
     cand = [t for t in trains if t["dep_time"] >= not_before]
     return min(cand, key=lambda t: t["dep_time"]) if cand else None
 
@@ -163,7 +171,12 @@ def _to_train(d: dict) -> RouteTrain:
 
 
 def _via_pair(dep_nat, arr_nat, via_nat, ymd, start, min_gap, max_gap, nail_pass=False):
-    """출발→경유→도착 2구간 연결(같은 역 환승/관광용). 간격 만족 시 (leg1, leg2)."""
+    """출발→경유→도착 2구간 연결(같은 역 환승/관광용). 간격 만족 시 (leg1, leg2).
+
+    min_gap: leg2는 leg1 도착 + min_gap 이후 출발이어야 함(환승 최소시간 or 관광 체류 하한).
+    max_gap: leg1 도착~leg2 출발 간격이 max_gap을 넘으면 버림(대기 과다 or 체류 상한 초과).
+    관광 경유(_stopover)는 이 gap을 MIN_STAY~MAX_STAY(2~6h)로 넘겨 "체류 성립" 판정에 재사용한다.
+    """
     leg1 = _earliest(_legs(dep_nat, via_nat, ymd, nail_pass), start)
     if not leg1:
         return None
@@ -196,7 +209,7 @@ def _transfer_via_group(dep, arr, group, ymd, start, nail_pass=False):
                 continue
             total = (leg2["arr_time"] - leg1["dep_time"]).total_seconds()
             label = a.station_name if a.station_idx == d.station_idx else f"{a.station_name}·{d.station_name}"
-            if best is None or total < best[3]:
+            if best is None or total < best[3]:  # 총 소요(승차+환승대기) 최소인 하차·승차 조합 채택
                 best = (leg1, leg2, label, total)
     return best
 
@@ -238,23 +251,28 @@ def _candidate_stops(all_stations: list[Station], dep: Station, arr: Station) ->
     base = _haversine(dep, arr)
     if base == 0:
         return []
+    min_leg = max(MIN_LEG_KM, base * MIN_LEG_RATIO)  # 출발·도착에서 이만큼은 떨어져야 함
     scored = []
     for s in all_stations:
         if s.station_idx in (dep.station_idx, arr.station_idx):
             continue
         if not s.nat_code or not _has_coords(s):
             continue
-        detour = _haversine(dep, s) + _haversine(s, arr)
-        if detour <= base * MAX_DETOUR_RATIO:
-            scored.append((detour, s))
-    scored.sort(key=lambda x: (0 if x[1].is_ktx else 1, x[0]))
+        leg_dep, leg_arr = _haversine(dep, s), _haversine(s, arr)
+        if leg_dep < min_leg or leg_arr < min_leg:   # 출발/도착에 너무 붙은 역 제외(예: 서울→용산)
+            continue
+        if leg_dep + leg_arr <= base * MAX_DETOUR_RATIO:
+            scored.append((leg_dep + leg_arr, s))
+    scored.sort(key=lambda x: (0 if x[1].is_ktx else 1, x[0]))  # KTX 먼저, 그 안에서 우회거리(leg합) 짧은 순
     return [s for _, s in scored[:MAX_CANDIDATES]]
 
 
 def _build(route_type, dep, via_label, arr, go_picks, stay, back_segs, note=None) -> RouteCandidate:
     go_trains = [_to_train(t) for t in go_picks]
-    all_segs = go_trains + back_segs
-    travel = sum(t.duration_minutes for t in all_segs)
+    all_segs = go_trains + back_segs  # 가는편(경유면 2편) + 오는편 전 구간
+    travel = sum(t.duration_minutes for t in all_segs)  # 순수 승차시간 합(경유 체류는 stay_minutes로 별도)
+    # 총 운임 = 성인 1인 기준 전 구간 편도 요금의 합(=왕복 합). 한 구간이라도 요금이
+    # 없으면(None) 합산이 부정확해지므로 total_fare 자체를 None으로 둔다. 인원수·할인 미반영.
     fares = [t.fare for t in all_segs]
     total_fare = sum(fares) if all_segs and all(f is not None for f in fares) else None
     names = [dep.station_name] + ([via_label] if via_label else []) + [arr.station_name]
@@ -270,6 +288,19 @@ def _build(route_type, dep, via_label, arr, go_picks, stay, back_segs, note=None
     )
 
 
+def _stopover(dep, arr, via, go_date, go_start, back_segs, back_note, nail_pass) -> RouteCandidate | None:
+    """via 역에 2~6h 관광 체류하는 경유 경로 1건. 체류 조건에 맞는 열차가 없으면 None."""
+    pair = _via_pair(dep.nat_code, arr.nat_code, via.nat_code, go_date, go_start, MIN_STAY, MAX_STAY, nail_pass)
+    if not pair:
+        return None
+    leg1, leg2 = pair
+    # 실제 체류(도착~다음 출발). _via_pair가 MIN_STAY~MAX_STAY로 걸러 이미 2~6h 범위 안이다.
+    stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
+    route = _build("경유", dep, via.station_name, arr, [leg1, leg2], stay, back_segs, back_note)
+    route.via_station_idx = via.station_idx
+    return route
+
+
 def recommend(
     db: Session,
     dep_idx: int,
@@ -279,10 +310,14 @@ def recommend(
     go_time: str | None = None,
     back_time: str | None = None,
     nail_pass: bool = False,
+    via_station_idx: int | None = None,
 ) -> list[RouteCandidate]:
     """직통/환승/경유 왕복 경로 후보를 반환한다. 기본 왕복은 항상 첫 번째로 보장된다.
 
     nail_pass=True면 내일로패스 적용 열차(KTX 계열·SRT 제외)로만 경로를 구성한다.
+    via_station_idx가 주어지면 그 역만 2~6h 관광 체류로 경유하는 경로를 제공하고(자동 중간역
+    제외 → 모든 경유 루트가 출발→지정역→도착), 자동 중간역 경유는 만들지 않는다.
+    (출발·도착역과 같으면 무시, 조건에 맞는 열차가 없으면 경유 없이 main note로 안내.)
     """
     go = _parse_date(go_date)
     back = _parse_date(back_date)
@@ -294,13 +329,23 @@ def recommend(
     dep = _station(db, dep_idx, "출발")
     arr = _station(db, arr_idx, "도착")
 
+    # 사용자 지정 경유역. 0/미지정/미존재/철도 미지원·좌표없음이면 경유 없이 진행한다
+    # (잘못된 경유값 하나 때문에 직통·환승 등 열차 정보를 통째로 잃지 않도록 예외를 던지지 않는다).
+    via = None
+    if via_station_idx and via_station_idx not in (dep.station_idx, arr.station_idx):
+        cand = station_dao.get_by_idx(db, via_station_idx)
+        if cand is not None and cand.nat_code and _has_coords(cand):
+            via = cand
+
     all_stations = station_dao.get_stations(db)
     by_name = {s.station_name: s for s in all_stations}
     groups = _resolve_groups(by_name)
 
     # 필요한 모든 구간을 병렬 prefetch → 이후 순차 로직은 캐시 히트로 즉답
-    stops = _candidate_stops(all_stations, dep, arr)
-    _prefetch_segments(dep, arr, groups, stops, go_date, back_date)
+    # 경유역 지정 시엔 그 역만 경유하므로 지리적 중간역 자동 후보는 만들지 않는다.
+    stops = [] if via is not None else _candidate_stops(all_stations, dep, arr)
+    prefetch_stops = stops + ([via] if via is not None else [])
+    _prefetch_segments(dep, arr, groups, prefetch_stops, go_date, back_date)
 
     # 오는편(공통): 도착→출발, 직통 or 환승
     back_picks, back_via, _ = _journey(arr, dep, back_date, back_start, groups, nail_pass)
@@ -320,15 +365,23 @@ def recommend(
     main_note = " / ".join(n for n in (go_note, back_note) if n) or None
     main = _build(main_type, dep, go_via, arr, go_picks, None, back_segs, main_note)
 
-    # 2) 관광 경유(1곳): 지리적 중간역에 2~6h 체류
+    # 2) 관광 경유(1곳)
+    #    - 경유역(via) 지정 시: 그 역만 경유로 제공(모든 경유 루트 = 출발→지정역→도착).
+    #      체류 조건에 맞는 열차가 없으면 경유 없이 main에 안내만 남긴다.
+    #    - 미지정 시: 지리적 중간역을 자동 선정(출발·도착에 붙은 역 제외)해 경유 후보로 제공.
+    #      최종 상위 N개 선별은 '테마 관련도' 기준으로 recommend_service가 한다(여기선 지리·시각표만).
+    if via is not None:
+        wp = _stopover(dep, arr, via, go_date, go_start, back_segs, back_note, nail_pass)
+        if wp:
+            return [main, wp]
+        miss = f"{via.station_name} 경유는 2~6시간 체류 조건에 맞는 열차가 없어 제외했습니다."
+        main.note = " / ".join(n for n in (main.note, miss) if n) or None
+        return [main]
+
     stopovers = []
     for c in stops:
-        pair = _via_pair(dep.nat_code, arr.nat_code, c.nat_code, go_date, go_start, MIN_STAY, MAX_STAY, nail_pass)
-        if not pair:
-            continue
-        leg1, leg2 = pair
-        stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
-        stopovers.append(_build("경유", dep, c.station_name, arr, [leg1, leg2], stay, back_segs, back_note))
-
-    stopovers.sort(key=lambda r: r.total_travel_minutes)
-    return [main] + stopovers[:TOP_STOPOVERS]
+        r = _stopover(dep, arr, c, go_date, go_start, back_segs, back_note, nail_pass)
+        if r:
+            stopovers.append(r)
+    stopovers.sort(key=lambda r: r.total_travel_minutes)  # 기본 순서(테마 랭킹 전)
+    return [main] + stopovers

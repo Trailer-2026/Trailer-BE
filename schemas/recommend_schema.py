@@ -3,6 +3,8 @@ import re
 from pydantic import BaseModel, Field, field_validator
 
 from core.enums import Theme
+# recommend_schema → route_schema 단방향 의존. 그래서 경유 관광지 타입(StopoverPlace)은
+# RecommendedPlace를 재사용하지 못하고(역방향=순환) route_schema에 독립 정의돼 있다.
 from schemas.route_schema import RouteCandidate
 
 # 스웨거 표시용 테마 한글 라벨 (사진 명세 기준)
@@ -46,7 +48,12 @@ class SearchCriteria(BaseModel):
     party: Party = Field(default_factory=Party, description="여행 인원")
     themes: list[Theme] = Field(default_factory=list, description=_THEMES_DESC)
     max_travel_minutes: int | None = Field(None, description="최대 이동시간 예산(분). 선택")
-    waypoint_place_idxs: list[int] | None = Field(None, description="경유지(필수 방문 place_idx). 선택")
+    via_station_idx: int | None = Field(
+        None,
+        description="경유역 station_idx. 지정 시 가는편 기차가 이 역을 2~6시간 관광 체류로 경유하는 "
+                    "경로만 제공한다(출발·도착역과 같으면 무시). 0 또는 미지정이면 경유 없음"
+                    "(도착역만 지정한 자동 경유 추천으로 동작). 선택",
+    )
     use_naeilpass: bool = Field(False, description="내일로 패스 사용 여부")
 
     @field_validator("go_date", "back_date")
@@ -63,6 +70,12 @@ class SearchCriteria(BaseModel):
     def _norm_time(cls, v: str | None) -> str | None:
         """HH:MM 형식이 아니면 None 처리(예: Swagger 기본값 'string')."""
         return v if v and re.match(r"^\d{1,2}:\d{2}$", v) else None
+
+    @field_validator("via_station_idx")
+    @classmethod
+    def _norm_via(cls, v: int | None) -> int | None:
+        """0 이하(Swagger 기본값 0 포함)는 '경유 미지정'으로 정규화."""
+        return v if v and v > 0 else None
 
 
 class RecommendedPlace(BaseModel):
