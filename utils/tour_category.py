@@ -62,7 +62,12 @@ def themes_for(
     cat2: str | None = None,
     cat3: str | None = None,
 ) -> list[Theme]:
-    """관광 항목 1건의 테마 태그 목록(0개일 수 있음 → 호출측에서 스킵)."""
+    """관광 항목 1건의 테마 태그 목록(0개일 수 있음 → 호출측에서 스킵).
+
+    우선순위: cat3(세분) > cat2(기본값) > contentType(보강). cat3가 잡히면 cat2는
+    보지 않는다(elif) — 더 구체적인 코드가 항상 이긴다. contentType은 cat으로 아무것도
+    못 잡았을 때(`not out`)만 쓰는 최후 보루다.
+    """
     out: set[Theme] = set()
     if cat3 and cat3 in _CAT3:
         out.update(_CAT3[cat3])
@@ -72,7 +77,7 @@ def themes_for(
     ct = str(content_type_id or "")
     if not out and ct in _CT:
         out.update(_CT[ct])
-    if ct == "39":  # 음식점은 항상 FOOD 보강
+    if ct == "39":
         out.add(Theme.FOOD)
 
     return sorted(out, key=lambda t: t.value)

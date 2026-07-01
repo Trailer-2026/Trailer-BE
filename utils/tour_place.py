@@ -46,6 +46,10 @@ class LivePlace:
 
 
 def _ctypes_for(themes: list[Theme]) -> set[int]:
+    """선택 테마들이 필요로 하는 contentTypeId 집합(테마 미선택이면 기본 3종).
+
+    여러 테마의 유형이 겹치므로 set으로 중복 호출을 없앤다(예: NATURE·OCEAN 모두 12).
+    """
     if not themes:
         return set(_DEFAULT_CTYPES)
     out: set[int] = set()
@@ -55,6 +59,10 @@ def _ctypes_for(themes: list[Theme]) -> set[int]:
 
 
 def _to_live(item: dict) -> LivePlace | None:
+    """TourAPI 응답 항목 1건 → LivePlace. 좌표·테마·contentid 중 하나라도 없으면 None(스킵).
+
+    좌표는 TourAPI 규약대로 mapx=경도, mapy=위도로 뒤집어 읽는다(주의: x/y와 lat/lng 반대).
+    """
     try:
         lng = float(item.get("mapx") or 0)
         lat = float(item.get("mapy") or 0)
@@ -64,7 +72,7 @@ def _to_live(item: dict) -> LivePlace | None:
         return None
     ct = item.get("contenttypeid")
     themes = tour_category.themes_for(ct, item.get("cat1"), item.get("cat2"), item.get("cat3"))
-    if not themes:
+    if not themes:  # 8개 테마 어디에도 안 걸리는 항목(레포츠 등)은 버린다
         return None
     cid = str(item.get("contentid") or "")
     if not cid.isdigit():
@@ -95,7 +103,11 @@ def _location_items(lat, lng, radius_m, ct, per_type) -> list[dict]:
 
 def live_places(lat: float, lng: float, themes: list[Theme], radius_m: int = _RADIUS_M,
                 per_type: int = 100) -> list[LivePlace]:
-    """좌표 반경 내 추천지를 실시간 조회(콘텐츠 유형별 병렬). 선택 테마와 겹치는 것만, 중복 제거."""
+    """좌표 반경 내 추천지를 실시간 조회(콘텐츠 유형별 병렬). 선택 테마와 겹치는 것만, 중복 제거.
+
+    유형(contentType)마다 별도 API 호출이라 스레드로 병렬 처리한다. 한 항목이 여러 유형
+    조회에 중복 등장할 수 있어 content_id를 키로 dict에 담아 마지막 값으로 dedup한다.
+    """
     selected = set(themes or [])
     ctypes = _ctypes_for(themes)
     out: dict[str, LivePlace] = {}
@@ -106,6 +118,8 @@ def live_places(lat: float, lng: float, themes: list[Theme], radius_m: int = _RA
             lp = _to_live(it)
             if not lp:
                 continue
+            # 선택 테마가 있으면 교집합이 없는 항목은 제외(예: FOOD만 골랐는데 딸려온 자연관광지).
+            # 테마 미선택이면 selected가 비어 이 필터를 건너뛴다.
             if selected and not (set(lp.themes) & selected):
                 continue
             out[lp.content_id] = lp
@@ -216,6 +230,7 @@ def _cluster_k(pts: list) -> int:
     """점들의 대각 퍼짐(km)을 보고 부분권 수를 정한다(작으면 1, 넓으면 최대 _MAX_SUBCLUSTERS)."""
     lats = [p[0] for p in pts]
     lngs = [p[1] for p in pts]
+    # 위경도 span을 km로 환산: 위도 1°≈111km, 경도 1°≈88km(한국 위도 ~36°의 cos 보정값).
     diag_km = math.hypot((max(lats) - min(lats)) * 111.0, (max(lngs) - min(lngs)) * 88.0)
     return max(1, min(_MAX_SUBCLUSTERS, round(diag_km / _SUBCLUSTER_KM)))
 

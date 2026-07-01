@@ -51,6 +51,8 @@ def fetch_trains(dep_nat: str, arr_nat: str, ymd: str) -> tuple:
             "arr_station": x["arrplacename"],
             "dep_time": datetime.strptime(x["depplandtime"], _DT_FMT),
             "arr_time": datetime.strptime(x["arrplandtime"], _DT_FMT),
+            # 운임: API가 주는 adultcharge(어른 1인 편도 요금, 원)를 그대로 사용.
+            # 좌석 등급(특실)·할인 구분 없고, 일부 열차는 값이 없어 None으로 둔다.
             "fare": int(x["adultcharge"]) if x.get("adultcharge") else None,
         }
         for x in rows

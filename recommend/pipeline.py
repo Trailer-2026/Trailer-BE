@@ -35,6 +35,8 @@ def build_courses(
     # 코스 3개 × 일수 × 하루 3곳 만큼의 상위 후보를 작업셋으로 (다중 테마면 테마별 균형)
     working = _select_working(scored, selected, _NUM_COURSES * k * _MAX_PER_DAY)
     # 점수 랭크 인터리브 → 서로 다른 3개 버킷 (A: 0,3,6.. / B: 1,4,7.. / C: 2,5,8..)
+    # 슬라이스 스텝(::3)이라 한 장소는 정확히 한 버킷에만 들어가 코스 간 겹침 0.
+    # 각 코스가 상위권을 번갈아 나눠 가져 셋 다 품질이 고르게 유지된다(상위권 한 코스 독식 방지).
     buckets = [working[i::_NUM_COURSES] for i in range(_NUM_COURSES)]
 
     courses: list[Course] = []
@@ -63,17 +65,19 @@ def _select_working(scored: list[ScoredPlace], selected: set[Theme], n: int) -> 
     """
     if len(selected) <= 1:
         return scored[:n]
-    per = max(1, n // len(selected))
-    remaining = {t: per for t in selected}
+    per = max(1, n // len(selected))       # 테마당 쿼터(총 n을 테마 수로 균등 분배)
+    remaining = {t: per for t in selected}  # 테마별 남은 쿼터 (0이 되면 그 테마는 마감)
     picked: list[ScoredPlace] = []
     seen: set[int] = set()
-    for p in scored:
+    for p in scored:  # scored는 점수 내림차순 전제 → 각 테마 내에서 상위부터 채워진다
         if len(picked) >= n:
             break
         matched = [t for t in p.themes if t in remaining]
+        # 매칭 테마 중 하나라도 쿼터가 남아야 채택(모두 마감된 테마뿐이면 이번엔 건너뜀)
         if matched and any(remaining[t] > 0 for t in matched):
             picked.append(p)
             seen.add(p.place_idx)
+            # 여러 테마를 만족하는 장소는 해당 테마 쿼터를 동시 차감(한 곳이 여러 몫을 대신함)
             for t in matched:
                 remaining[t] = max(0, remaining[t] - 1)
     for p in scored:  # 부족분은 점수 상위로 채움
@@ -87,11 +91,16 @@ def _select_working(scored: list[ScoredPlace], selected: set[Theme], n: int) -> 
 
 
 def _order_days(clusters: list[Cluster], origin: tuple[float, float]) -> list[Cluster]:
-    """출발지에서 가까운 군집부터 방문하도록 Day 순서를 NN으로 정한다."""
+    """출발지에서 가까운 군집부터 방문하도록 Day 순서를 NN으로 정한다.
+
+    현재 위치에서 센트로이드가 가장 가까운 군집을 매번 골라 이어붙이는 그리디(NN).
+    전역 최적해를 보장하지 않음 (속도와 trade-off)
+    """
     remaining = clusters[:]
-    cur = origin
+    cur = origin  # 첫 Day는 출발지(도착역)에서 가장 가까운 군집부터 시작
     ordered: list[Cluster] = []
     while remaining:
+        # 현재 위치 기준 센트로이드가 가장 가까운 군집을 다음 Day로 선택(그리디)
         nxt = min(remaining, key=lambda c: routing.haversine(cur[0], cur[1], *c.centroid))
         remaining.remove(nxt)
         ordered.append(nxt)
@@ -106,14 +115,22 @@ def _assemble(
     origin: tuple[float, float],
     selected: set[Theme],
 ) -> Course:
+    """정해진 군집(Day)들을 하나의 Course로 조립한다.
+
+    Day 순서(_order_days) → Day 안 방문 순서(NN+2-opt) → 마지막 Day 원점 복귀 순.
+    체류/이동 시간은 다루지 않는다(휴리스틱이라 제거됨). 여기서 정하는 건 오직
+    '방문 순서'와 코스 전체 선호도 합(total_preference_score)뿐 — routing의
+    two_opt/close_cycle도 시간이 아니라 순서를 최적화하는 용도다.
+    """
     ordered = _order_days(clusters, origin)
     go = _parse_ymd(criteria.go_date)
 
     days: list[DayPlan] = []
     total_score = 0.0
     for idx, cl in enumerate(ordered):
+        # NN으로 초기 순서 → 2-opt로 교차 제거. 시간이 아닌 '방문 동선'만 다듬는다.
         route = routing.two_opt(routing.nearest_neighbor(cl.members))
-        if idx == len(ordered) - 1:  # 마지막 day → 출발지 복귀 방향
+        if idx == len(ordered) - 1:  # 마지막 day → 출발지 복귀 방향(원점 회귀 동선)
             route = routing.close_cycle(route, origin)
         total_score += sum(p.score for p in route)
         days.append(
