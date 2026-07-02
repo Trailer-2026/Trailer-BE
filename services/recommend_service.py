@@ -210,10 +210,11 @@ def _build_courses_from(places, criteria: SearchCriteria, k: int, anchor) -> lis
 
 
 def _assign_lodgings(courses: list[Course]) -> None:
-    """코스별로 거점(이동한 지역)마다 가장 가까운 숙소 1곳을 실시간 조회해 그 날 밤 숙소로 배정.
+    """코스별로 그 날 '동선의 종점(마지막 방문지)' 근처 숙소를 실시간 조회해 그 날 밤 숙소로 배정.
 
-    연속 day 중심이 _LODGING_MOVE_KM 이내면 전날 숙소 유지, 그 이상이면 새 숙소.
-    마지막 날(귀가일)은 숙소 없음. 중심 좌표를 반올림 캐시해 중복 호출을 줄인다.
+    숙소는 하루가 끝나는 곳 근처여야 하므로 관광지 평균이 아니라 '마지막 방문지'를 기준으로 잡는다.
+    연속 day 종점이 _LODGING_MOVE_KM 이내면 전날 숙소 유지, 그 이상(지역 이동)이면 새 숙소.
+    마지막 날(귀가일)은 숙소 없음. 종점 좌표를 반올림 캐시해 중복 호출을 줄인다.
     """
     memo: dict[tuple[float, float], object] = {}
 
@@ -224,29 +225,30 @@ def _assign_lodgings(courses: list[Course]) -> None:
         return memo[key]
 
     for course in courses:
-        cur_centroid: tuple[float, float] | None = None
+        cur_end: tuple[float, float] | None = None
         cur_lodging = None
         last = len(course.days) - 1
         for i, day in enumerate(course.days):
             if i == last:
                 day.lodging = None
                 continue
-            c = _day_centroid(day)
+            c = _day_end_coords(day)
             if c is None:
                 day.lodging = cur_lodging
                 continue
-            moved = cur_centroid is None or haversine(cur_centroid[0], cur_centroid[1], c[0], c[1]) > _LODGING_MOVE_KM
+            moved = cur_end is None or haversine(cur_end[0], cur_end[1], c[0], c[1]) > _LODGING_MOVE_KM
             if moved:
                 cur_lodging = near(c)
-                cur_centroid = c
+                cur_end = c
             day.lodging = cur_lodging
 
 
-def _day_centroid(day) -> tuple[float, float] | None:
-    pts = [(p.lat, p.lng) for p in day.places if p.lat is not None and p.lng is not None]
-    if not pts:
-        return None
-    return (sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
+def _day_end_coords(day) -> tuple[float, float] | None:
+    """그 날 동선의 종점(마지막 방문지) 좌표. places는 방문 순서라 뒤에서부터 좌표 있는 곳을 찾는다."""
+    for p in reversed(day.places):
+        if p.lat is not None and p.lng is not None:
+            return (p.lat, p.lng)
+    return None
 
 
 def _fetch_routes(db: Session, origin, dest, criteria: SearchCriteria) -> tuple[list, str | None]:

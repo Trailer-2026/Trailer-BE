@@ -22,6 +22,13 @@ _THEME_CTYPES = {
 }
 _DEFAULT_CTYPES = (12, 14, 39)   # 테마 미선택 시 기본 조회
 _LODGING_CT = 32
+_LODGING_POOL = 20               # 숙소 후보 풀 크기(거리순으로 받아 품질 신호로 재선별)
+# TourAPI엔 평점·가격이 없어 '숙소 종류'를 품질 프록시로 쓴다(낮을수록 우선). 미등록 종류는 중간(2).
+_LODGING_RANK = {
+    "관광호텔": 0, "콘도미니엄": 0, "한옥": 0,
+    "펜션": 1, "게스트하우스": 1, "유스호스텔": 1, "서비스드레지던스": 1,
+    "홈스테이": 2, "민박": 3, "모텔": 3,
+}
 _RADIUS_M = 20000                # locationBasedList2 최대 반경(20km)
 _AREA_CODES = [1, 2, 3, 4, 5, 6, 7, 8, 31, 32, 33, 34, 35, 36, 37, 38, 39]  # 시도
 
@@ -126,19 +133,8 @@ def live_places(lat: float, lng: float, themes: list[Theme], radius_m: int = _RA
     return list(out.values())
 
 
-def nearest_lodging(lat: float, lng: float, radius_m: int = _RADIUS_M) -> Lodging | None:
-    """좌표에서 가장 가까운 숙소 1곳을 실시간 조회한다(거리순 1건)."""
-    try:
-        items, _ = tour_api.location_based_list(
-            lat=lat, lng=lng, radius_m=radius_m, content_type_id=_LODGING_CT,
-            num_of_rows=1, arrange="E",
-        )
-    except Exception as e:
-        logger.warning("TourAPI 숙박 위치기반 실패: %s", e)
-        return None
-    if not items:
-        return None
-    it = items[0]
+def _to_lodging(it: dict) -> Lodging | None:
+    """TourAPI 숙박 항목 1건 → Lodging. 좌표 없으면 None(스킵)."""
     try:
         lng2 = float(it.get("mapx") or 0)
         lat2 = float(it.get("mapy") or 0)
@@ -154,6 +150,37 @@ def nearest_lodging(lat: float, lng: float, radius_m: int = _RADIUS_M) -> Lodgin
         tel=(it.get("tel") or None),
         image_url=(it.get("firstimage") or None),
     )
+
+
+def nearest_lodging(lat: float, lng: float, radius_m: int = _RADIUS_M) -> Lodging | None:
+    """좌표 근처 숙소 후보 중 [종류 좋고 → 사진 있고 → 가까운] 순 1위 1곳을 실시간 조회한다.
+
+    평점·가격은 TourAPI에 없어, 숙소 종류(_LODGING_RANK)·대표사진 유무를 품질 프록시로 쓴다.
+    거리순(arrange=E)으로 후보 풀을 받아 그 안에서 품질 신호로 재선별한다.
+    """
+    try:
+        items, _ = tour_api.location_based_list(
+            lat=lat, lng=lng, radius_m=radius_m, content_type_id=_LODGING_CT,
+            num_of_rows=_LODGING_POOL, arrange="E",
+        )
+    except Exception as e:
+        logger.warning("TourAPI 숙박 위치기반 실패: %s", e)
+        return None
+
+    best_key, best = None, None
+    for i, it in enumerate(items):
+        lg = _to_lodging(it)
+        if lg is None:
+            continue
+        # (종류 우선순위, 사진 없음, 거리 근사) 오름차순 1위. dist 없으면 조회 순서(i)로 대체.
+        try:
+            dist = float(it.get("dist") or i)
+        except (TypeError, ValueError):
+            dist = float(i)
+        key = (_LODGING_RANK.get(lg.lodging_type, 2), lg.image_url is None, dist)
+        if best_key is None or key < best_key:
+            best_key, best = key, lg
+    return best
 
 
 @dataclass
