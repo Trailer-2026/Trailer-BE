@@ -111,7 +111,7 @@ conda run -n trailer3d python render_video.py --save-frames
 - `0.10~0.20`: 서울역 줌인과 출발 지점 강조
 - `0.20~0.80`: 서울에서 부산까지 Haversine 거리 비율 기반 이동
 - `0.80~0.92`: 부산역 근처 확대
-- `0.92~1.00`: 도착 지점 정지, pulse와 목적지 label 표시
+- `0.92~1.00`: 도착 지점 정지, 기차 아이콘과 목적지 label 표시
 
 `renderFrame(progress)`는 progress 기준으로 위치, 지나온 경로, zoom, pitch, bearing을 직접 계산합니다. 매 프레임 `jumpTo()`를 사용하고, bearing은 최단 각도 보간, 최대 회전 속도 제한, look-ahead, 원형 평균을 적용합니다.
 

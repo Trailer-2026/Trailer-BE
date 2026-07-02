@@ -3,6 +3,7 @@ const TERRAIN_SOURCE_ID = "mapbox-dem";
 const FULL_ROUTE_SOURCE_ID = "route-planned";
 const PROGRESS_ROUTE_SOURCE_ID = "route-progress";
 const CURRENT_SOURCE_ID = "current-position";
+const TRAIN_ICON_ID = "train-icon";
 const MARKER_SOURCE_ID = "route-markers";
 const DESTINATION_LABEL_SOURCE_ID = "destination-label";
 const DEFAULT_RENDER_FPS = 30;
@@ -766,6 +767,119 @@ function addBuildings() {
   }
 }
 
+// KTX 느낌의 기차(탑뷰, 정면이 위쪽=북쪽)를 Canvas로 그려 아이콘으로 만든다.
+// 나중에 GLB 3D 모델로 교체할 때는 addTrainIcon() + "current-position-train"
+// symbol 레이어를 map.addModel + model 레이어로 바꾸면 된다. (bearing 피처
+// 속성은 그대로 model-rotation에 쓸 수 있음)
+function createTrainIconImage() {
+  const pixelRatio = 2;
+  const width = 64;
+  const height = 232;
+  const canvas = document.createElement("canvas");
+  canvas.width = width * pixelRatio;
+  canvas.height = height * pixelRatio;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(pixelRatio, pixelRatio);
+
+  const bodyLeft = 14;
+  const bodyRight = 50;
+  const centerX = (bodyLeft + bodyRight) / 2;
+
+  const frontCarPath = () => {
+    ctx.beginPath();
+    ctx.moveTo(centerX, 8);
+    ctx.quadraticCurveTo(bodyRight, 14, bodyRight, 50);
+    ctx.lineTo(bodyRight, 110);
+    ctx.quadraticCurveTo(bodyRight, 116, bodyRight - 6, 116);
+    ctx.lineTo(bodyLeft + 6, 116);
+    ctx.quadraticCurveTo(bodyLeft, 116, bodyLeft, 110);
+    ctx.lineTo(bodyLeft, 50);
+    ctx.quadraticCurveTo(bodyLeft, 14, centerX, 8);
+    ctx.closePath();
+  };
+
+  const rearCarPath = () => {
+    ctx.beginPath();
+    ctx.moveTo(bodyLeft + 7, 122);
+    ctx.lineTo(bodyRight - 7, 122);
+    ctx.quadraticCurveTo(bodyRight, 122, bodyRight, 129);
+    ctx.lineTo(bodyRight, 212);
+    ctx.quadraticCurveTo(bodyRight, 224, centerX, 224);
+    ctx.quadraticCurveTo(bodyLeft, 224, bodyLeft, 212);
+    ctx.lineTo(bodyLeft, 129);
+    ctx.quadraticCurveTo(bodyLeft, 122, bodyLeft + 7, 122);
+    ctx.closePath();
+  };
+
+  // 차량 연결부 (차체 아래에 깔림)
+  ctx.fillStyle = "#334155";
+  ctx.fillRect(centerX - 10, 112, 20, 16);
+
+  const bodyGradient = ctx.createLinearGradient(bodyLeft, 0, bodyRight, 0);
+  bodyGradient.addColorStop(0, "#dbe2ea");
+  bodyGradient.addColorStop(0.5, "#f8fafc");
+  bodyGradient.addColorStop(1, "#cbd5e1");
+
+  for (const drawPath of [frontCarPath, rearCarPath]) {
+    drawPath();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+    ctx.lineWidth = 6;
+    ctx.stroke();
+    ctx.fillStyle = bodyGradient;
+    ctx.fill();
+    ctx.strokeStyle = "#1e293b";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // 파란 기수(노즈) 포인트
+  frontCarPath();
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = "#2563eb";
+  ctx.fillRect(bodyLeft, 8, bodyRight - bodyLeft, 12);
+  ctx.restore();
+
+  // 전면 유리
+  ctx.fillStyle = "#1e293b";
+  ctx.beginPath();
+  ctx.moveTo(centerX, 20);
+  ctx.quadraticCurveTo(bodyRight - 8, 24, bodyRight - 10, 40);
+  ctx.lineTo(bodyLeft + 10, 40);
+  ctx.quadraticCurveTo(bodyLeft + 8, 24, centerX, 20);
+  ctx.closePath();
+  ctx.fill();
+
+  // 측면 파란 스트라이프 (KTX 라인)
+  ctx.fillStyle = "#2563eb";
+  ctx.fillRect(bodyLeft + 2, 48, 4, 64);
+  ctx.fillRect(bodyRight - 6, 48, 4, 64);
+  ctx.fillRect(bodyLeft + 2, 128, 4, 88);
+  ctx.fillRect(bodyRight - 6, 128, 4, 88);
+
+  // 지붕 설비 박스
+  ctx.fillStyle = "#cbd5e1";
+  ctx.strokeStyle = "#94a3b8";
+  ctx.lineWidth = 1;
+  for (const [y, h] of [[56, 20], [84, 22], [136, 24], [172, 32]]) {
+    ctx.fillRect(centerX - 9, y, 18, h);
+    ctx.strokeRect(centerX - 9, y, 18, h);
+  }
+
+  return {
+    imageData: ctx.getImageData(0, 0, canvas.width, canvas.height),
+    pixelRatio
+  };
+}
+
+function addTrainIcon() {
+  if (map.hasImage(TRAIN_ICON_ID)) {
+    return;
+  }
+  const { imageData, pixelRatio } = createTrainIconImage();
+  map.addImage(TRAIN_ICON_ID, imageData, { pixelRatio });
+}
+
 function addRouteLayers() {
   map.addSource(FULL_ROUTE_SOURCE_ID, {
     type: "geojson",
@@ -780,7 +894,7 @@ function addRouteLayers() {
   map.addSource(CURRENT_SOURCE_ID, {
     type: "geojson",
     data: makePoint(routeCoordinates[0], {
-      pulse: 0
+      bearing: initialBearing
     })
   });
 
@@ -902,37 +1016,50 @@ function addRouteLayers() {
     }
   });
 
+  // 기차가 지면에 붙어 보이도록 바닥 그림자를 깐다 (pitch 기울기에 맞춰 눕힘).
   map.addLayer({
-    id: "current-position-pulse",
+    id: "current-position-shadow",
     type: "circle",
     source: CURRENT_SOURCE_ID,
     paint: {
+      "circle-pitch-alignment": "map",
       "circle-radius": [
-        "+",
-        17,
-        ["*", ["coalesce", ["get", "pulse"], 0], 13]
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        5, 10,
+        9, 20,
+        12, 28,
+        15.5, 38
       ],
-      "circle-color": "#22d3ee",
-      "circle-opacity": [
-        "-",
-        0.42,
-        ["*", ["coalesce", ["get", "pulse"], 0], 0.28]
-      ],
-      "circle-stroke-width": 2,
-      "circle-stroke-color": "#ecfeff",
-      "circle-stroke-opacity": 0.75
+      "circle-color": "#0f172a",
+      "circle-opacity": 0.22,
+      "circle-blur": 0.9
     }
   });
 
+  // 현재 위치 기차. 지도면에 눕혀(pitch-alignment: map) 진행 방향(bearing)으로
+  // 회전시켜 카메라가 기차 뒤를 따라가는 구도를 만든다.
   map.addLayer({
-    id: "current-position-dot",
-    type: "circle",
+    id: "current-position-train",
+    type: "symbol",
     source: CURRENT_SOURCE_ID,
-    paint: {
-      "circle-radius": 8,
-      "circle-color": "#06b6d4",
-      "circle-stroke-width": 3,
-      "circle-stroke-color": "#ffffff"
+    layout: {
+      "icon-image": TRAIN_ICON_ID,
+      "icon-size": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        5, 0.3,
+        9, 0.55,
+        12, 0.75,
+        15.5, 1.0
+      ],
+      "icon-rotate": ["coalesce", ["get", "bearing"], 0],
+      "icon-rotation-alignment": "map",
+      "icon-pitch-alignment": "map",
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true
     }
   });
 
@@ -1080,7 +1207,7 @@ function applySceneForProgress(progress, useSmoothing) {
   setSourceData(
     CURRENT_SOURCE_ID,
     makePoint(scene.currentCoord, {
-      pulse: scene.pulse
+      bearing: pointAlongRoute(scene.routeFraction).bearing
     })
   );
   setSourceData(
@@ -1166,7 +1293,7 @@ function applyRouteSegment(
   setSourceData(
     CURRENT_SOURCE_ID,
     makePoint(point.coord, {
-      pulse: (renderFrameCounter * 0.12) % 1
+      bearing: point.bearing
     })
   );
   setSourceData(MARKER_SOURCE_ID, mediaMarkerFeatures(null));
@@ -1211,7 +1338,7 @@ function applyStopPoint(trackIndex, name = "") {
   setSourceData(
     CURRENT_SOURCE_ID,
     makePoint(routePointCoord(routePoints[index]), {
-      pulse: (renderFrameCounter * 0.18) % 1
+      bearing: point.bearing
     })
   );
   setSourceData(MARKER_SOURCE_ID, mediaMarkerFeatures(index));
@@ -1330,6 +1457,7 @@ window.initializeMap = async function () {
   addTerrain();
   addAtmosphere();
   addBuildings();
+  addTrainIcon();
   addRouteLayers();
   renderReady = true;
   const idleStart = performance.now();
