@@ -22,11 +22,14 @@
 
 **1) 코스 생성** (도착지 좌표가 정해진 뒤)
 ```python
-pipeline.build_courses(scored, criteria, k, origin) -> list[Course]
+pipeline.build_courses(scored, criteria, k, origin, first_cap=None, last_cap=None) -> list[Course]
 ```
 - `scored`: `scoring.score_places(places, themes)` 결과 (`list[ScoredPlace]`)
 - `criteria`: `schemas.recommend_schema.SearchCriteria`
 - `k`: 여행 일수(=클러스터 수), `origin`: 현지 기준점 좌표 `(lat, lng)`
+- `first_cap`/`last_cap`: 첫날(도착일)·마지막날(귀가일) 관광지 상한. `recommend_service._day_caps`가
+  main 노선 도착/출발 시각으로 계산해 넘긴다(없으면 전 일자 `_MAX_PER_DAY`). 열차 시각을 코스에
+  반영하는 유일한 연결점 — 오후 도착이면 첫날을, 오전 귀가면 마지막날을 덜/안 채운다.
 
 **2) 도착지 자동 선택** (도착역 미지정 시 — theme + party 기준)
 ```python
@@ -45,7 +48,7 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 | `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`) |
 | `clustering.py` | ② k-means(결정적)로 일수만큼 날짜 묶기 (`kmeans_by_geo`) |
 | `routing.py` | ③④ Nearest Neighbor + 2-opt + 순환 복귀, `haversine` (`nearest_neighbor`/`two_opt`/`close_cycle`) |
-| `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 최대 3곳 |
+| `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 최대 3곳(첫/마지막날은 열차 시각 기반 `first_cap`/`last_cap`으로 축소) |
 | `destination.py` | **도착지 선택**(코스 파이프라인과 별개). 도착역 미지정 시 `theme + party` 기준으로 시도 area 후보를 점수화·권역 다양성 필터 (`rank_and_diversify`, 값 객체 `AreaProfile`) |
 
 ## 도착지 선택 로직 (`destination.py`)
@@ -90,8 +93,10 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 가는 길 중간역을 시스템이 추천). 둘 다 경유 경로엔 역 근처 관광지가 붙는다. 구현은 두 레이어로 나뉜다(섞지 마라):
 
 - **경로 생성 — `services/route_service.py:recommend(via_station_idx=...)`** (기차 그래프·시각표만)
-  - 지정 경유: 그 역만 2~6h 관광 체류로 경유하는 경로를 보장(`_stopover` 헬퍼, `_via_pair`/`MIN_STAY`~`MAX_STAY` 재사용).
-    **자동 중간역은 만들지 않는다** → 모든 경유 루트가 `출발→지정역→도착`. 반환 `[main(직통/환승), via경유]`. 열차 없으면 `[main]`+`main.note` 안내. 출발·도착역과 같으면 무시.
+  - 지정 경유: 그 역을 2~6h 관광 체류로 경유. **가는편 경유**(`_stopover`, path=출발→지정역→도착)와
+    **오는편 경유**(`_stopover_return`, path=출발→도착→지정역→출발)를 둘 다 시도해 성립하는 편을 모두 낸다.
+    방향은 별도 필드 없이 **path·기차 시각**으로 드러난다(코스/프론트가 그걸로 배치·구분). **자동 중간역은 만들지 않음**.
+    반환 `[main, (가는편경유?), (오는편경유?)]`. 둘 다 열차 없으면 `[main]`+`main.note` 안내. 출발·도착역과 같으면 무시.
   - **경유값 방어**: `via_station_idx`는 `SearchCriteria` 검증기가 `≤0`(Swagger 기본값 0 포함)을 `None`으로 정규화한다. route_service도 미존재·철도 미지원·좌표 없는 역이면 **예외 없이 조용히 경유만 생략**(직통 등 열차 정보를 통째로 잃지 않도록) → 자동 경유 모드로 진행.
   - 자동 경유: `_candidate_stops`가 지리적 중간역을 뽑되 **출발·도착 양쪽에서 `max(MIN_LEG_KM, base·MIN_LEG_RATIO)` 이상 떨어진 역만**
     (서울→용산/구포처럼 종점에 붙은 역 제외) + 우회비율 `MAX_DETOUR_RATIO` 이내. 열차가 성립하는 후보 전부를 `[main, 경유들…]`로 반환.

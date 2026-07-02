@@ -19,6 +19,8 @@ def build_courses(
     criteria: SearchCriteria,
     k: int,
     origin: tuple[float, float],
+    first_cap: int | None = None,
+    last_cap: int | None = None,
 ) -> list[Course]:
     """점수화된 추천지로부터 서로 다른 코스 후보 3개(A/B/C)를 생성한다.
 
@@ -44,14 +46,11 @@ def build_courses(
         if not bucket:
             continue
         clusters = clustering.kmeans_by_geo(bucket, k)
-        # 하루 최대 _MAX_PER_DAY곳으로 제한(선호도 상위만 남김)
-        for cl in clusters:
-            if len(cl.members) > _MAX_PER_DAY:
-                cl.members = sorted(cl.members, key=lambda p: p.score, reverse=True)[:_MAX_PER_DAY]
         clusters = [cl for cl in clusters if cl.members]
         if not clusters:
             continue
-        course = _assemble(label, clusters, criteria, origin, selected)
+        # 하루 방문지 상한은 _assemble이 날짜별로 적용(첫날/마지막날은 열차 시각 기반).
+        course = _assemble(label, clusters, criteria, origin, selected, first_cap, last_cap)
         if course.days:
             courses.append(course)
     return courses
@@ -114,23 +113,33 @@ def _assemble(
     criteria: SearchCriteria,
     origin: tuple[float, float],
     selected: set[Theme],
+    first_cap: int | None = None,
+    last_cap: int | None = None,
 ) -> Course:
     """정해진 군집(Day)들을 하나의 Course로 조립한다.
 
-    Day 순서(_order_days) → Day 안 방문 순서(NN+2-opt) → 마지막 Day 원점 복귀 순.
-    체류/이동 시간은 다루지 않는다(휴리스틱이라 제거됨). 여기서 정하는 건 오직
-    '방문 순서'와 코스 전체 선호도 합(total_preference_score)뿐 — routing의
-    two_opt/close_cycle도 시간이 아니라 순서를 최적화하는 용도다.
+    Day 순서(_order_days) → 하루 방문지 상한 컷 → Day 안 방문 순서(NN+2-opt) → 마지막 Day 원점 복귀.
+    하루 상한은 기본 _MAX_PER_DAY이나, 첫날(도착일)·마지막날(귀가일)은 열차 도착/출발 시각에서
+    구한 first_cap/last_cap으로 더 줄인다(오후 도착이면 덜, 오전 귀가면 거의 안 채움).
+    체류/이동 시간은 다루지 않는다. 정하는 건 '방문 순서'와 선호도 합뿐.
     """
     ordered = _order_days(clusters, origin)
     go = _parse_ymd(criteria.go_date)
+    n = len(ordered)
 
     days: list[DayPlan] = []
     total_score = 0.0
     for idx, cl in enumerate(ordered):
+        # 하루 상한: 기본 _MAX_PER_DAY, 첫날/마지막날만 열차 시각 기반 cap으로 축소.
+        cap = _MAX_PER_DAY
+        if idx == 0 and first_cap is not None:
+            cap = min(first_cap, _MAX_PER_DAY)
+        if idx == n - 1 and last_cap is not None:  # 당일치기(n==1)면 last_cap이 우선
+            cap = min(last_cap, _MAX_PER_DAY)
+        members = sorted(cl.members, key=lambda p: p.score, reverse=True)[:cap]
         # NN으로 초기 순서 → 2-opt로 교차 제거. 시간이 아닌 '방문 동선'만 다듬는다.
-        route = routing.two_opt(routing.nearest_neighbor(cl.members))
-        if idx == len(ordered) - 1:  # 마지막 day → 출발지 복귀 방향(원점 회귀 동선)
+        route = routing.two_opt(routing.nearest_neighbor(members))
+        if idx == n - 1:  # 마지막 day → 출발지 복귀 방향(원점 회귀 동선)
             route = routing.close_cycle(route, origin)
         total_score += sum(p.score for p in route)
         days.append(
