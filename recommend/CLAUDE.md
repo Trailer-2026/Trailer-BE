@@ -22,11 +22,14 @@
 
 **1) 코스 생성** (도착지 좌표가 정해진 뒤)
 ```python
-pipeline.build_courses(scored, criteria, k, origin) -> list[Course]
+pipeline.build_courses(scored, criteria, k, origin, first_cap=None, last_cap=None) -> list[Course]
 ```
 - `scored`: `scoring.score_places(places, themes)` 결과 (`list[ScoredPlace]`)
 - `criteria`: `schemas.recommend_schema.SearchCriteria`
 - `k`: 여행 일수(=클러스터 수), `origin`: 현지 기준점 좌표 `(lat, lng)`
+- `first_cap`/`last_cap`: 첫날(도착일)·마지막날(귀가일) 관광지 상한. `recommend_service._day_caps`가
+  main 노선 도착/출발 시각으로 계산해 넘긴다(없으면 전 일자 `_MAX_PER_DAY`). 열차 시각을 코스에
+  반영하는 유일한 연결점 — 오후 도착이면 첫날을, 오전 귀가면 마지막날을 덜/안 채운다.
 
 **2) 도착지 자동 선택** (도착역 미지정 시 — theme + party 기준)
 ```python
@@ -45,7 +48,7 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 | `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`) |
 | `clustering.py` | ② k-means(결정적)로 일수만큼 날짜 묶기 (`kmeans_by_geo`) |
 | `routing.py` | ③④ Nearest Neighbor + 2-opt + 순환 복귀, `haversine` (`nearest_neighbor`/`two_opt`/`close_cycle`) |
-| `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 최대 3곳 |
+| `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 최대 3곳(첫/마지막날은 열차 시각 기반 `first_cap`/`last_cap`으로 축소) |
 | `destination.py` | **도착지 선택**(코스 파이프라인과 별개). 도착역 미지정 시 `theme + party` 기준으로 시도 area 후보를 점수화·권역 다양성 필터 (`rank_and_diversify`, 값 객체 `AreaProfile`) |
 
 ## 도착지 선택 로직 (`destination.py`)

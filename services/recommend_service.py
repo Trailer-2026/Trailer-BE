@@ -31,6 +31,11 @@ _VIA_PLACES_N = 3
 # 자동 경유(도착역만 지정)일 때 최종 노출할 경유 후보 수.
 _STOPOVER_N = 3
 
+# 코스에 열차 시각 반영: 관광지 1곳당 소요(관람+이동) 추정 시간(h)과 하루 관광 가능 시간대.
+_HOURS_PER_PLACE = 2.5
+_DAY_START_HOUR = 9
+_DAY_END_HOUR = 21
+
 
 def recommend_courses(db: Session, criteria: SearchCriteria) -> RecommendResponse:
     """검색 조건으로 AI 코스 + 왕복 기차 경로 + 날짜별 숙소를 생성한다.
@@ -60,8 +65,10 @@ def _recommend_fixed_dest(db, criteria, origin, k) -> RecommendResponse:
     if dest.latitude is None or dest.longitude is None:
         raise BadRequestException("도착역 좌표가 없어 추천을 생성할 수 없습니다.")
 
-    courses = _build_courses_at(criteria, k, (dest.latitude, dest.longitude))
+    # 경로를 먼저 만들어 도착/출발 시각으로 하루 관광량을 정한 뒤 코스를 생성한다.
     routes, note = _fetch_routes(db, origin, dest, criteria)
+    first_cap, last_cap = _day_caps(routes, k)
+    courses = _build_courses_at(criteria, k, (dest.latitude, dest.longitude), first_cap, last_cap)
     if not courses:
         note = note or "조건에 맞는 추천지를 찾지 못했습니다(TourAPI 실시간 조회 결과 없음)."
     plan = DestinationPlan(
@@ -138,11 +145,13 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
     plans = []
     for p in final:
         st = p.station
-        # 도착역 좌표를 앵커로, Phase B에서 받아둔 장소를 재사용해 코스 1개 생성
-        courses = _build_courses_from(
-            place_cache[st.station_idx], criteria, k, (st.latitude, st.longitude)
-        )[:1]
+        # 경로 먼저 → 도착/출발 시각으로 하루 상한 계산 → Phase B 장소 재사용해 코스 1개 생성
         routes, rnote = _fetch_routes(db, origin, st, criteria)
+        first_cap, last_cap = _day_caps(routes, k)
+        courses = _build_courses_from(
+            place_cache[st.station_idx], criteria, k, (st.latitude, st.longitude),
+            first_cap, last_cap,
+        )[:1]
         plans.append(DestinationPlan(
             destination_station_idx=st.station_idx,
             destination_name=st.station_name,
@@ -182,8 +191,9 @@ def _auto_fallback(db, criteria, origin, origin_coords, k) -> RecommendResponse:
             auto_selected=True, destinations=[],
             note="추천 가능한 도착지를 찾지 못했습니다.",
         )
-    courses = _build_courses_at(criteria, k, (st.latitude, st.longitude))[:1]
     routes, rnote = _fetch_routes(db, origin, st, criteria)
+    first_cap, last_cap = _day_caps(routes, k)
+    courses = _build_courses_at(criteria, k, (st.latitude, st.longitude), first_cap, last_cap)[:1]
     plan = DestinationPlan(
         destination_station_idx=st.station_idx,
         destination_name=st.station_name,
@@ -195,18 +205,48 @@ def _auto_fallback(db, criteria, origin, origin_coords, k) -> RecommendResponse:
     return RecommendResponse(auto_selected=True, destinations=[plan], note=None)
 
 
-def _build_courses_at(criteria: SearchCriteria, k: int, anchor) -> list[Course]:
+def _build_courses_at(criteria: SearchCriteria, k: int, anchor,
+                      first_cap: int | None = None, last_cap: int | None = None) -> list[Course]:
     """현지 기준점(anchor) 반경 추천지를 실시간 조회 후 코스 생성(지정/폴백 경로용)."""
     places = tour_place.live_places(anchor[0], anchor[1], criteria.themes)
-    return _build_courses_from(places, criteria, k, anchor)
+    return _build_courses_from(places, criteria, k, anchor, first_cap, last_cap)
 
 
-def _build_courses_from(places, criteria: SearchCriteria, k: int, anchor) -> list[Course]:
-    """이미 받아둔 추천지(places)로 점수화→코스 생성→숙소 배정(중복 조회 회피)."""
+def _build_courses_from(places, criteria: SearchCriteria, k: int, anchor,
+                        first_cap: int | None = None, last_cap: int | None = None) -> list[Course]:
+    """이미 받아둔 추천지(places)로 점수화→코스 생성→숙소 배정(중복 조회 회피).
+
+    first_cap/last_cap: 열차 도착/출발 시각으로 구한 첫날·마지막날 관광지 상한(_day_caps).
+    """
     scored = scoring.score_places(places, criteria.themes)
-    courses = pipeline.build_courses(scored, criteria, k, anchor)
+    courses = pipeline.build_courses(scored, criteria, k, anchor, first_cap, last_cap)
     _assign_lodgings(courses)
     return courses
+
+
+def _cap_from_hours(hours: float) -> int:
+    """가용 시간(h) → 그 날 관광지 수 상한(하한 0). 상한(_MAX_PER_DAY)은 pipeline이 적용."""
+    return max(0, int(hours // _HOURS_PER_PLACE))
+
+
+def _day_caps(routes: list, k: int) -> tuple[int | None, int | None]:
+    """main 노선 도착/출발 시각으로 (첫날, 마지막날) 관광지 상한을 구한다.
+
+    첫날은 '도착시각~하루 끝', 마지막날은 '하루 시작~출발시각'의 가용 시간으로 제한한다
+    (오후 도착이면 첫날을 덜, 오전 귀가면 마지막날을 거의 안 채움). 당일치기(k<=1)는
+    도착~출발 사이만. 시각을 못 구하면 (None, None) → pipeline이 기본 상한을 쓴다.
+    """
+    main = routes[0] if routes else None
+    if main is None or not main.go_trains or not main.back_trains:
+        return None, None
+    arr = main.go_trains[-1].arr_time    # 도착일 도착 시각
+    dep = main.back_trains[0].dep_time   # 귀가일 출발 시각
+    if k <= 1:
+        cap = _cap_from_hours((dep - arr).total_seconds() / 3600)
+        return cap, cap
+    first = _cap_from_hours(_DAY_END_HOUR - (arr.hour + arr.minute / 60))
+    last = _cap_from_hours((dep.hour + dep.minute / 60) - _DAY_START_HOUR)
+    return first, last
 
 
 def _assign_lodgings(courses: list[Course]) -> None:
