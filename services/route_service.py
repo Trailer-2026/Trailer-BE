@@ -144,9 +144,11 @@ def _prefetch_segments(dep, arr, groups, stops, go_date, back_date) -> None:
         pairs.add((arr.nat_code, m.nat_code, back_date))
         pairs.add((m.nat_code, dep.nat_code, back_date))
     for c in stops:
-        # 관광 경유 후보 c: 가는편 dep→c→arr 2구간만 필요(오는편은 경유 없이 직통/환승).
+        # 관광 경유 후보 c: 가는편(dep→c→arr)·오는편(arr→c→dep) 양방향 경유를 모두 데운다.
         pairs.add((dep.nat_code, c.nat_code, go_date))
         pairs.add((c.nat_code, arr.nat_code, go_date))
+        pairs.add((arr.nat_code, c.nat_code, back_date))
+        pairs.add((c.nat_code, dep.nat_code, back_date))
     with ThreadPoolExecutor(max_workers=min(16, len(pairs))) as ex:
         list(ex.map(lambda p: _safe_fetch(*p), pairs))
 
@@ -268,7 +270,7 @@ def _candidate_stops(all_stations: list[Station], dep: Station, arr: Station) ->
     return [s for _, s in scored[:MAX_CANDIDATES]]
 
 
-def _build(route_type, dep, via_label, arr, go_picks, stay, back_segs, note=None) -> RouteCandidate:
+def _build(route_type, dep, via_label, arr, go_picks, stay, back_segs, note=None, return_via=False) -> RouteCandidate:
     go_trains = [_to_train(t) for t in go_picks]
     all_segs = go_trains + back_segs  # 가는편(경유면 2편) + 오는편 전 구간
     travel = sum(t.duration_minutes for t in all_segs)  # 순수 승차시간 합(경유 체류는 stay_minutes로 별도)
@@ -276,7 +278,14 @@ def _build(route_type, dep, via_label, arr, go_picks, stay, back_segs, note=None
     # 없으면(None) 합산이 부정확해지므로 total_fare 자체를 None으로 둔다. 인원수·할인 미반영.
     fares = [t.fare for t in all_segs]
     total_fare = sum(fares) if all_segs and all(f is not None for f in fares) else None
-    names = [dep.station_name] + ([via_label] if via_label else []) + [arr.station_name]
+    # 경로 표기만으로 방향이 드러나게 한다(별도 필드 없이): 가는편 경유=출발→via→도착,
+    # 오는편 경유=왕복(출발→도착→via→출발), 그 외=출발→도착. 코스/프론트는 path·기차 시각으로 방향을 안다.
+    if return_via and via_label:
+        names = [dep.station_name, arr.station_name, via_label, dep.station_name]
+    elif via_label:
+        names = [dep.station_name, via_label, arr.station_name]
+    else:
+        names = [dep.station_name, arr.station_name]
     return RouteCandidate(
         route_type=route_type,
         path="→".join(names),
@@ -302,6 +311,25 @@ def _stopover(dep, arr, via, go_date, go_start, back_segs, back_note, nail_pass)
     return route
 
 
+def _stopover_return(dep, arr, via, back_date, back_start, go_picks, go_note, nail_pass) -> RouteCandidate | None:
+    """오는편에 via 역 2~6h 관광 체류하는 경유 경로 1건(_stopover의 오는편 대칭).
+
+    가는편은 직통/환승(go_picks 재사용), 오는편을 도착→via→출발 2구간으로 만들고 그 사이 체류.
+    체류 조건에 맞는 열차가 없거나 가는편이 없으면 None.
+    """
+    if not go_picks:  # 가는편이 없으면 왕복 자체가 성립 안 함
+        return None
+    pair = _via_pair(arr.nat_code, dep.nat_code, via.nat_code, back_date, back_start, MIN_STAY, MAX_STAY, nail_pass)
+    if not pair:
+        return None
+    leg1, leg2 = pair  # 도착역→via, via→출발역
+    stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
+    back_segs = [_to_train(leg1), _to_train(leg2)]
+    route = _build("경유", dep, via.station_name, arr, go_picks, stay, back_segs, go_note, return_via=True)
+    route.via_station_idx = via.station_idx
+    return route
+
+
 def recommend(
     db: Session,
     dep_idx: int,
@@ -316,8 +344,10 @@ def recommend(
     """직통/환승/경유 왕복 경로 후보를 반환한다. 기본 왕복은 항상 첫 번째로 보장된다.
 
     nail_pass=True면 내일로패스 적용 열차(KTX 계열·SRT 제외)로만 경로를 구성한다.
-    via_station_idx가 주어지면 그 역만 2~6h 관광 체류로 경유하는 경로를 제공하고(자동 중간역
-    제외 → 모든 경유 루트가 출발→지정역→도착), 자동 중간역 경유는 만들지 않는다.
+    via_station_idx가 주어지면 그 역을 2~6h 관광 체류로 경유하는 경로를 제공한다. 이때 가는편 경유
+    (출발→지정역→도착)와 오는편 경유(도착→지정역→출발)를 둘 다 시도해 성립하는 편을 모두 낸다
+    (자동 중간역 경유는 만들지 않음). 미지정이면 지리적 중간역을 자동 선정하고, 각 후보마다 가는편·오는편
+    경유를 둘 다 만든다(최종 상위 N개 선별은 recommend_service 몫).
     (출발·도착역과 같으면 무시, 조건에 맞는 열차가 없으면 경유 없이 main note로 안내.)
     """
     go = _parse_date(go_date)
@@ -369,20 +399,31 @@ def recommend(
     # 2) 관광 경유(1곳)
     #    - 경유역(via) 지정 시: 그 역만 경유로 제공(모든 경유 루트 = 출발→지정역→도착).
     #      체류 조건에 맞는 열차가 없으면 경유 없이 main에 안내만 남긴다.
-    #    - 미지정 시: 지리적 중간역을 자동 선정(출발·도착에 붙은 역 제외)해 경유 후보로 제공.
+    #    - 미지정 시: 지리적 중간역을 자동 선정(출발·도착에 붙은 역 제외)해 가는편·오는편 경유를 모두 제공.
     #      최종 상위 N개 선별은 '테마 관련도' 기준으로 recommend_service가 한다(여기선 지리·시각표만).
     if via is not None:
-        wp = _stopover(dep, arr, via, go_date, go_start, back_segs, back_note, nail_pass)
-        if wp:
-            return [main, wp]
-        miss = f"{via.station_name} 경유는 2~6시간 체류 조건에 맞는 열차가 없어 제외했습니다."
-        main.note = " / ".join(n for n in (main.note, miss) if n) or None
-        return [main]
+        # 지정 경유: 가는편 경유 / 오는편 경유 둘 다 시도해, 성립하는 편을 모두 후보로 낸다
+        # (사용자가 '가는 길에' 또는 '오는 길에' 들르도록 선택 — 방향은 path·기차 시각으로 드러난다).
+        routes = [main]
+        wp_go = _stopover(dep, arr, via, go_date, go_start, back_segs, back_note, nail_pass)
+        if wp_go:
+            routes.append(wp_go)
+        wp_back = _stopover_return(dep, arr, via, back_date, back_start, go_picks, go_note, nail_pass)
+        if wp_back:
+            routes.append(wp_back)
+        if len(routes) == 1:  # 가는편·오는편 모두 체류 조건에 맞는 열차 없음
+            miss = f"{via.station_name} 경유는 2~6시간 체류 조건에 맞는 열차가 없어 제외했습니다."
+            main.note = " / ".join(n for n in (main.note, miss) if n) or None
+        return routes
 
     stopovers = []
     for c in stops:
-        r = _stopover(dep, arr, c, go_date, go_start, back_segs, back_note, nail_pass)
-        if r:
-            stopovers.append(r)
+        # 지정 경유와 동일하게 가는편·오는편 둘 다 후보로 낸다(최종 상위 N 선별은 recommend_service).
+        r_go = _stopover(dep, arr, c, go_date, go_start, back_segs, back_note, nail_pass)
+        if r_go:
+            stopovers.append(r_go)
+        r_back = _stopover_return(dep, arr, c, back_date, back_start, go_picks, go_note, nail_pass)
+        if r_back:
+            stopovers.append(r_back)
     stopovers.sort(key=lambda r: r.total_travel_minutes)  # 기본 순서(테마 랭킹 전)
     return [main] + stopovers

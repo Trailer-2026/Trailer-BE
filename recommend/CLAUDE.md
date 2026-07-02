@@ -93,8 +93,10 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 가는 길 중간역을 시스템이 추천). 둘 다 경유 경로엔 역 근처 관광지가 붙는다. 구현은 두 레이어로 나뉜다(섞지 마라):
 
 - **경로 생성 — `services/route_service.py:recommend(via_station_idx=...)`** (기차 그래프·시각표만)
-  - 지정 경유: 그 역만 2~6h 관광 체류로 경유하는 경로를 보장(`_stopover` 헬퍼, `_via_pair`/`MIN_STAY`~`MAX_STAY` 재사용).
-    **자동 중간역은 만들지 않는다** → 모든 경유 루트가 `출발→지정역→도착`. 반환 `[main(직통/환승), via경유]`. 열차 없으면 `[main]`+`main.note` 안내. 출발·도착역과 같으면 무시.
+  - 지정 경유: 그 역을 2~6h 관광 체류로 경유. **가는편 경유**(`_stopover`, path=출발→지정역→도착)와
+    **오는편 경유**(`_stopover_return`, path=출발→도착→지정역→출발)를 둘 다 시도해 성립하는 편을 모두 낸다.
+    방향은 별도 필드 없이 **path·기차 시각**으로 드러난다(코스/프론트가 그걸로 배치·구분). **자동 중간역은 만들지 않음**.
+    반환 `[main, (가는편경유?), (오는편경유?)]`. 둘 다 열차 없으면 `[main]`+`main.note` 안내. 출발·도착역과 같으면 무시.
   - **경유값 방어**: `via_station_idx`는 `SearchCriteria` 검증기가 `≤0`(Swagger 기본값 0 포함)을 `None`으로 정규화한다. route_service도 미존재·철도 미지원·좌표 없는 역이면 **예외 없이 조용히 경유만 생략**(직통 등 열차 정보를 통째로 잃지 않도록) → 자동 경유 모드로 진행.
   - 자동 경유: `_candidate_stops`가 지리적 중간역을 뽑되 **출발·도착 양쪽에서 `max(MIN_LEG_KM, base·MIN_LEG_RATIO)` 이상 떨어진 역만**
     (서울→용산/구포처럼 종점에 붙은 역 제외) + 우회비율 `MAX_DETOUR_RATIO` 이내. 열차가 성립하는 후보 전부를 `[main, 경유들…]`로 반환.

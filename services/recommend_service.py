@@ -323,25 +323,36 @@ def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
     if not via_routes:
         return routes
 
+    # 같은 경유역의 가는편/오는편 경로가 관광 스캔을 중복 호출하지 않도록 역 idx로 캐시한다.
+    # (양방향 경유를 다 만들어도 관광 API 호출은 '유니크 경유역 수'로 유지 — quota 보호.)
+    scan_cache: dict = {}  # via_station_idx → (테마관련도 점수, StopoverPlace 리스트)
+
+    def _scan(idx: int):
+        if idx not in scan_cache:
+            st = station_dao.get_by_idx(db, idx)
+            if st is None or st.latitude is None or st.longitude is None:
+                scan_cache[idx] = (-1, [])  # 좌표 없어 스캔 불가 → 점수 -1로 자동 경유 정렬 맨 뒤로
+            else:
+                places = tour_place.live_places(st.latitude, st.longitude, criteria.themes, radius_m=_VIA_RADIUS_M)
+                places.sort(key=lambda p: haversine(st.latitude, st.longitude, p.lat, p.lng))
+                sp = [
+                    StopoverPlace(
+                        place_idx=p.place_idx, name=p.name, region=p.region,
+                        lat=p.lat, lng=p.lng, themes=p.themes, image_url=p.image_url,
+                    )
+                    for p in places[:_VIA_PLACES_N]
+                ]
+                scan_cache[idx] = (len(places), sp)  # 역 근처 테마 관광지 수 = 테마 관련도
+        return scan_cache[idx]
+
     scored = []  # (route, theme_score)
     for r in via_routes:
-        st = station_dao.get_by_idx(db, r.via_station_idx)
-        if st is None or st.latitude is None or st.longitude is None:
-            scored.append((r, -1))  # 좌표 없어 스캔 불가 → 점수 -1로 자동 경유 정렬 맨 뒤로
-            continue
-        places = tour_place.live_places(st.latitude, st.longitude, criteria.themes, radius_m=_VIA_RADIUS_M)
-        places.sort(key=lambda p: haversine(st.latitude, st.longitude, p.lat, p.lng))
-        r.stopover_places = [
-            StopoverPlace(
-                place_idx=p.place_idx, name=p.name, region=p.region,
-                lat=p.lat, lng=p.lng, themes=p.themes, image_url=p.image_url,
-            )
-            for p in places[:_VIA_PLACES_N]
-        ]
-        scored.append((r, len(places)))  # 역 근처 테마 관광지 수 = 테마 관련도
+        score, sp = _scan(r.via_station_idx)
+        r.stopover_places = sp
+        scored.append((r, score))
 
     if criteria.via_station_idx is not None:
-        return routes  # 지정 경유: 단일 경유 경로 그대로
+        return routes  # 지정 경유: 가는편/오는편 경로 모두 그대로 유지
 
     # 자동 경유: 테마 관련도↓, 동점 시 이동시간↑ 순으로 상위 N개만 남긴다.
     # id() 집합으로 살릴 경유를 표시하되, 직통/환승(non-경유)은 조건에서 항상 통과시켜 유지·선두.
