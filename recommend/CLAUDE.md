@@ -22,7 +22,7 @@
 
 **1) 코스 생성** (도착지 좌표가 정해진 뒤)
 ```python
-pipeline.build_courses(scored, criteria, k, origin, first_cap=None, last_cap=None) -> list[Course]
+pipeline.build_courses(scored, criteria, k, origin, first_cap=None, last_cap=None, day_windows=None) -> list[Course]
 ```
 - `scored`: `scoring.score_places(places, themes)` 결과 (`list[ScoredPlace]`)
 - `criteria`: `schemas.recommend_schema.SearchCriteria`
@@ -30,6 +30,9 @@ pipeline.build_courses(scored, criteria, k, origin, first_cap=None, last_cap=Non
 - `first_cap`/`last_cap`: 첫날(도착일)·마지막날(귀가일) 관광지 상한. `recommend_service._day_caps`가
   main 노선 도착/출발 시각으로 계산해 넘긴다(없으면 전 일자 `_MAX_PER_DAY`). 열차 시각을 코스에
   반영하는 유일한 연결점 — 오후 도착이면 첫날을, 오전 귀가면 마지막날을 덜/안 채운다.
+- `day_windows`: 날짜별 관광 가능 시간대 `[(start_h, end_h), …]`. `recommend_service._day_windows`가
+  열차 도착/출발 시각으로 계산(없으면 전 일자 기본 9~21시). `scheduling`이 이 시간대 안에서
+  **관광지 운영시간(오픈/마감·휴무요일)**에 맞춰 방문 시각을 배정하고, 안 맞는 곳은 차순위로 대체한다.
 
 **2) 도착지 자동 선택** (도착역 미지정 시 — theme + party 기준)
 ```python
@@ -48,7 +51,8 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 | `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`) |
 | `clustering.py` | ② k-means(결정적)로 일수만큼 날짜 묶기 (`kmeans_by_geo`) |
 | `routing.py` | ③④ Nearest Neighbor + 2-opt + 순환 복귀, `haversine` (`nearest_neighbor`/`two_opt`/`close_cycle`) |
-| `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 최대 3곳(첫/마지막날은 열차 시각 기반 `first_cap`/`last_cap`으로 축소) |
+| `scheduling.py` | ⑤ Day 내부 **시각 스케줄링**. 관광지 운영시간(오픈/마감·휴무요일)에 맞춰 방문 시각 배정·재정렬, 운영시간 밖이면 차순위 후보로 대체(소프트). 운영시간 정보가 없는 날은 `routing` 동선 순서로 폴백 (`schedule_day`) |
+| `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 최대 3곳(첫/마지막날은 열차 시각 기반 `first_cap`/`last_cap`으로 축소), Day 순서는 `scheduling`이 운영시간 반영해 확정 |
 | `destination.py` | **도착지 선택**(코스 파이프라인과 별개). 도착역 미지정 시 `theme + party` 기준으로 시도 area 후보를 점수화·권역 다양성 필터 (`rank_and_diversify`, 값 객체 `AreaProfile`) |
 
 ## 도착지 선택 로직 (`destination.py`)
@@ -84,6 +88,29 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 - 클러스터링·NN·도착지 점수화는 결정적이어야 한다(같은 입력 → 같은 추천). `random`/`Date.now` 류 비결정 요소 넣지 마라.
 - 거리 계산은 `routing.haversine`로 통일.
 
+## 관광지 운영시간 (open/close) 반영
+
+코스가 관광지 **오픈/마감 시각·휴무요일**을 고려해 방문 순서·시각을 정한다. 두 레이어로 나뉜다.
+
+- **데이터 취득 — `services/recommend_service.py` + `utils/tour_place.py`** (네트워크)
+  - `locationBasedList2`엔 운영시간이 없다. `detailIntro2`(콘텐츠타입별 상세)에서만 나온다.
+  - `_attach_hours`가 **코스에 실제 배정될 상위 후보(`pipeline.max_working(k)`개, ≈일수×9)에 한해**
+    `tour_place.fetch_hours`(detailIntro2 병렬)로 운영시간을 채운다. 장소당 1콜이라 코스 후보로만 제한(quota·속도 보호).
+  - 파싱은 자유텍스트라 방어적(`_parse_hours`/`_parse_closed_weekdays`): `HH:MM~HH:MM` 앞 구간, `24시간·상시·연중무휴`,
+    `매주 X요일` 정도만 해석. 자정 넘김은 +24. 격주·첫째주 등 불규칙 휴무는 과제약을 피해 무시. **미상은 시간 제약 없음**으로 둔다.
+- **스케줄링 — `recommend/scheduling.py`** (순수 계산)
+  - `schedule_day`가 `day_windows`(그 날 관광 가능 시간대) 안에서 EDF(마감 이른 곳 먼저)로 방문 순서·시각을 정한다.
+    최고점부터 채우되 운영시간에 안 맞으면 **차순위 후보로 대체**(소프트). 그 날 휴무인 곳은 제외.
+  - 선택된 곳에 운영시간 정보가 하나도 없으면(전부 미상) 시간 제약이 없으므로 **기존 동선(NN+2-opt+원점복귀) 순서로 폴백** —
+    운영시간이 실제로 파악됐을 때만 시각 재정렬이 개입한다(무정보 지역의 동선 품질 보존).
+  - `ScoredPlace.open_hour/close_hour/closed_weekdays`(recommend_service가 채움)를 읽고, 결과 방문 시각은
+    `RecommendedPlace.open_time/close_time/visit_time`(HH:MM)로 노출된다. 방문시각은 `reason`에도 표기.
+  - ⚠️ **시간 가정**: 모든 관광지를 `_HOURS_PER_PLACE`=**2.5h(150분) 균등 점유**로 본다(관람+이동을 이 슬롯에 뭉뚱그림).
+    **관광지 간 실측 이동시간은 계산하지 않는다**(Haversine 거리는 방문 *순서* 최적화에만 쓰고 시각 배정엔 미반영).
+    그래서 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 2.5h 간격으로 찍힌다(예: 12:53→15:23→17:53).
+    이 상수는 **`recommend/scheduling.py`·`services/recommend_service.py` 두 곳에 동일**하며 `_day_caps`(방문 개수 상한)·
+    `_day_windows`(시각 배정)가 함께 쓰므로 바꿀 땐 둘 다 맞춘다. 실측 이동시간 연동은 추후.
+
 ## 경유역 관광지 (via / stopover)
 
 사용자가 "가는 길에 특정 역을 들르고 싶다"를 표현하는 기능. 요청 필드는 `SearchCriteria.via_station_idx`
@@ -118,7 +145,7 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 
 ## 응답 스키마
 ```
-  CommonResponse
+CommonResponse
   ├─ code: int                      // 200
   ├─ message: str                   // "추천 코스 생성 성공"
   └─ data: RecommendResponse
@@ -154,7 +181,10 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
         │     ├─ region?: str
         │     ├─ lat / lng: float
         │     ├─ themes[]: Theme
-        │     └─ image_url?: str
+        │     ├─ image_url?: str
+        │     ├─ open_time?: str   // 운영 시작 "HH:MM" (미상 null)
+        │     ├─ close_time?: str  // 운영 종료 "HH:MM" (미상 null)
+        │     └─ visit_time?: str  // 경유 체류시간 내 예상 방문 시각 "HH:MM". 체류 중 개점 구간 없으면 null (방향=가는편/오는편마다 체류 시간대가 달라 경로별 계산)
         │
         └─ courses[]: Course                  ◀ 코스 A/B/C (경로와 독립)
            ├─ label: str           // "A" / "B" / "C"
@@ -172,7 +202,10 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
               │  ├─ lat / lng: float
               │  ├─ themes[]: Theme
               │  ├─ preference_score: float
-              │  └─ reason: str     // "#미식 취향과 일치 (선호도 0.71)"
+              │  ├─ open_time?: str   // 운영 시작 "HH:MM" (미상 null)
+              │  ├─ close_time?: str  // 운영 종료 "HH:MM" (미상 null)
+              │  ├─ visit_time?: str  // 예상 방문 시각 "HH:MM" (운영시간 반영 배정)
+              │  └─ reason: str     // "#미식 취향과 일치 (선호도 0.71) · 15:00 방문 (운영 10:00~18:00)"
               └─ lodging?: Lodging  // 숙소, 마지막 날(귀가일)은 null
                  ├─ name: str
                  ├─ lodging_type?: str

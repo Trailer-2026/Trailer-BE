@@ -109,6 +109,22 @@ def location_based_list(
     return _items(body), int(body.get("totalCount") or 0)
 
 
+def detail_intro(*, content_id: str, content_type_id: int, timeout: int = 20) -> dict:
+    """공통정보 상세 조회(detailIntro2) 1건. 유형별 운영시간·휴무 필드를 담은 item(dict) 반환.
+
+    contentId·contentTypeId가 모두 필요하다. 유형마다 시간/휴무 필드명이 다르다
+    (관광지 usetime/restdate, 음식점 opentimefood/restdatefood 등 — utils.tour_place 참조).
+    항목이 없으면 빈 dict.
+    """
+    body = _get(
+        "detailIntro2",
+        {"contentId": content_id, "contentTypeId": content_type_id},
+        timeout=timeout,
+    )
+    items = _items(body)
+    return items[0] if items else {}
+
+
 def category_code(
     *,
     content_type_id: int | None = None,

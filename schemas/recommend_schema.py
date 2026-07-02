@@ -89,6 +89,11 @@ class RecommendedPlace(BaseModel):
     themes: list[Theme] = Field(..., description="테마 태그")
     preference_score: float = Field(..., description="선호도 점수(가중 코사인 유사도)")
     reason: str = Field(..., description="추천 이유 한 줄 설명")
+    open_time: str | None = Field(None, description="운영 시작 시각 (HH:MM). 미상이면 null")
+    close_time: str | None = Field(None, description="운영 종료 시각 (HH:MM). 미상이면 null")
+    visit_time: str | None = Field(
+        None, description="예상 방문 시각 (HH:MM). 운영시간을 반영해 배정된 방문 순서상의 시각"
+    )
 
 
 class Lodging(BaseModel):

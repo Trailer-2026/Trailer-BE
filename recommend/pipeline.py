@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 
 from core.enums import THEME_LABELS, Theme
-from recommend import clustering, routing
+from recommend import clustering, routing, scheduling
 from recommend.types import Cluster, ScoredPlace
 from schemas.recommend_schema import Course, DayPlan, RecommendedPlace, SearchCriteria
 
@@ -14,6 +14,15 @@ _MAX_PER_DAY = 3
 _LABELS = ["A", "B", "C", "D", "E"]
 
 
+def max_working(k: int) -> int:
+    """일수 k일 때 코스 조립에 실제로 쓰이는 상위 후보 수(작업셋 상한).
+
+    recommend_service가 이 수만큼의 상위 후보에 대해서만 운영시간을 조회(detailIntro2)해
+    호출 수를 코스에 배정될 장소들로 제한한다.
+    """
+    return _NUM_COURSES * k * _MAX_PER_DAY
+
+
 def build_courses(
     scored: list[ScoredPlace],
     criteria: SearchCriteria,
@@ -21,6 +30,7 @@ def build_courses(
     origin: tuple[float, float],
     first_cap: int | None = None,
     last_cap: int | None = None,
+    day_windows: list[tuple[float, float]] | None = None,
 ) -> list[Course]:
     """점수화된 추천지로부터 서로 다른 코스 후보 3개(A/B/C)를 생성한다.
 
@@ -50,7 +60,9 @@ def build_courses(
         if not clusters:
             continue
         # 하루 방문지 상한은 _assemble이 날짜별로 적용(첫날/마지막날은 열차 시각 기반).
-        course = _assemble(label, clusters, criteria, origin, selected, first_cap, last_cap)
+        course = _assemble(
+            label, clusters, criteria, origin, selected, first_cap, last_cap, day_windows
+        )
         if course.days:
             courses.append(course)
     return courses
@@ -115,13 +127,15 @@ def _assemble(
     selected: set[Theme],
     first_cap: int | None = None,
     last_cap: int | None = None,
+    day_windows: list[tuple[float, float]] | None = None,
 ) -> Course:
     """정해진 군집(Day)들을 하나의 Course로 조립한다.
 
-    Day 순서(_order_days) → 하루 방문지 상한 컷 → Day 안 방문 순서(NN+2-opt) → 마지막 Day 원점 복귀.
+    Day 순서(_order_days) → 하루 방문지 상한 컷 → Day 안 시각 스케줄링(운영시간 반영) → 방문 시각 배정.
     하루 상한은 기본 _MAX_PER_DAY이나, 첫날(도착일)·마지막날(귀가일)은 열차 도착/출발 시각에서
     구한 first_cap/last_cap으로 더 줄인다(오후 도착이면 덜, 오전 귀가면 거의 안 채움).
-    체류/이동 시간은 다루지 않는다. 정하는 건 '방문 순서'와 선호도 합뿐.
+    day_windows(그 날 관광 가능 시간대)가 있으면 scheduling이 관광지 운영시간에 맞춰 순서를 정하고
+    운영시간 밖인 곳은 차순위 후보로 대체한다. 운영시간 정보가 없는 날은 기존 동선(NN+2-opt) 순서.
     """
     ordered = _order_days(clusters, origin)
     go = _parse_ymd(criteria.go_date)
@@ -136,17 +150,20 @@ def _assemble(
             cap = min(first_cap, _MAX_PER_DAY)
         if idx == n - 1 and last_cap is not None:  # 당일치기(n==1)면 last_cap이 우선
             cap = min(last_cap, _MAX_PER_DAY)
-        members = sorted(cl.members, key=lambda p: p.score, reverse=True)[:cap]
-        # NN으로 초기 순서 → 2-opt로 교차 제거. 시간이 아닌 '방문 동선'만 다듬는다.
-        route = routing.two_opt(routing.nearest_neighbor(members))
-        if idx == n - 1:  # 마지막 day → 출발지 복귀 방향(원점 회귀 동선)
-            route = routing.close_cycle(route, origin)
-        total_score += sum(p.score for p in route)
+        window = day_windows[idx] if day_windows and idx < len(day_windows) else None
+        # 그 날 요일(휴무 판정용) — go_date가 있어야 계산 가능.
+        weekday = (go + timedelta(days=idx)).weekday() if go else None
+        # 클러스터 전체를 점수순으로 넘겨 운영시간에 안 맞는 곳을 차순위로 대체할 여지를 준다.
+        candidates = sorted(cl.members, key=lambda p: p.score, reverse=True)
+        scheduled = scheduling.schedule_day(
+            candidates, cap, window, weekday, origin=origin, is_last=(idx == n - 1)
+        )
+        total_score += sum(p.score for p, _ in scheduled)
         days.append(
             DayPlan(
                 day_no=idx + 1,
                 date=_fmt_ymd(go + timedelta(days=idx)) if go else None,
-                places=[_to_reco(p, selected) for p in route],
+                places=[_to_reco(p, selected, arrive) for p, arrive in scheduled],
             )
         )
 
@@ -160,7 +177,9 @@ def _assemble(
     )
 
 
-def _to_reco(p: ScoredPlace, selected: set[Theme]) -> RecommendedPlace:
+def _to_reco(
+    p: ScoredPlace, selected: set[Theme], arrive_hour: float | None = None
+) -> RecommendedPlace:
     return RecommendedPlace(
         place_idx=p.place_idx,
         name=p.name,
@@ -169,16 +188,34 @@ def _to_reco(p: ScoredPlace, selected: set[Theme]) -> RecommendedPlace:
         lng=p.lng,
         themes=p.themes,
         preference_score=round(p.score, 4),
-        reason=_reason(p, selected),
+        reason=_reason(p, selected, arrive_hour),
+        open_time=_hhmm(p.open_hour),
+        close_time=_hhmm(p.close_hour),
+        visit_time=_hhmm(arrive_hour),
     )
 
 
-def _reason(p: ScoredPlace, selected: set[Theme]) -> str:
+def _reason(p: ScoredPlace, selected: set[Theme], arrive_hour: float | None = None) -> str:
     matched = [t for t in p.themes if t in selected] or p.themes
     tags = " ".join(f"#{THEME_LABELS.get(t, t.value)}" for t in matched[:3])
-    if selected:
-        return f"{tags} 취향과 일치 (선호도 {p.score:.2f})"
-    return f"{tags} 인기 추천지"
+    base = f"{tags} 취향과 일치 (선호도 {p.score:.2f})" if selected else f"{tags} 인기 추천지"
+    if arrive_hour is None:
+        return base
+    # 방문 예정 시각을 붙이고, 운영시간이 파악된 곳은 함께 표기(마감 전 방문 안내).
+    if p.open_hour is not None or p.close_hour is not None:
+        win = f"{_hhmm(p.open_hour) or '?'}~{_hhmm(p.close_hour) or '?'}"
+        return f"{base} · {_hhmm(arrive_hour)} 방문 (운영 {win})"
+    return f"{base} · {_hhmm(arrive_hour)} 방문"
+
+
+def _hhmm(hour: float | None) -> str | None:
+    """시각(float 시간) → 'HH:MM'. None이면 None. 자정 넘김(≥24)은 다음날 시각으로 표기."""
+    if hour is None:
+        return None
+    total = int(round(hour * 60))
+    hh, mm = divmod(total, 60)
+    hh %= 24  # 24:00·26:00 등은 00:00·02:00로 표기
+    return f"{hh:02d}:{mm:02d}"
 
 
 def _parse_ymd(s: str | None) -> datetime | None:

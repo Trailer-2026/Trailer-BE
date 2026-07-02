@@ -5,8 +5,9 @@
 """
 import logging
 import math
+import re
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from core.enums import Theme
 from schemas.recommend_schema import Lodging
@@ -50,6 +51,7 @@ class LivePlace:
     themes: list[Theme]
     image_url: str | None
     content_id: str
+    content_type_id: int | None = None  # detailIntro2 운영시간 조회·유형별 필드 선택에 사용
 
 
 def _ctypes_for(themes: list[Theme]) -> set[int]:
@@ -84,6 +86,7 @@ def _to_live(item: dict) -> LivePlace | None:
     cid = str(item.get("contentid") or "")
     if not cid.isdigit():
         return None
+    ctid = int(ct) if ct is not None and str(ct).isdigit() else None
     return LivePlace(
         place_idx=int(cid),
         name=(item.get("title") or "")[:255],
@@ -93,6 +96,7 @@ def _to_live(item: dict) -> LivePlace | None:
         themes=themes,
         image_url=(item.get("firstimage") or None),
         content_id=cid,
+        content_type_id=ctid,
     )
 
 
@@ -131,6 +135,103 @@ def live_places(lat: float, lng: float, themes: list[Theme], radius_m: int = _RA
                 continue
             out[lp.content_id] = lp
     return list(out.values())
+
+
+# ── 운영시간(오픈/마감·휴무요일) ─────────────────────────────────────────────
+# detailIntro2는 유형(contentTypeId)마다 시간/휴무 필드명이 다르다. (시간필드, 휴무필드).
+_HOURS_FIELDS = {
+    12: ("usetime", "restdate"),            # 관광지
+    14: ("usetimeculture", "restdateculture"),  # 문화시설
+    15: ("playtime", None),                 # 축제·공연·행사(행사 시간)
+    28: ("usetimeleports", "restdateleports"),  # 레포츠
+    38: ("opentime", "restdateshopping"),   # 쇼핑
+    39: ("opentimefood", "restdatefood"),   # 음식점
+}
+_TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
+_TAG_RE = re.compile(r"<[^>]+>")
+_WEEKDAYS = {"월": 0, "화": 1, "수": 2, "목": 3, "금": 4, "토": 5, "일": 6}
+# 특정 주차만 쉬는 표현(격주/첫째주 등)은 요일 단위로 환원하면 과도하게 막으므로 무시한다.
+_IRREGULAR_REST = ("첫째", "둘째", "셋째", "넷째", "다섯째", "마지막", "격주")
+_ALWAYS_OPEN = ("24시간", "24시", "상시", "연중무휴", "무휴", "연중", "365")
+
+
+@dataclass
+class Hours:
+    """관광지 1곳의 운영시간. 미상 필드는 None(=시간 제약 없음으로 취급)."""
+
+    open_hour: float | None = None      # 예: 9.5 = 09:30
+    close_hour: float | None = None     # 자정 넘김은 +24(예: 26.0 = 익일 02:00)
+    closed_weekdays: tuple[int, ...] = field(default_factory=tuple)  # 월0~일6
+
+
+def _to_hour(hm: tuple[str, str]) -> float:
+    return int(hm[0]) + int(hm[1]) / 60
+
+
+def _parse_hours(s: str | None) -> tuple[float | None, float | None]:
+    """운영시간 자유텍스트 → (open, close). 파싱 불가/미상이면 (None, None).
+
+    'HH:MM~HH:MM'류에서 앞의 두 시각을 오픈/마감으로 본다(여러 계절 표기는 첫 구간만).
+    '24시간'·'상시'·'연중무휴'만 있으면 (0,24). 시각이 하나뿐이면 오픈만 잡는다.
+    """
+    if not s:
+        return None, None
+    txt = _TAG_RE.sub(" ", str(s))
+    times = _TIME_RE.findall(txt)
+    if len(times) >= 2:
+        o, c = _to_hour(times[0]), _to_hour(times[1])
+        if c <= o:          # 자정 넘어가는 영업(예: 18:00~02:00) → 다음날로
+            c += 24.0
+        return o, c
+    if any(k in txt for k in _ALWAYS_OPEN):
+        return 0.0, 24.0
+    if len(times) == 1:
+        return _to_hour(times[0]), None
+    return None, None
+
+
+def _parse_closed_weekdays(s: str | None) -> tuple[int, ...]:
+    """휴무 자유텍스트 → 매주 쉬는 요일 집합(월0~일6). 연중무휴/불규칙 휴무는 빈 튜플."""
+    if not s:
+        return ()
+    txt = _TAG_RE.sub(" ", str(s))
+    if any(k in txt for k in _ALWAYS_OPEN) or "없" in txt:
+        return ()
+    if any(k in txt for k in _IRREGULAR_REST):  # 격주·첫째주 등은 요일 고정 휴무가 아님
+        return ()
+    days = set()
+    for ch, idx in _WEEKDAYS.items():
+        # '월요일' 또는 '매주 월'처럼 요일이 명시된 경우만(주소 등 오탐 방지)
+        if re.search(ch + r"\s*요일", txt) or re.search(r"매주[^가-힣]*" + ch, txt):
+            days.add(idx)
+    return tuple(sorted(days))
+
+
+def _fetch_hours_one(cid: str, ctype: int | None) -> tuple[str, Hours]:
+    tf, rf = _HOURS_FIELDS.get(ctype or 0, (None, None))
+    if not tf:
+        return cid, Hours()
+    try:
+        item = tour_api.detail_intro(content_id=cid, content_type_id=ctype)
+    except Exception as e:
+        logger.warning("TourAPI 운영시간(cid=%s, ct=%s) 실패: %s", cid, ctype, e)
+        return cid, Hours()
+    o, c = _parse_hours(item.get(tf))
+    wd = _parse_closed_weekdays(item.get(rf)) if rf else ()
+    return cid, Hours(o, c, wd)
+
+
+def fetch_hours(refs: list[tuple[str, int | None]]) -> dict[str, Hours]:
+    """(content_id, content_type_id) 목록의 운영시간을 detailIntro2로 병렬 조회.
+
+    content_id → Hours 매핑 반환. 조회 실패·미상은 빈 Hours(시간 제약 없음)로 둔다.
+    코스에 실제 배정될 후보만 넘겨 호출 수를 제한하는 것은 호출부(recommend_service) 책임.
+    """
+    if not refs:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(8, len(refs))) as ex:
+        results = ex.map(lambda r: _fetch_hours_one(r[0], r[1]), refs)
+    return dict(results)
 
 
 def _to_lodging(it: dict) -> Lodging | None:

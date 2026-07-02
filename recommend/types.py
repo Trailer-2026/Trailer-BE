@@ -21,6 +21,12 @@ class ScoredPlace:
     themes: list[Theme]
     score: float
     image_url: str | None = None
+    # 운영시간(오픈/마감·휴무요일) — recommend_service가 detailIntro2로 채워 넣는다.
+    # 순수 엔진(scheduling)이 하루 방문 시각을 배정할 때 쓴다. 미상이면 None(=시간 제약 없음).
+    content_type_id: int | None = None
+    open_hour: float | None = None      # 예: 9.5 = 09:30
+    close_hour: float | None = None     # 자정 넘김은 +24(예: 26.0 = 익일 02:00)
+    closed_weekdays: tuple[int, ...] = ()  # 매주 쉬는 요일(월0~일6)
 
 
 @dataclass

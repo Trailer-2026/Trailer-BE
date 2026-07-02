@@ -15,6 +15,13 @@ class StopoverPlace(BaseModel):
     lng: float = Field(..., description="경도")
     themes: list[Theme] = Field(..., description="테마 태그")
     image_url: str | None = Field(None, description="대표 이미지 URL")
+    open_time: str | None = Field(None, description="운영 시작 시각 (HH:MM). 미상이면 null")
+    close_time: str | None = Field(None, description="운영 종료 시각 (HH:MM). 미상이면 null")
+    visit_time: str | None = Field(
+        None,
+        description="경유 체류시간 내 예상 방문 시각 (HH:MM). 운영시간을 반영해 배정. "
+                    "체류시간 동안 문 여는 시간이 없으면 null",
+    )
 
 
 class RouteTrain(BaseModel):
