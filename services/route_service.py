@@ -93,7 +93,8 @@ def _start_dt(d: datetime, time: str | None) -> datetime:
         t = datetime.strptime(time or "09:00", "%H:%M").time()
     except ValueError:
         raise BadRequestException("시간은 HH:MM 형식이어야 합니다.")
-    return datetime.combine(d.date(), t)
+    # 사용자 희망 출발시각도 KST-aware로 맞춘다(열차 시각이 aware라 naive면 비교 시 TypeError).
+    return datetime.combine(d.date(), t, tzinfo=train_api.KST)
 
 
 def _station(db: Session, idx: int, label: str) -> Station:

@@ -82,7 +82,11 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
       Phase A: 시도(area) 스캔으로 거칠게 상위 N개 후보를 추린다(싸다).
       Phase B: 후보별 도착역 주변을 실측 스캔해 그 분포로 재점수화→top-3. 스캔 결과는 코스 생성에 재사용.
     """
-    origin_coords = (origin.latitude or 0.0, origin.longitude or 0.0)
+    # 자동 도착지 선택은 '출발역 → 후보 지역' 거리로 점수를 매기므로 출발역 좌표가 필수다.
+    # 좌표가 없으면 (0,0)으로 계산돼 거리가 전부 깨지니, 조용히 진행하지 말고 명확히 막는다.
+    if origin.latitude is None or origin.longitude is None:
+        raise BadRequestException("출발역 좌표가 없어 도착지 자동 추천을 할 수 없습니다.")
+    origin_coords = (origin.latitude, origin.longitude)
 
     # Phase A: 시도 스캔 → 역 매핑 → 철도필터(제주 등 제외) → 거친 순위 상위 N
     coarse = []
