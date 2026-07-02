@@ -103,7 +103,7 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
         ))
 
     shortlist = _dedup_by_station(destination.rank_and_diversify(
-        coarse, criteria.themes, criteria.party, origin_coords, k,
+        coarse, criteria.themes, criteria.party, origin_coords, k - 1,  # nights = 일수 - 1
         max_travel_minutes=criteria.max_travel_minutes, top_k=_SHORTLIST_N,
     ))
     if not shortlist:
@@ -125,7 +125,7 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
         ))
 
     final = destination.rank_and_diversify(
-        refined, criteria.themes, criteria.party, origin_coords, k,
+        refined, criteria.themes, criteria.party, origin_coords, k - 1,  # nights = 일수 - 1
         max_travel_minutes=criteria.max_travel_minutes, top_k=3,
     )
     if not final:
