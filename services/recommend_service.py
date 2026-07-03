@@ -31,6 +31,26 @@ _VIA_PLACES_N = 3
 # 당일치기 경유지 1곳당 근사 소요(h) — 순차 방문 시각 배치용. 역 근처 잠깐이라 목적지(2.5h)보다 짧게.
 # ponytail: 고정 1.0h 근사. 실측 이동 연동 시 상향 조정.
 _VIA_STAY_H = 1.0
+# 식당 contentTypeId(음식점). 경유 중엔 식사 1번만(밥 연속 방지).
+_MEAL_CT = 39
+
+
+def _pick_stopover(places: list, n: int) -> list:
+    """거리순 places에서 최대 n곳 선택하되 식당(ct=39)은 1곳만 포함한다.
+
+    경유는 잠깐(2~6h) 들르는 것이라 식사는 한 번이면 충분 — 가까운 식당이 여럿이어도 1곳만 넣어
+    '밥 먹고 또 밥'(경유 관광의 식당 연속)을 막고 나머지는 관광지로 채운다.
+    """
+    out, meals = [], 0
+    for p in places:
+        if len(out) >= n:
+            break
+        if p.content_type_id == _MEAL_CT:
+            if meals >= 1:
+                continue
+            meals += 1
+        out.append(p)
+    return out
 # 자동 경유(도착역만 지정)일 때 최종 노출할 경유 후보 수.
 _STOPOVER_N = 3
 
@@ -546,7 +566,7 @@ def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
             else:
                 places = tour_place.live_places(st.latitude, st.longitude, criteria.themes, radius_m=_VIA_RADIUS_M)
                 places.sort(key=lambda p: haversine(st.latitude, st.longitude, p.lat, p.lng))
-                top = places[:_VIA_PLACES_N]
+                top = _pick_stopover(places, _VIA_PLACES_N)
                 # 노출할 경유 관광지의 운영시간을 실시간(detailIntro2)으로 조회(역 근처 ≤3곳).
                 hours = tour_place.fetch_hours(
                     [(str(p.place_idx), p.content_type_id) for p in top if p.content_type_id]
