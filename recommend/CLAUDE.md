@@ -101,16 +101,18 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
   - 파싱은 자유텍스트라 방어적(`_parse_hours`/`_parse_closed_weekdays`): `HH:MM~HH:MM` 앞 구간, `24시간·상시·연중무휴`,
     `매주 X요일` 정도만 해석. 자정 넘김은 +24. 격주·첫째주 등 불규칙 휴무는 과제약을 피해 무시. **미상은 시간 제약 없음**으로 둔다.
 - **스케줄링 — `recommend/scheduling.py`** (순수 계산)
-  - `schedule_day`가 `day_windows`(그 날 관광 가능 시간대) 안에서 EDF(마감 이른 곳 먼저)로 방문 순서·시각을 정한다.
-    최고점부터 채우되 운영시간에 안 맞으면 **차순위 후보로 대체**(소프트). 그 날 휴무인 곳은 제외.
-  - 선택된 곳에 운영시간 정보가 하나도 없으면(전부 미상) 시간 제약이 없으므로 **기존 동선(NN+2-opt+원점복귀) 순서로 폴백** —
-    운영시간이 실제로 파악됐을 때만 시각 재정렬이 개입한다(무정보 지역의 동선 품질 보존).
+  - `schedule_day`는 **식사와 관광을 분리**한다: 식당(`content_type_id=39`)은 점심(~12시)·저녁(~18시)
+    앵커에만 배치(`_MEALS`, **하루 최대 2끼**), 관광지는 동선(NN+2-opt+원점복귀) 순으로 식사 점유 시간을
+    피해 2.5h 슬롯에 채운다. → "밥 먹고 또 밥"(식당 연속) 방지. 식당만 있어도(FOOD 단독) 2끼까지만.
+  - 운영시간은 소프트 제약: 개점 전이면 미루고, 마감/창을 넘으면 그 곳을 건너뛰고 **차순위로 대체**.
+    그 날 휴무인 곳은 제외. 채울 비식당이 부족하면 가짜 식사로 메우지 않고 그 시간을 비운다.
   - `ScoredPlace.open_hour/close_hour/closed_weekdays`(recommend_service가 채움)를 읽고, 결과 방문 시각은
     `RecommendedPlace.open_time/close_time/visit_time`(HH:MM)로 노출된다. 방문시각은 `reason`에도 표기.
-  - ⚠️ **시간 가정**: 모든 관광지를 `_HOURS_PER_PLACE`=**2.5h(150분) 균등 점유**로 본다(관람+이동을 이 슬롯에 뭉뚱그림).
+  - ⚠️ **시간 가정**: 관광지 1곳 `_HOURS_PER_PLACE`=**2.5h(150분) 점유**(관람+이동 뭉뚱그림).
     **관광지 간 실측 이동시간은 계산하지 않는다**(Haversine 거리는 방문 *순서* 최적화에만 쓰고 시각 배정엔 미반영).
-    그래서 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 2.5h 간격으로 찍힌다(예: 12:53→15:23→17:53).
-    이 상수는 **`recommend/scheduling.py`·`services/recommend_service.py` 두 곳에 동일**하며 `_day_caps`(방문 개수 상한)·
+    관광지 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 2.5h 간격으로 찍히되 **식사(식당) 구간은 건너뛴다**.
+    식당은 점심(~12)·저녁(~18) 앵커 시각에 배정된다(균등 그리드가 아님).
+    `_HOURS_PER_PLACE`는 **`recommend/scheduling.py`·`services/recommend_service.py` 두 곳에 동일**하며 `_day_caps`(방문 개수 상한)·
     `_day_windows`(시각 배정)가 함께 쓰므로 바꿀 땐 둘 다 맞춘다. 실측 이동시간 연동은 추후.
 
 ## 경유역 관광지 (via / stopover)
