@@ -510,9 +510,13 @@ def _assign_lodgings(courses: list[Course], memo: dict | None = None, fallback=N
             c = _day_end_coords(day)
             if c is None:
                 # 관광 없는 날: 전날 숙소 유지, 아직 없으면(첫날 늦은 도착 등) 도착역 근처로 새로 잡음.
+                # 숙소를 실제로 찾았을 때만 커서를 갱신한다(못 찾으면 cur_end를 오염시키지 않아
+                # 다음날(관광 있는 날) 숙소 배정이 막히지 않게).
                 if cur_lodging is None and fallback is not None:
-                    cur_lodging = near(fallback)
-                    cur_end = fallback
+                    lodg = near(fallback)
+                    if lodg is not None:
+                        cur_lodging = lodg
+                        cur_end = fallback
                 day.lodging = cur_lodging
                 continue
             moved = cur_end is None or haversine(cur_end[0], cur_end[1], c[0], c[1]) > _LODGING_MOVE_KM
