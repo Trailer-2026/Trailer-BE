@@ -200,6 +200,8 @@ def _parse_closed_weekdays(s: str | None) -> tuple[int, ...]:
     if any(k in txt for k in _IRREGULAR_REST):  # 격주·첫째주 등은 요일 고정 휴무가 아님
         return ()
     days = set()
+    if "주말" in txt:  # 실데이터상 '주말/공휴일' 휴무가 흔함(주로 문화시설) → 토·일
+        days.update((5, 6))
     for ch, idx in _WEEKDAYS.items():
         # '월요일' 또는 '매주 월'처럼 요일이 명시된 경우만(주소 등 오탐 방지)
         if re.search(ch + r"\s*요일", txt) or re.search(r"매주[^가-힣]*" + ch, txt):
@@ -383,3 +385,33 @@ def _kmeans_geo(pts: list, k: int, iters: int = 12) -> list[list]:
             break
         centers = new
     return groups
+
+
+def _selfcheck() -> None:
+    """운영시간 파서 셀프체크 — 실데이터(TourAPI detailIntro2)에서 관찰된 케이스로 회귀 방지.
+
+    실행: python -m utils.tour_place  (터미널에서 assert 통과 시 조용히 종료).
+    """
+    # 시각: HH:MM 계열은 잡고, '점포별 상이' 등 고정시간 없는 건 (None,None)이 정답.
+    assert _parse_hours("09:00~18:00") == (9.0, 18.0)
+    assert _parse_hours("<b>매일</b> 09:00 ~ 18:00") == (9.0, 18.0)
+    assert _parse_hours("하절기 09:00~19:00 / 동절기 09:00~18:00") == (9.0, 19.0)
+    assert _parse_hours("18:00~02:00") == (18.0, 26.0)   # 자정 넘김 +24
+    assert _parse_hours("상시개방") == (0.0, 24.0)
+    assert _parse_hours("점포별 상이") == (None, None)   # 고정시간 없음 → 제약 없음
+    assert _parse_hours("") == (None, None)
+
+    # 휴무요일: '주말'→토·일(이번 보강), '매주 X요일'/'X요일'은 잡고,
+    #           연중무휴·불규칙(첫째주 등)·공휴일전용은 빈 튜플(과제약 회피).
+    assert _parse_closed_weekdays("주말 / 공휴일") == (5, 6)
+    assert _parse_closed_weekdays("매주 주말 / 법정공휴일") == (5, 6)
+    assert _parse_closed_weekdays("매주 월요일") == (0,)
+    assert _parse_closed_weekdays("월요일 휴무") == (0,)
+    assert _parse_closed_weekdays("연중무휴") == ()
+    assert _parse_closed_weekdays("매월 첫째 주 월요일") == ()   # 불규칙(월단위) → 무시
+    assert _parse_closed_weekdays("설·추석 당일") == ()          # 공휴일 전용 → 요일휴무 아님
+    print("tour_place selfcheck OK")
+
+
+if __name__ == "__main__":
+    _selfcheck()

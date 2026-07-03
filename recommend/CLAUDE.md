@@ -61,7 +61,7 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 - **지정**: 그 역 좌표를 `origin`으로 `build_courses` → 코스 A/B/C(단일 도착지).
 - **미지정**: **2단계 점수화**로 순위·도착역·코스를 모두 *도착역 주변* 기준으로 일치시킨다.
   - **Phase A (거친 선별)**: `scan_area_profiles`(시도별 테마분포 라이브 스캔)는 큰 도를 **지리적 부분권(해안/내륙 등)으로 분리**해 각각 후보로 낸다(경북 동부해안→포항, 내륙→영천처럼). 각 후보를 `nearest_major`로 도착역에 매핑 → `rank_and_diversify(top_k=_SHORTLIST_N)`로 상위 N(기본 5, 권역 다양성)개를 추린다. 같은 본부는 점수 높은 부분권 하나만 살아남아(해안권이 내륙권을 이긴다) 해안 도시가 후보에서 누락되지 않는다.
-  - **Phase B (정밀 재점수)**: 후보별 **도착역 주변을 실측 스캔**(`tour_place.live_places`)해 그 분포로 `AreaProfile`을 다시 만들어 `rank_and_diversify(top_k=3)`로 최종 top-3. 이 스캔 결과를 **코스 생성에 재사용**(`_build_courses_from`)하므로 추가 호출은 +2회 수준. 코스 앵커는 **도착역 좌표**다.
+  - **Phase B (정밀 재점수)**: 후보별 **도착역 주변을 실측 스캔**(`tour_place.live_places`)해 그 분포로 `AreaProfile`을 다시 만들어 `rank_and_diversify(top_k=3)`로 최종 top-3. 이 스캔 결과를 **여정 생성에 재사용**(`_itineraries_from`)하므로 추가 호출은 +2회 수준. 코스 앵커는 **도착역 좌표**다.
   - 효과: 시도 평균이 아닌 *역 주변 실측*으로 최종 순위를 매겨, "나주 도착인데 일정은 44km 떨어진 보성"처럼 도착역과 코스가 어긋나던 문제를 없앤다. 내륙역은 주변 실측이 약하면 자연히 밀린다.
   - ⚠️ **철도 도달성**: area 중심과 매핑된 도착역의 거리가 `MAX_STATION_GAP_KM`를 넘으면(바다 건너 제주 등) Phase A에서 제외한다(기차 여행 플랫폼이라 철도 미연결 지역은 도착지가 될 수 없음).
 
@@ -94,21 +94,25 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 
 - **데이터 취득 — `services/recommend_service.py` + `utils/tour_place.py`** (네트워크)
   - `locationBasedList2`엔 운영시간이 없다. `detailIntro2`(콘텐츠타입별 상세)에서만 나온다.
-  - `_attach_hours`가 **코스에 실제 배정될 상위 후보(`pipeline.max_working(k)`개, ≈일수×9)에 한해**
+  - `_attach_hours`가 **코스에 실제 배정될 후보(`pipeline.working_set(scored, themes, k)`, ≈일수×9)에 한해**
     `tour_place.fetch_hours`(detailIntro2 병렬)로 운영시간을 채운다. 장소당 1콜이라 코스 후보로만 제한(quota·속도 보호).
+    조회 대상은 반드시 `build_courses`와 **같은 `working_set`**이어야 한다(다중 테마 시 테마 쿼터로 원점수 상위 N개와
+    달라져, `scored[:max_working]`로 조회하면 차순위 후보가 미조회인 채 코스에 섞인다).
   - 파싱은 자유텍스트라 방어적(`_parse_hours`/`_parse_closed_weekdays`): `HH:MM~HH:MM` 앞 구간, `24시간·상시·연중무휴`,
     `매주 X요일` 정도만 해석. 자정 넘김은 +24. 격주·첫째주 등 불규칙 휴무는 과제약을 피해 무시. **미상은 시간 제약 없음**으로 둔다.
 - **스케줄링 — `recommend/scheduling.py`** (순수 계산)
-  - `schedule_day`가 `day_windows`(그 날 관광 가능 시간대) 안에서 EDF(마감 이른 곳 먼저)로 방문 순서·시각을 정한다.
-    최고점부터 채우되 운영시간에 안 맞으면 **차순위 후보로 대체**(소프트). 그 날 휴무인 곳은 제외.
-  - 선택된 곳에 운영시간 정보가 하나도 없으면(전부 미상) 시간 제약이 없으므로 **기존 동선(NN+2-opt+원점복귀) 순서로 폴백** —
-    운영시간이 실제로 파악됐을 때만 시각 재정렬이 개입한다(무정보 지역의 동선 품질 보존).
+  - `schedule_day`는 **식사와 관광을 분리**한다: 식당(`content_type_id=39`)은 점심(~12시)·저녁(~18시)
+    앵커에만 배치(`_MEALS`, **하루 최대 2끼**), 관광지는 동선(NN+2-opt+원점복귀) 순으로 식사 점유 시간을
+    피해 2.5h 슬롯에 채운다. → "밥 먹고 또 밥"(식당 연속) 방지. 식당만 있어도(FOOD 단독) 2끼까지만.
+  - 운영시간은 소프트 제약: 개점 전이면 미루고, 마감/창을 넘으면 그 곳을 건너뛰고 **차순위로 대체**.
+    그 날 휴무인 곳은 제외. 채울 비식당이 부족하면 가짜 식사로 메우지 않고 그 시간을 비운다.
   - `ScoredPlace.open_hour/close_hour/closed_weekdays`(recommend_service가 채움)를 읽고, 결과 방문 시각은
     `RecommendedPlace.open_time/close_time/visit_time`(HH:MM)로 노출된다. 방문시각은 `reason`에도 표기.
-  - ⚠️ **시간 가정**: 모든 관광지를 `_HOURS_PER_PLACE`=**2.5h(150분) 균등 점유**로 본다(관람+이동을 이 슬롯에 뭉뚱그림).
+  - ⚠️ **시간 가정**: 관광지 1곳 `_HOURS_PER_PLACE`=**2.5h(150분) 점유**(관람+이동 뭉뚱그림).
     **관광지 간 실측 이동시간은 계산하지 않는다**(Haversine 거리는 방문 *순서* 최적화에만 쓰고 시각 배정엔 미반영).
-    그래서 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 2.5h 간격으로 찍힌다(예: 12:53→15:23→17:53).
-    이 상수는 **`recommend/scheduling.py`·`services/recommend_service.py` 두 곳에 동일**하며 `_day_caps`(방문 개수 상한)·
+    관광지 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 2.5h 간격으로 찍히되 **식사(식당) 구간은 건너뛴다**.
+    식당은 점심(~12)·저녁(~18) 앵커 시각에 배정된다(균등 그리드가 아님).
+    `_HOURS_PER_PLACE`는 **`recommend/scheduling.py`·`services/recommend_service.py` 두 곳에 동일**하며 `_day_caps`(방문 개수 상한)·
     `_day_windows`(시각 배정)가 함께 쓰므로 바꿀 땐 둘 다 맞춘다. 실측 이동시간 연동은 추후.
 
 ## 경유역 관광지 (via / stopover)
@@ -157,60 +161,36 @@ CommonResponse
         ├─ score?: float            // AI자동일 때만 값, 지정이면 null
         ├─ note?: str
         │
-        ├─ routes[]: RouteCandidate           ◀ 기차 경로 (코스와 공유)
-        │  ├─ route_type: str       // "직통" | "경유"
-        │  ├─ path: str             // "서울역→대전역→부산역"
-        |  ├─ via_station_idx?: int // 경유역 station_idx, 직통이면 null
-        │  ├─ stay_minutes?: int    // 경유 체류(분), 직통이면 null
-        │  ├─ total_travel_minutes: int   // 순수 기차이동(체류 제외)
-        │  ├─ total_fare?: int
-        │  ├─ note?: str
-        │  ├─ go_trains[]: RouteTrain      // 가는편(경유는 2편)
-        │  │  ├─ train_no: str
-        │  │  ├─ grade: str         // KTX / ITX-새마을 / 무궁화호
-        │  │  ├─ dep_station: str
-        │  │  ├─ arr_station: str
-        │  │  ├─ dep_time: datetime
-        │  │  ├─ arr_time: datetime
-        │  │  ├─ duration_minutes: int
-        │  │  └─ fare?: int
-        │  ├─ back_trains[]: RouteTrain    // 오는편 (구조 동일)
-        │  └─ stopover_places[]: StopoverPlace   ◀ 지정 경유역 근처만 채워짐 (유저가 경유역 명시했을 때 경유역 근처에 놀 거 추천하는 거)
-        │     ├─ place_idx: int
-        │     ├─ name: str
-        │     ├─ region?: str
-        │     ├─ lat / lng: float
-        │     ├─ themes[]: Theme
-        │     ├─ image_url?: str
-        │     ├─ open_time?: str   // 운영 시작 "HH:MM" (미상 null)
-        │     ├─ close_time?: str  // 운영 종료 "HH:MM" (미상 null)
-        │     └─ visit_time?: str  // 경유 체류시간 내 예상 방문 시각 "HH:MM". 체류 중 개점 구간 없으면 null (방향=가는편/오는편마다 체류 시간대가 달라 경로별 계산)
-        │
-        └─ courses[]: Course                  ◀ 코스 A/B/C (경로와 독립)
-           ├─ label: str           // "A" / "B" / "C"
-           ├─ origin_station_idx: int
+        └─ itineraries[]: Itinerary           ◀ 경로별 통합 여정 (기차+관광+숙소 한 몸)
+           ├─ label: str           // 경로 표기 "서울→대전→부산"
+           ├─ route_type: str      // "직통" | "경유" | "현지"(기차 없음)
+           ├─ via_station_idx?: int
            ├─ total_preference_score: float
+           ├─ total_travel_minutes: int   // 순수 기차이동(체류 제외)
+           ├─ total_fare?: int
            ├─ is_round_trip_closed: bool
            ├─ note?: str
-           └─ days[]: DayPlan
-              ├─ day_no: int        // 1=Day1
-              ├─ date?: str         // YYYYMMDD
-              ├─ places[]: RecommendedPlace   // 방문 순서대로
-              │  ├─ place_idx: int
-              │  ├─ name: str
-              │  ├─ region?: str
-              │  ├─ lat / lng: float
-              │  ├─ themes[]: Theme
-              │  ├─ preference_score: float
-              │  ├─ open_time?: str   // 운영 시작 "HH:MM" (미상 null)
-              │  ├─ close_time?: str  // 운영 종료 "HH:MM" (미상 null)
-              │  ├─ visit_time?: str  // 예상 방문 시각 "HH:MM" (운영시간 반영 배정)
-              │  └─ reason: str     // "#미식 취향과 일치 (선호도 0.71) · 15:00 방문 (운영 10:00~18:00)"
-              └─ lodging?: Lodging  // 숙소, 마지막 날(귀가일)은 null
-                 ├─ name: str
-                 ├─ lodging_type?: str
-                 ├─ region?: str
-                 ├─ lat / lng: float
-                 ├─ tel?: str
-                 └─ image_url?: str
+           └─ segments[]: ItinerarySegment   // 시간순: 가는기차→(경유관광)→목적지관광·숙소→오는기차
+              ├─ kind: str         // "train" | "visit" | "lodging"
+              ├─ day_no: int       // 1=Day1
+              ├─ start_time?: datetime   // 열차 출발 / 방문 시작 (KST)
+              ├─ end_time?: datetime     // 열차 도착 / 방문 종료 (KST)
+              ├─ train?: RouteTrain      // kind=train (train_no/grade/dep·arr_station/dep·arr_time/duration_minutes/fare)
+              ├─ place?: RecommendedPlace  // kind=visit (경유역·목적지 공통. place_idx/name/lat·lng/themes/
+              │                            //   preference_score/reason/image_url/open·close·visit_time)
+              └─ lodging?: Lodging       // kind=lodging (name/lodging_type/region/lat·lng/tel/image_url)
 ```
+
+> 내부 엔진 타입(응답 비노출): `RouteCandidate`·`Course`/`DayPlan`·`StopoverPlace`. recommend.itinerary.build_itinerary가
+> (경로, 코스)를 시간순 segments로 병합한다. 경유역 관광은 두 기차 다리 사이 visit 세그먼트로 편입.
+> **코스는 경로별로 재계산**(`_itineraries_from`→`_course_for_route`): 장소조회·운영시간은 목적지당 1회
+> (`_prepare_scored`), `build_courses`는 경로마다 그 경로의 도착/출발 시각(`_day_caps`/`_day_windows`)에 맞춰
+> 다시 돌린다 → 경유의 늦은 도착이 첫날 관광량에 반영된다. 숙소 조회는 경로 간 memo 공유로 중복 방지.
+>
+> **경유역 1박(날짜 넘는 경유)**: 여행 3일 이상이면 `_fetch_routes`가 숙박 경유 변형도 요청한다
+> (route_service `via_nights=1`, 가는편/오는편 양방향, 지정·자동 공통). 숙박 경로는 `_course_for_overnight`가
+> **두 도시(경유·목적지)로 코스를 나눠** 만든다: 전이 열차 날짜로 일수를 가르고, 먼저 묵는 도시는
+> 도착일만 제약(자고 다음날 이동), 나중 도시는 도착~귀가 표준. day_no·날짜를 1..k로 재부여해 병합하고
+> 좌표 기반 숙소 배정으로 도시별 숙소가 붙는다. 조립기(`itinerary.build_itinerary`)는 세그먼트를
+> **시각순 정렬**해 leg2(경유→목적지)가 경유 관광 뒤·목적지 관광 앞에 자연히 놓인다. 숙박 경유는
+> stopover_places를 안 쓰고(관광이 코스 날에 들어감) `_enrich_stopovers`가 top-N 선별에만 참여시킨다.

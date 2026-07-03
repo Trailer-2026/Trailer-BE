@@ -23,6 +23,17 @@ def max_working(k: int) -> int:
     return _NUM_COURSES * k * _MAX_PER_DAY
 
 
+def working_set(scored: list[ScoredPlace], themes: list[Theme] | None, k: int) -> list[ScoredPlace]:
+    """코스 조립에 실제로 쓰이는 상위 후보 집합(작업셋).
+
+    운영시간 조회(recommend_service._attach_hours)와 코스 생성(build_courses)이 **반드시
+    같은 집합**을 쓰도록 하는 단일 진입점. 다중 테마면 테마 쿼터 때문에 원점수 상위 N개와
+    달라질 수 있어(차순위가 코스에 섞임), 조회 대상을 이 함수로 통일해야 미조회 후보가 코스에
+    들어가는 것을 막는다.
+    """
+    return _select_working(scored, set(themes or []), max_working(k))
+
+
 def build_courses(
     scored: list[ScoredPlace],
     criteria: SearchCriteria,
@@ -44,8 +55,9 @@ def build_courses(
 
     selected = set(criteria.themes or [])
 
-    # 코스 3개 × 일수 × 하루 3곳 만큼의 상위 후보를 작업셋으로 (다중 테마면 테마별 균형)
-    working = _select_working(scored, selected, _NUM_COURSES * k * _MAX_PER_DAY)
+    # 코스 3개 × 일수 × 하루 3곳 만큼의 상위 후보를 작업셋으로 (다중 테마면 테마별 균형).
+    # _attach_hours(운영시간 조회)와 동일 집합을 보장하려 working_set 단일 진입점 사용.
+    working = working_set(scored, criteria.themes, k)
     # 점수 랭크 인터리브 → 서로 다른 3개 버킷 (A: 0,3,6.. / B: 1,4,7.. / C: 2,5,8..)
     # 슬라이스 스텝(::3)이라 한 장소는 정확히 한 버킷에만 들어가 코스 간 겹침 0.
     # 각 코스가 상위권을 번갈아 나눠 가져 셋 다 품질이 고르게 유지된다(상위권 한 코스 독식 방지).
@@ -189,6 +201,7 @@ def _to_reco(
         themes=p.themes,
         preference_score=round(p.score, 4),
         reason=_reason(p, selected, arrive_hour),
+        image_url=p.image_url,
         open_time=_hhmm(p.open_hour),
         close_time=_hhmm(p.close_hour),
         visit_time=_hhmm(arrive_hour),
