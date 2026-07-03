@@ -282,7 +282,7 @@ def _course_for_route(scored: list, criteria: SearchCriteria, k: int, anchor, ro
     if not courses:
         return None
     best = max(courses, key=lambda c: c.total_preference_score)
-    _assign_lodgings([best], memo)
+    _assign_lodgings([best], memo, fallback=anchor)  # 관광 없는 날도 도착지 근처 숙소 확보
     return best
 
 
@@ -378,7 +378,8 @@ def _course_for_overnight(db, dest_scored, criteria, k, dest_anchor, route, memo
         is_round_trip_closed=bool(criteria.round_trip),
         note=None,
     )
-    _assign_lodgings([merged], memo)  # 좌표 기반 → 경유일=경유숙소, 목적지일=목적지숙소, 마지막날=없음
+    # 좌표 기반 → 경유일=경유숙소, 목적지일=목적지숙소, 마지막날=없음. 관광 없는 날은 도착지 근처로.
+    _assign_lodgings([merged], memo, fallback=dest_anchor)
     return merged
 
 
@@ -461,13 +462,15 @@ def _day_windows(route, k: int) -> list[tuple[float, float]] | None:
     return _windows_between(arr, dep, k)
 
 
-def _assign_lodgings(courses: list[Course], memo: dict | None = None) -> None:
+def _assign_lodgings(courses: list[Course], memo: dict | None = None, fallback=None) -> None:
     """코스별로 그 날 '동선의 종점(마지막 방문지)' 근처 숙소를 실시간 조회해 그 날 밤 숙소로 배정.
 
     숙소는 하루가 끝나는 곳 근처여야 하므로 관광지 평균이 아니라 '마지막 방문지'를 기준으로 잡는다.
     연속 day 종점이 _LODGING_MOVE_KM 이내면 전날 숙소 유지, 그 이상(지역 이동)이면 새 숙소.
     마지막 날(귀가일)은 숙소 없음. 종점 좌표를 반올림 캐시해 중복 호출을 줄인다.
     memo를 넘기면 경로 간(같은 목적지의 여러 경로) 캐시를 공유해 중복 조회를 막는다.
+    fallback(도착지 좌표): 관광이 없는 날(늦은 도착 등)이라도 그 좌표 근처 숙소를 잡아
+    '밤에 도착했는데 잘 곳이 없는' 코스를 막는다(첫날 종점이 없으면 도착역 근처로).
     """
     if memo is None:
         memo = {}
@@ -488,6 +491,10 @@ def _assign_lodgings(courses: list[Course], memo: dict | None = None) -> None:
                 continue
             c = _day_end_coords(day)
             if c is None:
+                # 관광 없는 날: 전날 숙소 유지, 아직 없으면(첫날 늦은 도착 등) 도착역 근처로 새로 잡음.
+                if cur_lodging is None and fallback is not None:
+                    cur_lodging = near(fallback)
+                    cur_end = fallback
                 day.lodging = cur_lodging
                 continue
             moved = cur_end is None or haversine(cur_end[0], cur_end[1], c[0], c[1]) > _LODGING_MOVE_KM
