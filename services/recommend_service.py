@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from core.exceptions.custom import BadRequestException, NotFoundException
 from databases.daos import station_dao
-from recommend import destination, pipeline, scoring
+from recommend import destination, itinerary, pipeline, scoring
 from recommend.routing import haversine
 from schemas.recommend_schema import (
     Course,
@@ -78,8 +78,7 @@ def _recommend_fixed_dest(db, criteria, origin, k) -> RecommendResponse:
         destination_station_idx=dest.station_idx,
         destination_name=dest.station_name,
         score=None,
-        routes=routes,
-        courses=courses,
+        itineraries=_to_itineraries(routes, courses, criteria.go_date),
         note=note,
     )
     return RecommendResponse(auto_selected=False, destinations=[plan], note=None)
@@ -160,8 +159,7 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
             destination_station_idx=st.station_idx,
             destination_name=st.station_name,
             score=round(p.score, 4),
-            routes=routes,
-            courses=courses,
+            itineraries=_to_itineraries(routes, courses, criteria.go_date),
             note=rnote,
         ))
     return RecommendResponse(auto_selected=True, destinations=plans, note=None)
@@ -205,8 +203,7 @@ def _auto_fallback(db, criteria, origin, origin_coords, k) -> RecommendResponse:
         destination_station_idx=st.station_idx,
         destination_name=st.station_name,
         score=None,
-        routes=routes,
-        courses=courses,
+        itineraries=_to_itineraries(routes, courses, criteria.go_date),
         note=rnote or "테마 조건에 맞는 도착지 후보를 찾지 못해 인근 대도시를 추천했습니다.",
     )
     return RecommendResponse(auto_selected=True, destinations=[plan], note=None)
@@ -234,6 +231,18 @@ def _build_courses_from(places, criteria: SearchCriteria, k: int, anchor,
     courses = pipeline.build_courses(scored, criteria, k, anchor, first_cap, last_cap, day_windows)
     _assign_lodgings(courses)
     return courses
+
+
+def _to_itineraries(routes: list, courses: list, go_date: str) -> list:
+    """경로별 통합 여정 목록을 만든다. 대표 코스(최고 선호도 합)를 각 경로에 엮는다.
+
+    경로가 없으면(같은 역·조회 실패) 기차 없는 '현지 여행' 여정 하나(코스 있을 때).
+    코스가 없으면 각 경로를 기차만 있는 여정으로 낸다(경로 정보는 보존).
+    """
+    best = max(courses, key=lambda c: c.total_preference_score) if courses else None
+    if not routes:
+        return [itinerary.build_itinerary(None, best, go_date)] if best is not None else []
+    return [itinerary.build_itinerary(r, best, go_date) for r in routes]
 
 
 def _attach_hours(scored: list, criteria: SearchCriteria, k: int) -> None:

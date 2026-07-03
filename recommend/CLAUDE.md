@@ -159,60 +159,26 @@ CommonResponse
         ├─ score?: float            // AI자동일 때만 값, 지정이면 null
         ├─ note?: str
         │
-        ├─ routes[]: RouteCandidate           ◀ 기차 경로 (코스와 공유)
-        │  ├─ route_type: str       // "직통" | "경유"
-        │  ├─ path: str             // "서울역→대전역→부산역"
-        |  ├─ via_station_idx?: int // 경유역 station_idx, 직통이면 null
-        │  ├─ stay_minutes?: int    // 경유 체류(분), 직통이면 null
-        │  ├─ total_travel_minutes: int   // 순수 기차이동(체류 제외)
-        │  ├─ total_fare?: int
-        │  ├─ note?: str
-        │  ├─ go_trains[]: RouteTrain      // 가는편(경유는 2편)
-        │  │  ├─ train_no: str
-        │  │  ├─ grade: str         // KTX / ITX-새마을 / 무궁화호
-        │  │  ├─ dep_station: str
-        │  │  ├─ arr_station: str
-        │  │  ├─ dep_time: datetime
-        │  │  ├─ arr_time: datetime
-        │  │  ├─ duration_minutes: int
-        │  │  └─ fare?: int
-        │  ├─ back_trains[]: RouteTrain    // 오는편 (구조 동일)
-        │  └─ stopover_places[]: StopoverPlace   ◀ 지정 경유역 근처만 채워짐 (유저가 경유역 명시했을 때 경유역 근처에 놀 거 추천하는 거)
-        │     ├─ place_idx: int
-        │     ├─ name: str
-        │     ├─ region?: str
-        │     ├─ lat / lng: float
-        │     ├─ themes[]: Theme
-        │     ├─ image_url?: str
-        │     ├─ open_time?: str   // 운영 시작 "HH:MM" (미상 null)
-        │     ├─ close_time?: str  // 운영 종료 "HH:MM" (미상 null)
-        │     └─ visit_time?: str  // 경유 체류시간 내 예상 방문 시각 "HH:MM". 체류 중 개점 구간 없으면 null (방향=가는편/오는편마다 체류 시간대가 달라 경로별 계산)
-        │
-        └─ courses[]: Course                  ◀ 코스 A/B/C (경로와 독립)
-           ├─ label: str           // "A" / "B" / "C"
-           ├─ origin_station_idx: int
+        └─ itineraries[]: Itinerary           ◀ 경로별 통합 여정 (기차+관광+숙소 한 몸)
+           ├─ label: str           // 경로 표기 "서울→대전→부산"
+           ├─ route_type: str      // "직통" | "경유" | "현지"(기차 없음)
+           ├─ via_station_idx?: int
            ├─ total_preference_score: float
+           ├─ total_travel_minutes: int   // 순수 기차이동(체류 제외)
+           ├─ total_fare?: int
            ├─ is_round_trip_closed: bool
            ├─ note?: str
-           └─ days[]: DayPlan
-              ├─ day_no: int        // 1=Day1
-              ├─ date?: str         // YYYYMMDD
-              ├─ places[]: RecommendedPlace   // 방문 순서대로
-              │  ├─ place_idx: int
-              │  ├─ name: str
-              │  ├─ region?: str
-              │  ├─ lat / lng: float
-              │  ├─ themes[]: Theme
-              │  ├─ preference_score: float
-              │  ├─ open_time?: str   // 운영 시작 "HH:MM" (미상 null)
-              │  ├─ close_time?: str  // 운영 종료 "HH:MM" (미상 null)
-              │  ├─ visit_time?: str  // 예상 방문 시각 "HH:MM" (운영시간 반영 배정)
-              │  └─ reason: str     // "#미식 취향과 일치 (선호도 0.71) · 15:00 방문 (운영 10:00~18:00)"
-              └─ lodging?: Lodging  // 숙소, 마지막 날(귀가일)은 null
-                 ├─ name: str
-                 ├─ lodging_type?: str
-                 ├─ region?: str
-                 ├─ lat / lng: float
-                 ├─ tel?: str
-                 └─ image_url?: str
+           └─ segments[]: ItinerarySegment   // 시간순: 가는기차→(경유관광)→목적지관광·숙소→오는기차
+              ├─ kind: str         // "train" | "visit" | "lodging"
+              ├─ day_no: int       // 1=Day1
+              ├─ start_time?: datetime   // 열차 출발 / 방문 시작 (KST)
+              ├─ end_time?: datetime     // 열차 도착 / 방문 종료 (KST)
+              ├─ train?: RouteTrain      // kind=train (train_no/grade/dep·arr_station/dep·arr_time/duration_minutes/fare)
+              ├─ place?: RecommendedPlace  // kind=visit (경유역·목적지 공통. place_idx/name/lat·lng/themes/
+              │                            //   preference_score/reason/image_url/open·close·visit_time)
+              └─ lodging?: Lodging       // kind=lodging (name/lodging_type/region/lat·lng/tel/image_url)
 ```
+
+> 내부 엔진 타입(응답 비노출): `RouteCandidate`·`Course`/`DayPlan`·`StopoverPlace`. recommend.itinerary.build_itinerary가
+> (경로, 대표코스)를 시간순 segments로 병합한다. Phase 1은 대표 코스 1개를 각 경로에 그대로 엮음(코스는 routes[0] 시각 기준).
+> 경유역 관광은 두 기차 다리 사이 visit 세그먼트로 편입. **경로별 코스 재계산·경유역 1박은 Phase 2/3 예정.**

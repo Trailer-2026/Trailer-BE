@@ -201,6 +201,7 @@ def _to_reco(
         themes=p.themes,
         preference_score=round(p.score, 4),
         reason=_reason(p, selected, arrive_hour),
+        image_url=p.image_url,
         open_time=_hhmm(p.open_hour),
         close_time=_hhmm(p.close_hour),
         visit_time=_hhmm(arrive_hour),
