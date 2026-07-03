@@ -14,9 +14,8 @@ from utils import train_api
 
 logger = logging.getLogger(__name__)
 
-# 내일로패스 미적용(제외): SRT만. SRT는 코레일이 아닌 수서고속철도(SR) 운영이라 패스 불가.
-# KTX 계열은 횟수 제한(좌석 1일 1회·총 2회)은 있으나 '탑승 가능'하므로 결과에 포함한다.
-# (횟수 제한은 여정 전체 단위 규칙이라 단일 구간 검색에서는 강제하지 않는다.)
+# 내일로패스 미적용(제외): SRT만. 내일로는 KTX 좌석 + 일반열차(ITX-마음/청춘/새마을·새마을·무궁화·
+# 누리로) 좌석·입석·자유석까지 커버하므로 KTX 계열도 포함한다. SRT는 코레일이 아닌 SR 운영이라 불가.
 _NAIL_EXCLUDED_PREFIX = ("SRT",)
 
 
@@ -45,7 +44,7 @@ def search_trains(
     """dep_idx→arr_idx 구간의 date(YYYYMMDD) 운행 열차를 조회한다.
 
     time(HH:MM)을 주면 그 시각 이후 출발 열차만 반환한다. 결과 없음은 빈 배열.
-    nail_pass=True면 내일로패스 적용 열차(KTX 계열·SRT 제외)만 반환한다.
+    nail_pass=True면 내일로패스 적용 열차(SRT만 제외, KTX 계열 포함)만 반환한다.
     외부 열차정보 API 실패는 502로 변환한다.
     """
     try:

@@ -34,8 +34,8 @@ from utils import train_api
 
 logger = logging.getLogger(__name__)
 
-# 내일로패스 미적용(제외): SRT만 (수서고속철도 운영, 코레일 아님). train_service와 동일 정책.
-# KTX 계열은 횟수 제한은 있으나 탑승 가능하므로 포함한다.
+# 내일로패스 미적용(제외): SRT만. 내일로는 KTX 좌석 + 일반열차(ITX-마음/청춘/새마을·새마을·무궁화·
+# 누리로) 좌석·입석·자유석까지 커버하므로 KTX 계열도 포함한다. SRT는 코레일이 아닌 SR 운영이라 불가.
 _NAIL_EXCLUDED_PREFIX = ("SRT",)
 
 
