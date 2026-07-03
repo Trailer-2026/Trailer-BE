@@ -4,6 +4,25 @@ const FULL_ROUTE_SOURCE_ID = "route-planned";
 const PROGRESS_ROUTE_SOURCE_ID = "route-progress";
 const CURRENT_SOURCE_ID = "current-position";
 const TRAIN_ICON_ID = "train-icon";
+const TRAIN_MODEL_ID = "train-model";
+// train_color.glb: assets/Little train (OBJ+MTL) 를 텍스처 포함 GLB 로 변환한
+// 컬러 모델 (길이 1.899 로 기존 규격과 동일). train_fixed.glb 는 원본
+// train.glb 에 법선/재질을 보정한 무채색 폴백 (Mapbox 는 법선 없는 GLB 를
+// 렌더링하지 못한다). 앞에서부터 로드에 성공한 파일을 사용.
+const TRAIN_MODEL_URLS = [
+  "./assets/train_color.glb",
+  "./assets/train_fixed.glb",
+  "./assets/train.glb"
+];
+const TRAIN_MODEL_LAYER_ID = "current-position-train-model";
+// 줌이 1 내려갈 때마다 스케일을 2배로 키워 화면상 크기를 일정하게 유지한다.
+const TRAIN_MODEL_REFERENCE_ZOOM = 15.5;
+// 기준 줌(15.5)에서의 모델 배율. train.glb 원본이 1.9m 길이라 75배 ≈ 143m.
+const TRAIN_MODEL_BASE_SCALE = 75;
+// 모델 기수(기관차 굴뚝 쪽) 방향 보정치. rot 0 에서 기수가 서쪽(270°)을 보고,
+// model-rotation 의 +z 는 위에서 봤을 때 시계방향(나침반 방위와 동일)이라
+// 기수를 bearing 으로 돌리려면 z = bearing + 90.
+const TRAIN_MODEL_HEADING_OFFSET_DEG = 90;
 const MARKER_SOURCE_ID = "route-markers";
 const DESTINATION_LABEL_SOURCE_ID = "destination-label";
 const DEFAULT_RENDER_FPS = 30;
@@ -148,6 +167,7 @@ const mediaPoints = normalizeMediaPoints(
 
 let map = null;
 let renderReady = false;
+let trainModelActive = false;
 let routeCoordinates = [];
 let routeDistances = [];
 let trackDistances = [];
@@ -880,6 +900,80 @@ function addTrainIcon() {
   map.addImage(TRAIN_ICON_ID, imageData, { pixelRatio });
 }
 
+// Mapbox 내부 로더는 Fetch API 를 쓰는데 fetch 는 file:// 스킴을 지원하지
+// 않는다. 그래서 XHR(--allow-file-access-from-files 필요 — render_video.py)로
+// 직접 읽어 blob URL 로 변환해 넘긴다. fetch 는 blob: 은 읽을 수 있다.
+function loadAssetAsBlobUrl(url) {
+  return new Promise((resolve) => {
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", url);
+      xhr.responseType = "arraybuffer";
+      xhr.onload = () => {
+        const ok =
+          xhr.status === 200 ||
+          (xhr.status === 0 && xhr.response && xhr.response.byteLength > 0);
+        if (!ok) {
+          resolve(null);
+          return;
+        }
+        const blob = new Blob([xhr.response], { type: "model/gltf-binary" });
+        resolve(URL.createObjectURL(blob));
+      };
+      xhr.onerror = () => resolve(null);
+      xhr.send();
+    } catch (error) {
+      resolve(null);
+    }
+  });
+}
+
+// assets/train.glb 가 있으면 3D 모델을 등록한다. 없거나 실패하면 false 를
+// 반환하고 Canvas 기차 아이콘(symbol 레이어)으로 폴백한다.
+async function tryAddTrainModel() {
+  if (typeof map.addModel !== "function") {
+    console.warn("map.addModel unavailable; falling back to train icon.");
+    return false;
+  }
+  for (const url of TRAIN_MODEL_URLS) {
+    const blobUrl = await loadAssetAsBlobUrl(url);
+    if (!blobUrl) {
+      continue;
+    }
+    try {
+      map.addModel(TRAIN_MODEL_ID, blobUrl);
+      console.info(`[train] 3D model registered: ${url}`);
+      return true;
+    } catch (error) {
+      console.warn(`Train model registration failed (${url}): ${error.message}`);
+    }
+  }
+  console.warn("Train model unavailable; using train icon.");
+  return false;
+}
+
+function trainModelScaleForZoom(zoom) {
+  const clampedZoom = clamp(Number(zoom) || TRAIN_MODEL_REFERENCE_ZOOM, 0, 22);
+  return (
+    TRAIN_MODEL_BASE_SCALE * Math.pow(2, TRAIN_MODEL_REFERENCE_ZOOM - clampedZoom)
+  );
+}
+
+// 매 프레임 진행 방향(bearing, 북 기준 시계방향)과 줌에 맞춰 모델 회전/배율을
+// 갱신한다. model-rotation 의 +z 는 시계방향이라 bearing 과 같은 부호로 더한다.
+function updateTrainModel(bearingDeg, zoom) {
+  if (!trainModelActive || !map.getLayer(TRAIN_MODEL_LAYER_ID)) {
+    return;
+  }
+  const scale = trainModelScaleForZoom(zoom);
+  map.setPaintProperty(TRAIN_MODEL_LAYER_ID, "model-rotation", [
+    0,
+    0,
+    normalizeAngle(bearingDeg + TRAIN_MODEL_HEADING_OFFSET_DEG)
+  ]);
+  map.setPaintProperty(TRAIN_MODEL_LAYER_ID, "model-scale", [scale, scale, scale]);
+}
+
 function addRouteLayers() {
   map.addSource(FULL_ROUTE_SOURCE_ID, {
     type: "geojson",
@@ -1038,30 +1132,50 @@ function addRouteLayers() {
     }
   });
 
-  // 현재 위치 기차. 지도면에 눕혀(pitch-alignment: map) 진행 방향(bearing)으로
-  // 회전시켜 카메라가 기차 뒤를 따라가는 구도를 만든다.
-  map.addLayer({
-    id: "current-position-train",
-    type: "symbol",
-    source: CURRENT_SOURCE_ID,
-    layout: {
-      "icon-image": TRAIN_ICON_ID,
-      "icon-size": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        5, 0.3,
-        9, 0.55,
-        12, 0.75,
-        15.5, 1.0
-      ],
-      "icon-rotate": ["coalesce", ["get", "bearing"], 0],
-      "icon-rotation-alignment": "map",
-      "icon-pitch-alignment": "map",
-      "icon-allow-overlap": true,
-      "icon-ignore-placement": true
-    }
-  });
+  if (trainModelActive) {
+    // 현재 위치 3D 기차 모델. 회전/배율은 updateTrainModel() 이 프레임마다 갱신.
+    map.addLayer({
+      id: TRAIN_MODEL_LAYER_ID,
+      type: "model",
+      source: CURRENT_SOURCE_ID,
+      layout: {
+        "model-id": TRAIN_MODEL_ID
+      },
+      paint: {
+        "model-rotation": [0, 0, 0],
+        "model-scale": [
+          TRAIN_MODEL_BASE_SCALE,
+          TRAIN_MODEL_BASE_SCALE,
+          TRAIN_MODEL_BASE_SCALE
+        ]
+      }
+    });
+  } else {
+    // 폴백: Canvas 기차 아이콘. 지도면에 눕혀(pitch-alignment: map) 진행
+    // 방향(bearing)으로 회전시켜 카메라가 기차 뒤를 따라가는 구도를 만든다.
+    map.addLayer({
+      id: "current-position-train",
+      type: "symbol",
+      source: CURRENT_SOURCE_ID,
+      layout: {
+        "icon-image": TRAIN_ICON_ID,
+        "icon-size": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          5, 0.3,
+          9, 0.55,
+          12, 0.75,
+          15.5, 1.0
+        ],
+        "icon-rotate": ["coalesce", ["get", "bearing"], 0],
+        "icon-rotation-alignment": "map",
+        "icon-pitch-alignment": "map",
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true
+      }
+    });
+  }
 
   map.addLayer({
     id: "destination-label",
@@ -1204,12 +1318,14 @@ function applySceneForProgress(progress, useSmoothing) {
     PROGRESS_ROUTE_SOURCE_ID,
     makeLineString(progressRouteCoordinates(scene.routeFraction))
   );
+  const trainBearing = pointAlongRoute(scene.routeFraction).bearing;
   setSourceData(
     CURRENT_SOURCE_ID,
     makePoint(scene.currentCoord, {
-      bearing: pointAlongRoute(scene.routeFraction).bearing
+      bearing: trainBearing
     })
   );
+  updateTrainModel(trainBearing, scene.zoom);
   setSourceData(
     MARKER_SOURCE_ID,
     mediaMarkerFeatures(scene.labelOpacity > 0 ? finalTrackIndex : null)
@@ -1299,9 +1415,12 @@ function applyRouteSegment(
   setSourceData(MARKER_SOURCE_ID, mediaMarkerFeatures(null));
   setSourceData(DESTINATION_LABEL_SOURCE_ID, stopLabelFeature(endIndex, "", 0));
 
+  const cameraZoom = segmentCameraZoom(segmentKm, progress, settleStart, settleEnd);
+  updateTrainModel(point.bearing, cameraZoom);
+
   map.jumpTo({
     center,
-    zoom: segmentCameraZoom(segmentKm, progress, settleStart, settleEnd),
+    zoom: cameraZoom,
     // settleStart === false: start at cruise pitch (67) instead of the post-stop
     // 60→67 ramp, so departing a pause doesn't tilt.
     pitch: lerp(settleStart ? 60 : 67, 67, easeInOut(clamp(progress / 0.25, 0, 1))),
@@ -1343,6 +1462,8 @@ function applyStopPoint(trackIndex, name = "") {
   );
   setSourceData(MARKER_SOURCE_ID, mediaMarkerFeatures(index));
   setSourceData(DESTINATION_LABEL_SOURCE_ID, stopLabelFeature(index, label, 1));
+
+  updateTrainModel(point.bearing, 15.35);
 
   map.jumpTo({
     center: routePointCoord(routePoints[index]),
@@ -1443,6 +1564,8 @@ window.initializeMap = async function () {
   map = new mapboxgl.Map({
     container: "map",
     style: MAP_STYLE,
+    // globe projection 에서는 3D model 레이어가 아직 렌더링되지 않아 mercator 고정.
+    projection: "mercator",
     center: [127.7669, 36.35],
     zoom: 5.15,
     pitch: 28,
@@ -1457,7 +1580,10 @@ window.initializeMap = async function () {
   addTerrain();
   addAtmosphere();
   addBuildings();
-  addTrainIcon();
+  trainModelActive = await tryAddTrainModel();
+  if (!trainModelActive) {
+    addTrainIcon();
+  }
   addRouteLayers();
   renderReady = true;
   const idleStart = performance.now();

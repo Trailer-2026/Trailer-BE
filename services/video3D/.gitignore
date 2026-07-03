@@ -14,3 +14,8 @@ bgm/*.wav
 bgm/*.ogg
 bgm/*.flac
 !bgm/CREDITS.md
+
+# 3D 기차 디자인 소스 (로컬 변환용 대용량 원본 — convert_train_model.py 로 GLB 생성)
+assets/Little train/
+assets/lokomotiv/
+assets/train.glb

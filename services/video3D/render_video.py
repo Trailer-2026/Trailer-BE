@@ -33,6 +33,8 @@ PHOTO_PATH = ASSETS_DIR / "destination_photo.jpg"
 HTML_PATH = ROOT / "map.html"
 CHROMIUM_BASE_ARGS = [
     "--enable-webgl",
+    # file:// 페이지에서 assets/train.glb 같은 로컬 에셋을 XHR 로 읽기 위해 필요.
+    "--allow-file-access-from-files",
     "--disable-extensions",
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
