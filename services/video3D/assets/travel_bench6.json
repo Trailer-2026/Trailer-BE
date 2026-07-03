@@ -1,0 +1,16 @@
+{
+  "trackPoints": [
+    { "latitude": 37.5547, "longitude": 126.9706, "timestamp": "2026-06-01T09:00:00" },
+    { "latitude": 37.2659, "longitude": 127.0011, "timestamp": "2026-06-01T09:30:00" },
+    { "latitude": 36.3504, "longitude": 127.3845, "timestamp": "2026-06-01T10:20:00" },
+    { "latitude": 35.8714, "longitude": 128.6014, "timestamp": "2026-06-01T11:50:00" },
+    { "latitude": 35.5384, "longitude": 129.3114, "timestamp": "2026-06-01T12:40:00" },
+    { "latitude": 35.1151, "longitude": 129.0403, "timestamp": "2026-06-01T13:10:00" }
+  ],
+  "mediaPoints": [
+    { "trackIndex": 0, "name": "서울역", "photos": [] },
+    { "trackIndex": 2, "name": "대전역", "photos": [] },
+    { "trackIndex": 4, "name": "울산역", "photos": [] },
+    { "trackIndex": 5, "name": "부산역", "photos": [] }
+  ]
+}
