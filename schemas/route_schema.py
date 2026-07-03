@@ -43,6 +43,7 @@ class RouteCandidate(BaseModel):
     route_type: str = Field(..., description="직통 | 경유")
     path: str = Field(..., description="경로 (예: 서울→대전→부산)")
     via_station_idx: int | None = Field(None, description="경유역 station_idx. 직통이면 null")
+    via_nights: int = Field(0, description="경유역에서 묵는 박 수. 0=당일치기 경유(같은 날 2~6h 체류), 1+=경유역 숙박 후 다음날 이동")
     go_trains: list[RouteTrain] = Field(..., description="가는 편 탑승 열차(경유는 2편)")
     stay_minutes: int | None = Field(None, description="경유지 체류시간(분). 직통이면 null")
     back_trains: list[RouteTrain] = Field(..., description="오는 편 탑승 열차")

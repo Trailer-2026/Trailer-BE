@@ -48,6 +48,9 @@ MIN_STAY = timedelta(hours=2)
 MAX_STAY = timedelta(hours=6)
 MAX_DETOUR_RATIO = 1.4
 MAX_CANDIDATES = 6
+# 숙박 경유에서 '다음 이동 열차'를 몇 시 이후 것으로 잡을지(경유역 출발/귀가 다리 공통).
+# 체크아웃·아침 후 이동하는 현실적 시각. 너무 이르면(새벽 첫차) 비현실적이라 09:00 기준.
+_NEXT_DAY_START = "09:00"
 # 경유역은 출발·도착 양쪽에서 충분히 떨어져야 의미가 있다(서울→용산→타지역처럼 사실상 같은 도시인 역을 경유로 세지 않기 위함). 
 # 각 구간이 직선거리의 이 비율 이상, 그리고 최소 이 절대거리(km) 이상이어야 후보로 인정한다.
 MIN_LEG_RATIO = 0.2
@@ -330,6 +333,51 @@ def _stopover_return(dep, arr, via, back_date, back_start, go_picks, go_note, na
     return route
 
 
+def _stopover_overnight(dep, arr, via, go_date, nights, go_start, back_segs, back_note, nail_pass) -> RouteCandidate | None:
+    """가는편에 via 역에서 nights박 자고 다음날 목적지로 가는 '날짜 넘는' 경유 경로 1건.
+
+    leg1: 출발→via (go_date, 희망 출발시각 이후 최이른 편), leg2: via→도착 (go_date+nights,
+    _NEXT_DAY_START 이후 최이른 편 → 아침에 이동해 목적지 그 날을 확보). 당일치기 _stopover와 달리
+    2~6h 체류 제약이 없다(하룻밤 넘김). 두 다리 중 하나라도 못 찾으면 None.
+    """
+    date2 = (_parse_date(go_date) + timedelta(days=nights)).strftime("%Y%m%d")
+    leg1 = _earliest(_legs(dep.nat_code, via.nat_code, go_date, nail_pass), go_start)
+    if not leg1:
+        return None
+    leg2 = _earliest(_legs(via.nat_code, arr.nat_code, date2, nail_pass), _start_dt(_parse_date(date2), _NEXT_DAY_START))
+    if not leg2:
+        return None
+    stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
+    route = _build("경유", dep, via.station_name, arr, [leg1, leg2], stay, back_segs, back_note)
+    route.via_station_idx = via.station_idx
+    route.via_nights = nights
+    return route
+
+
+def _stopover_overnight_return(dep, arr, via, back_date, nights, go_picks, go_note, nail_pass) -> RouteCandidate | None:
+    """오는편에 via 역에서 nights박 자고 귀가하는 '날짜 넘는' 경유 경로 1건(_stopover_overnight의 대칭).
+
+    가는편은 직통/환승(go_picks 재사용). 오는편 leg1: 도착역→via (back_date-nights, 그 날 아침 이후
+    이동해 경유역서 관광·숙박), leg2: via→출발역 (back_date, _NEXT_DAY_START 이후 최이른 편).
+    귀가는 back_date로 고정돼 여행 창을 넘지 않는다(경유 1박이 마지막 밤을 대체). 못 찾으면 None.
+    """
+    if not go_picks:  # 가는편이 없으면 왕복 자체가 성립 안 함
+        return None
+    date1 = (_parse_date(back_date) - timedelta(days=nights)).strftime("%Y%m%d")
+    leg1 = _earliest(_legs(arr.nat_code, via.nat_code, date1, nail_pass), _start_dt(_parse_date(date1), _NEXT_DAY_START))
+    if not leg1:
+        return None
+    leg2 = _earliest(_legs(via.nat_code, dep.nat_code, back_date, nail_pass), _start_dt(_parse_date(back_date), _NEXT_DAY_START))
+    if not leg2:
+        return None
+    stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
+    back_segs = [_to_train(leg1), _to_train(leg2)]
+    route = _build("경유", dep, via.station_name, arr, go_picks, stay, back_segs, go_note, return_via=True)
+    route.via_station_idx = via.station_idx
+    route.via_nights = nights
+    return route
+
+
 def recommend(
     db: Session,
     dep_idx: int,
@@ -340,6 +388,7 @@ def recommend(
     back_time: str | None = None,
     nail_pass: bool = False,
     via_station_idx: int | None = None,
+    via_nights: int = 0,
 ) -> list[RouteCandidate]:
     """직통/환승/경유 왕복 경로 후보를 반환한다. 기본 왕복은 항상 첫 번째로 보장된다.
 
@@ -348,6 +397,9 @@ def recommend(
     (출발→지정역→도착)와 오는편 경유(도착→지정역→출발)를 둘 다 시도해 성립하는 편을 모두 낸다
     (자동 중간역 경유는 만들지 않음). 미지정이면 지리적 중간역을 자동 선정하고, 각 후보마다 가는편·오는편
     경유를 둘 다 만든다(최종 상위 N개 선별은 recommend_service 몫).
+    via_nights>=1이면 '날짜 넘는 경유'(경유역에서 nights박 자고 이동)로 제공한다(지정/자동 공통).
+    가는편(자고 목적지로)·오는편(목적지서 자러 갔다 귀가) 둘 다 시도해 성립분을 낸다. 이땐 당일치기
+    2~6h 경유는 만들지 않는다. nights가 여행 일수를 넘어 목적지에 머물 날이 없으면 경유를 생략하고 note로 안내.
     (출발·도착역과 같으면 무시, 조건에 맞는 열차가 없으면 경유 없이 main note로 안내.)
     """
     go = _parse_date(go_date)
@@ -356,6 +408,9 @@ def recommend(
         raise BadRequestException("오는날은 가는날 이후여야 합니다.")
     go_start = _start_dt(go, go_time)
     back_start = _start_dt(back, back_time)
+    # 경유역 숙박(날짜 넘는 경유) 가능 여부: nights박 자고 다음날 이동해도 목적지에 최소 하루가
+    # 남아야 한다(go+nights < back). 넘으면 숙박 경유는 생략(당일치기 경유로 폴백).
+    overnight = via_nights >= 1 and (go + timedelta(days=via_nights)).date() < back.date()
 
     dep = _station(db, dep_idx, "출발")
     arr = _station(db, arr_idx, "도착")
@@ -377,6 +432,17 @@ def recommend(
     stops = [] if via is not None else _candidate_stops(all_stations, dep, arr)
     prefetch_stops = stops + ([via] if via is not None else [])
     _prefetch_segments(dep, arr, groups, prefetch_stops, go_date, back_date)
+
+    # 숙박 경유는 날짜 넘는 구간이 있어 그 날짜들을 별도로 데운다(나머지 방향은 _prefetch_segments가 이미 warm).
+    #   가는편 leg2: 경유→도착 (go_date+nights) / 오는편 leg1: 도착→경유 (back_date-nights)
+    if overnight:
+        date2 = (go + timedelta(days=via_nights)).strftime("%Y%m%d")
+        date1 = (back - timedelta(days=via_nights)).strftime("%Y%m%d")
+        targets = [via] if via is not None else stops
+        extra = [(c.nat_code, arr.nat_code, date2) for c in targets]
+        extra += [(arr.nat_code, c.nat_code, date1) for c in targets]
+        with ThreadPoolExecutor(max_workers=max(1, min(16, len(extra)))) as ex:
+            list(ex.map(lambda p: _safe_fetch(*p), extra))
 
     # 오는편(공통): 도착→출발, 직통 or 환승
     back_picks, back_via, _ = _journey(arr, dep, back_date, back_start, groups, nail_pass)
@@ -402,9 +468,21 @@ def recommend(
     #    - 미지정 시: 지리적 중간역을 자동 선정(출발·도착에 붙은 역 제외)해 가는편·오는편 경유를 모두 제공.
     #      최종 상위 N개 선별은 '테마 관련도' 기준으로 recommend_service가 한다(여기선 지리·시각표만).
     if via is not None:
-        # 지정 경유: 가는편 경유 / 오는편 경유 둘 다 시도해, 성립하는 편을 모두 후보로 낸다
-        # (사용자가 '가는 길에' 또는 '오는 길에' 들르도록 선택 — 방향은 path·기차 시각으로 드러난다).
         routes = [main]
+        if overnight:
+            # 숙박 경유: 가는편(자고 목적지로)·오는편(목적지서 자러 갔다 귀가) 둘 다 시도해 성립분을 모두 낸다.
+            wp_go = _stopover_overnight(dep, arr, via, go_date, via_nights, go_start, back_segs, back_note, nail_pass)
+            if wp_go:
+                routes.append(wp_go)
+            wp_back = _stopover_overnight_return(dep, arr, via, back_date, via_nights, go_picks, go_note, nail_pass)
+            if wp_back:
+                routes.append(wp_back)
+            if len(routes) == 1:
+                miss = f"{via.station_name} {via_nights}박 경유는 맞는 열차가 없어 제외했습니다."
+                main.note = " / ".join(n for n in (main.note, miss) if n) or None
+            return routes
+        # 당일치기 지정 경유: 가는편 경유 / 오는편 경유 둘 다 시도해, 성립하는 편을 모두 후보로 낸다
+        # (사용자가 '가는 길에' 또는 '오는 길에' 들르도록 선택 — 방향은 path·기차 시각으로 드러난다).
         wp_go = _stopover(dep, arr, via, go_date, go_start, back_segs, back_note, nail_pass)
         if wp_go:
             routes.append(wp_go)
@@ -418,7 +496,16 @@ def recommend(
 
     stopovers = []
     for c in stops:
-        # 지정 경유와 동일하게 가는편·오는편 둘 다 후보로 낸다(최종 상위 N 선별은 recommend_service).
+        if overnight:
+            # 자동 숙박 경유: 각 중간역 후보로 가는편·오는편 nights박 경유를 만든다(상위 N 선별은 recommend_service).
+            wp_go = _stopover_overnight(dep, arr, c, go_date, via_nights, go_start, back_segs, back_note, nail_pass)
+            if wp_go:
+                stopovers.append(wp_go)
+            wp_back = _stopover_overnight_return(dep, arr, c, back_date, via_nights, go_picks, go_note, nail_pass)
+            if wp_back:
+                stopovers.append(wp_back)
+            continue
+        # 당일치기 자동 경유: 지정과 동일하게 가는편·오는편 둘 다 후보로 낸다.
         r_go = _stopover(dep, arr, c, go_date, go_start, back_segs, back_note, nail_pass)
         if r_go:
             stopovers.append(r_go)
