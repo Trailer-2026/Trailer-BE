@@ -63,6 +63,10 @@ def build_courses(
     # 각 코스가 상위권을 번갈아 나눠 가져 셋 다 품질이 고르게 유지된다(상위권 한 코스 독식 방지).
     buckets = [working[i::_NUM_COURSES] for i in range(_NUM_COURSES)]
 
+    # 중간 날이 식당만이라 2끼(2곳)에 그칠 때 보충할 비-식당 관광지 풀. working(운영시간
+    # 부착 작업셋)에서만 뽑아 hours 일관성을 유지한다. 코스 간 중복은 허용(관광지 희소).
+    attraction_pool = [p for p in working if p.content_type_id != scheduling._MEAL_CT]
+
     courses: list[Course] = []
     for label, bucket in zip(_LABELS, buckets):
         if not bucket:
@@ -73,7 +77,8 @@ def build_courses(
             continue
         # 하루 방문지 상한은 _assemble이 날짜별로 적용(첫날/마지막날은 열차 시각 기반).
         course = _assemble(
-            label, clusters, criteria, origin, selected, first_cap, last_cap, day_windows
+            label, clusters, criteria, origin, selected,
+            first_cap, last_cap, day_windows, attraction_pool,
         )
         if course.days:
             courses.append(course)
@@ -140,6 +145,7 @@ def _assemble(
     first_cap: int | None = None,
     last_cap: int | None = None,
     day_windows: list[tuple[float, float]] | None = None,
+    attraction_pool: list[ScoredPlace] | None = None,
 ) -> Course:
     """정해진 군집(Day)들을 하나의 Course로 조립한다.
 
@@ -148,6 +154,8 @@ def _assemble(
     구한 first_cap/last_cap으로 더 줄인다(오후 도착이면 덜, 오전 귀가면 거의 안 채움).
     day_windows(그 날 관광 가능 시간대)가 있으면 scheduling이 관광지 운영시간에 맞춰 순서를 정하고
     운영시간 밖인 곳은 차순위 후보로 대체한다. 운영시간 정보가 없는 날은 기존 동선(NN+2-opt) 순서.
+    attraction_pool(비-식당 관광지)이 있으면 중간 날이 식당만이라 2끼에 그칠 때 근처 관광지를
+    보충해 3곳까지 채운다(첫날/마지막날은 미적용).
     """
     ordered = _order_days(clusters, origin)
     go = _parse_ymd(criteria.go_date)
@@ -155,6 +163,10 @@ def _assemble(
 
     days: list[DayPlan] = []
     total_score = 0.0
+    used_in_course: set[int] = set()  # 이 코스에서 이미 배치된 place_idx(관광지 중복 보충 방지)
+    # 코스 전체 날의 '원래 클러스터 멤버' idx. 뒤 날이 소유한 관광지를 앞 날이 빌려가 중복되는 걸
+    # 막으려면 처리 순서와 무관하게 native 멤버 전부를 보충 풀에서 제외해야 한다.
+    native_ids = {p.place_idx for cl in ordered for p in cl.members}
     for idx, cl in enumerate(ordered):
         # 하루 상한: 기본 _MAX_PER_DAY, 첫날/마지막날만 열차 시각 기반 cap으로 축소.
         cap = _MAX_PER_DAY
@@ -167,9 +179,20 @@ def _assemble(
         weekday = (go + timedelta(days=idx)).weekday() if go else None
         # 클러스터 전체를 점수순으로 넘겨 운영시간에 안 맞는 곳을 차순위로 대체할 여지를 준다.
         candidates = sorted(cl.members, key=lambda p: p.score, reverse=True)
+        # 중간(풀타임) 날은 식당만이면 2끼로 끝나므로, 근처 미사용 비-식당 관광지를 후보에 보태
+        # 3번째 슬롯을 채울 여지를 준다. 없으면 그대로 2곳 유지(schedule_day가 실제 선별).
+        if 0 < idx < n - 1 and attraction_pool:
+            # 다른 날이 이미 소유(native)하거나 이미 배치된 관광지는 제외 → 코스 내 중복 방지.
+            extras = sorted(
+                (p for p in attraction_pool
+                 if p.place_idx not in used_in_course and p.place_idx not in native_ids),
+                key=lambda p: routing.haversine(p.lat, p.lng, *cl.centroid),
+            )
+            candidates = candidates + extras[:cap]
         scheduled = scheduling.schedule_day(
             candidates, cap, window, weekday, origin=origin, is_last=(idx == n - 1)
         )
+        used_in_course.update(p.place_idx for p, _ in scheduled)
         total_score += sum(p.score for p, _ in scheduled)
         days.append(
             DayPlan(
