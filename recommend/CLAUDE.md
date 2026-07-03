@@ -184,4 +184,11 @@ CommonResponse
 > **코스는 경로별로 재계산**(`_itineraries_from`→`_course_for_route`): 장소조회·운영시간은 목적지당 1회
 > (`_prepare_scored`), `build_courses`는 경로마다 그 경로의 도착/출발 시각(`_day_caps`/`_day_windows`)에 맞춰
 > 다시 돌린다 → 경유의 늦은 도착이 첫날 관광량에 반영된다. 숙소 조회는 경로 간 memo 공유로 중복 방지.
-> **경유역 1박(중간 도시 숙박)은 Phase 3 예정.**
+>
+> **경유역 1박(날짜 넘는 경유)**: 여행 3일 이상이면 `_fetch_routes`가 숙박 경유 변형도 요청한다
+> (route_service `via_nights=1`, 가는편/오는편 양방향, 지정·자동 공통). 숙박 경로는 `_course_for_overnight`가
+> **두 도시(경유·목적지)로 코스를 나눠** 만든다: 전이 열차 날짜로 일수를 가르고, 먼저 묵는 도시는
+> 도착일만 제약(자고 다음날 이동), 나중 도시는 도착~귀가 표준. day_no·날짜를 1..k로 재부여해 병합하고
+> 좌표 기반 숙소 배정으로 도시별 숙소가 붙는다. 조립기(`itinerary.build_itinerary`)는 세그먼트를
+> **시각순 정렬**해 leg2(경유→목적지)가 경유 관광 뒤·목적지 관광 앞에 자연히 놓인다. 숙박 경유는
+> stopover_places를 안 쓰고(관광이 코스 날에 들어감) `_enrich_stopovers`가 top-N 선별에만 참여시킨다.

@@ -28,6 +28,9 @@ _SHORTLIST_N = 5
 # 경유역 인근 관광지: '역 근처'로 제한할 조회 반경(m)과 노출 개수.
 _VIA_RADIUS_M = 3000
 _VIA_PLACES_N = 3
+# 당일치기 경유지 1곳당 근사 소요(h) — 순차 방문 시각 배치용. 역 근처 잠깐이라 목적지(2.5h)보다 짧게.
+# ponytail: 고정 1.0h 근사. 실측 이동 연동 시 상향 조정.
+_VIA_STAY_H = 1.0
 # 자동 경유(도착역만 지정)일 때 최종 노출할 경유 후보 수.
 _STOPOVER_N = 3
 
@@ -70,8 +73,8 @@ def _recommend_fixed_dest(db, criteria, origin, k) -> RecommendResponse:
         raise BadRequestException("도착역 좌표가 없어 추천을 생성할 수 없습니다.")
 
     # 경로별로 그 경로의 도착/출발 시각에 맞춘 코스를 엮어 여정을 만든다.
-    routes, note = _fetch_routes(db, origin, dest, criteria)
-    itineraries = _itineraries_at(criteria, k, (dest.latitude, dest.longitude), routes)
+    routes, note = _fetch_routes(db, origin, dest, criteria, k)
+    itineraries = _itineraries_at(db, criteria, k, (dest.latitude, dest.longitude), routes)
     if not _has_visits(itineraries):
         note = note or "조건에 맞는 추천지를 찾지 못했습니다(TourAPI 실시간 조회 결과 없음)."
     plan = DestinationPlan(
@@ -148,9 +151,9 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
     for p in final:
         st = p.station
         # 경로별로 그 경로의 도착/출발 시각에 맞춘 코스를 엮는다. Phase B 장소를 재사용(추가 조회 없음).
-        routes, rnote = _fetch_routes(db, origin, st, criteria)
+        routes, rnote = _fetch_routes(db, origin, st, criteria, k)
         itineraries = _itineraries_from(
-            place_cache[st.station_idx], criteria, k, (st.latitude, st.longitude), routes
+            db, place_cache[st.station_idx], criteria, k, (st.latitude, st.longitude), routes
         )
         plans.append(DestinationPlan(
             destination_station_idx=st.station_idx,
@@ -190,8 +193,8 @@ def _auto_fallback(db, criteria, origin, origin_coords, k) -> RecommendResponse:
             auto_selected=True, destinations=[],
             note="추천 가능한 도착지를 찾지 못했습니다.",
         )
-    routes, rnote = _fetch_routes(db, origin, st, criteria)
-    itineraries = _itineraries_at(criteria, k, (st.latitude, st.longitude), routes)
+    routes, rnote = _fetch_routes(db, origin, st, criteria, k)
+    itineraries = _itineraries_at(db, criteria, k, (st.latitude, st.longitude), routes)
     plan = DestinationPlan(
         destination_station_idx=st.station_idx,
         destination_name=st.station_name,
@@ -202,10 +205,10 @@ def _auto_fallback(db, criteria, origin, origin_coords, k) -> RecommendResponse:
     return RecommendResponse(auto_selected=True, destinations=[plan], note=None)
 
 
-def _itineraries_at(criteria: SearchCriteria, k: int, anchor, routes: list) -> list:
+def _itineraries_at(db, criteria: SearchCriteria, k: int, anchor, routes: list) -> list:
     """현지 기준점(anchor) 반경 추천지를 실시간 조회 후 경로별 여정 생성(지정/폴백용)."""
     places = tour_place.live_places(anchor[0], anchor[1], criteria.themes)
-    return _itineraries_from(places, criteria, k, anchor, routes)
+    return _itineraries_from(db, places, criteria, k, anchor, routes)
 
 
 def _has_visits(itineraries: list) -> bool:
@@ -213,25 +216,31 @@ def _has_visits(itineraries: list) -> bool:
     return any(s.kind == "visit" for it in itineraries for s in it.segments)
 
 
-def _itineraries_from(places, criteria: SearchCriteria, k: int, anchor, routes: list) -> list:
+def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, routes: list) -> list:
     """이미 받아둔 추천지(places)로 경로별 통합 여정을 만든다.
 
     점수화·운영시간 조회(네트워크)는 목적지당 한 번만 하고(_prepare_scored), build_courses는
     경로마다 그 경로의 도착/출발 시각(_day_caps/_day_windows)에 맞춰 새로 돌린다(경유는 늦은
-    도착이 첫날에 반영됨). 숙소 조회는 memo를 경로 간 공유해 중복 호출을 막는다.
+    도착이 첫날에 반영됨). 숙박 경유(via_nights>=1)는 두 도시로 나눈 _course_for_overnight로
+    코스를 만든다(경유역 추천지는 via_cache로 경유역당 1회 조회). 숙소 조회 memo는 경로 간 공유.
 
     경로가 없으면(같은 역·조회 실패) 기차 없는 '현지 여행' 여정 하나. 코스가 비면(추천지 없음)
     각 경로는 기차만 있는 여정으로 나온다(경로 정보 보존).
     """
     scored = _prepare_scored(places, criteria, k)
-    memo: dict = {}  # 숙소 조회 캐시(경로 간 공유) — 종점 좌표가 같으면 재사용
+    memo: dict = {}       # 숙소 조회 캐시(경로 간 공유) — 종점 좌표가 같으면 재사용
+    via_cache: dict = {}  # 경유역 scored 캐시(경유역당 1회 조회)
     if not routes:
         best = _course_for_route(scored, criteria, k, anchor, None, memo)
         return [itinerary.build_itinerary(None, best, criteria.go_date)] if best is not None else []
-    return [
-        itinerary.build_itinerary(r, _course_for_route(scored, criteria, k, anchor, r, memo), criteria.go_date)
-        for r in routes
-    ]
+    out = []
+    for r in routes:
+        if r.via_nights >= 1:  # 숙박 경유: 경유 도시 + 목적지 두 구간 코스
+            course = _course_for_overnight(db, scored, criteria, k, anchor, r, memo, via_cache)
+        else:
+            course = _course_for_route(scored, criteria, k, anchor, r, memo)
+        out.append(itinerary.build_itinerary(r, course, criteria.go_date))
+    return out
 
 
 def _prepare_scored(places, criteria: SearchCriteria, k: int) -> list:
@@ -476,8 +485,12 @@ def _day_end_coords(day) -> tuple[float, float] | None:
     return None
 
 
-def _fetch_routes(db: Session, origin, dest, criteria: SearchCriteria) -> tuple[list, str | None]:
-    """왕복 기차 경로를 붙인다. 같은 역이거나 조회 실패 시 빈 목록 + 안내."""
+def _fetch_routes(db: Session, origin, dest, criteria: SearchCriteria, k: int) -> tuple[list, str | None]:
+    """왕복 기차 경로를 붙인다. 같은 역이거나 조회 실패 시 빈 목록 + 안내.
+
+    당일치기 경유(via_nights=0)에 더해, 여행이 3일 이상이면(경유 1박 후 목적지에 최소 하루 남음)
+    숙박 경유(via_nights=1) 변형도 요청해 합친다. 사용자는 나온 여정 중에서 고른다.
+    """
     if dest.station_idx == origin.station_idx:
         return [], "출발지와 도착지가 같아 기차 구간이 없습니다(현지 여행)."
     try:
@@ -487,6 +500,17 @@ def _fetch_routes(db: Session, origin, dest, criteria: SearchCriteria) -> tuple[
             nail_pass=criteria.use_naeilpass,
             via_station_idx=criteria.via_station_idx,
         )
+        if k >= 3:  # 경유 1박 후 목적지에 최소 1박 남는 길이 → 숙박 경유 변형도 후보에 추가
+            try:
+                overnight = route_service.recommend(
+                    db, origin.station_idx, dest.station_idx,
+                    criteria.go_date, criteria.back_date, criteria.go_time, criteria.back_time,
+                    nail_pass=criteria.use_naeilpass,
+                    via_station_idx=criteria.via_station_idx, via_nights=1,
+                )
+                routes += [r for r in overnight if r.via_nights >= 1]  # main·직통 중복 제외, 숙박 경유만
+            except Exception as e:  # 숙박 경유 실패해도 당일치기·직통 경로는 유지
+                logger.warning("숙박 경유 조회 실패(기본 경로는 유지): %s", e)
         routes = _enrich_stopovers(db, routes, criteria)
         return routes, None
     except Exception as e:
@@ -534,16 +558,20 @@ def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
     scored = []  # (route, theme_score)
     for r in via_routes:
         score, recs = _scan(r.via_station_idx)
-        start_dt, end_dt = _via_window(r)  # 이 경로의 경유역 체류 시간대(방향에 따라 다름)
-        r.stopover_places = [
-            StopoverPlace(
-                place_idx=rec["place_idx"], name=rec["name"], region=rec["region"],
-                lat=rec["lat"], lng=rec["lng"], themes=rec["themes"], image_url=rec["image_url"],
-                open_time=rec["open_time"], close_time=rec["close_time"],
-                visit_time=_stopover_visit(start_dt, end_dt, rec["open_hour"], rec["close_hour"]),
-            )
-            for rec in recs
-        ]
+        # 숙박 경유(via_nights>=1)는 경유역 관광을 '코스 날'로 넣으므로 stopover_places를 붙이지 않는다.
+        # 당일치기 경유만 체류 시간대 안의 역 근처 방문지를 stopover_places로 노출한다.
+        if r.via_nights == 0:
+            start_dt, end_dt = _via_window(r)  # 이 경로의 경유역 체류 시간대(방향에 따라 다름)
+            visits = _stopover_visits(recs, start_dt, end_dt)  # 체류시간 안에서 순차 배치
+            r.stopover_places = [
+                StopoverPlace(
+                    place_idx=rec["place_idx"], name=rec["name"], region=rec["region"],
+                    lat=rec["lat"], lng=rec["lng"], themes=rec["themes"], image_url=rec["image_url"],
+                    open_time=rec["open_time"], close_time=rec["close_time"],
+                    visit_time=vt,
+                )
+                for rec, vt in zip(recs, visits)
+            ]
         scored.append((r, score))
 
     if criteria.via_station_idx is not None:
@@ -584,22 +612,29 @@ def _via_window(r) -> tuple:
     return None, None
 
 
-def _stopover_visit(start_dt, end_dt, open_h: float | None, close_h: float | None) -> str | None:
-    """경유 체류 시간대 안에서 예상 방문 시각(HH:MM)을 정한다.
+def _stopover_visits(recs: list, start_dt, end_dt) -> list:
+    """경유 체류 시간대 안에서 여러 경유지의 방문 시각을 '순차'로 배치한다(HH:MM 목록).
 
-    체류 시작(하차) 시각을 기본으로 하되 개점 전이면 개점 시각으로 미룬다. 체류 시간대에 문 여는
-    구간이 없으면(출발 전까지 미개점·이미 마감) None. 시각을 못 구하면(start 없음) None.
+    한 곳을 보고 다음 곳으로 이동하므로 커서를 _VIA_STAY_H씩 밀며 개점 시각을 존중한다
+    (독립 배치 시 문 연 집들이 전부 하차시각에 몰리는 문제 해결). 체류 안에 못 넣는 곳은
+    None(폐점 중이거나 출발 전까지 못 들름). start_dt 없으면 전부 None.
     """
     if start_dt is None:
-        return None
+        return [None] * len(recs)
     start_h = start_dt.hour + start_dt.minute / 60
     end_h = (end_dt.hour + end_dt.minute / 60) if end_dt is not None else start_h
-    if open_h is not None and open_h >= end_h:   # 출발 시각까지도 개점 전
-        return None
-    if close_h is not None and close_h <= start_h:  # 하차 시각에 이미 마감
-        return None
-    visit_h = max(start_h, open_h) if open_h is not None else start_h
-    return _hhmm(visit_h)
+    cursor = start_h
+    out = []
+    for rec in recs:
+        oh, ch = rec["open_hour"], rec["close_hour"]
+        arrive = max(cursor, oh) if oh is not None else cursor
+        # 개점이 출발 후·하차 때 이미 마감·순차상 출발 넘김 → 방문 불가
+        if (oh is not None and oh >= end_h) or (ch is not None and ch <= start_h) or arrive >= end_h:
+            out.append(None)
+            continue
+        out.append(_hhmm(arrive))
+        cursor = arrive + _VIA_STAY_H  # 다음 경유지는 이만큼 뒤(관람+이동 근사)
+    return out
 
 
 def _hhmm(hour: float | None) -> str | None:

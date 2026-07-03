@@ -31,15 +31,30 @@ def build_itinerary(route, course, go_date: str) -> Itinerary:
     segs: list[ItinerarySegment] = []
 
     if route is not None:
-        _append_train_legs(segs, route.go_trains, route, go)
+        for t in list(route.go_trains) + list(route.back_trains):
+            segs.append(ItinerarySegment(
+                kind="train", day_no=_day_no(t.dep_time, go),
+                start_time=t.dep_time, end_time=t.arr_time, train=t,
+            ))
+        # 당일치기 경유 관광(하차역 근처). 숙박 경유는 stopover_places가 비어 관광이 코스에 들어있다.
+        if route.stopover_places:
+            d = _stopover_date(route)
+            dwell = _stopover_arrival(route)  # 체류 시작(하차) 시각 — 방문시각 미상 관광의 정렬 기준
+            for sp in route.stopover_places:
+                seg = _visit_seg(_stopover_to_place(sp), d, go)
+                if seg.start_time is None:  # 체류 중 폐점 등으로 방문시각 미상 → 체류 슬롯에 정렬
+                    seg.start_time = dwell
+                segs.append(seg)
     if course is not None:
         for day in course.days:
             for p in day.places:
                 segs.append(_visit_seg(p, day.date, go))
             if day.lodging is not None:
                 segs.append(ItinerarySegment(kind="lodging", day_no=day.day_no, lodging=day.lodging))
-    if route is not None:
-        _append_train_legs(segs, route.back_trains, route, go)
+
+    # 시각순 정렬로 기차·관광·숙소를 하나의 타임라인으로 엮는다(숙박 경유의 leg2가 경유 관광
+    # 뒤·목적지 관광 앞에 자연히 놓인다). 숙소는 시각이 없어 그 날 끝으로 정렬.
+    segs.sort(key=lambda s: _sort_key(s, go))
 
     return Itinerary(
         label=route.path if route is not None else "현지 여행",
@@ -54,18 +69,28 @@ def build_itinerary(route, course, go_date: str) -> Itinerary:
     )
 
 
-def _append_train_legs(segs: list, trains: list, route, go: datetime) -> None:
-    """열차 다리들을 세그먼트로 추가하되, 경유(2편)면 첫 다리 도착 후 경유역 관광을 끼운다."""
-    for i, t in enumerate(trains):
-        segs.append(ItinerarySegment(
-            kind="train", day_no=_day_no(t.dep_time, go),
-            start_time=t.dep_time, end_time=t.arr_time, train=t,
-        ))
-        # 경유 다리(첫 열차 뒤에 둘째 열차가 있음) → 하차 후 그 역 관광을 방문 세그먼트로 편입.
-        if i == 0 and len(trains) >= 2 and route.stopover_places:
-            d = t.arr_time.strftime("%Y%m%d")
-            for sp in route.stopover_places:
-                segs.append(_visit_seg(_stopover_to_place(sp), d, go))
+def _sort_key(seg, go: datetime) -> datetime:
+    """세그먼트 시간순 정렬 키. 시각 있으면 그 시각, 숙소(시각 없음)는 그 날 끝(23:59)으로."""
+    if seg.start_time is not None:
+        return seg.start_time
+    d = go + timedelta(days=seg.day_no - 1)
+    return datetime(d.year, d.month, d.day, 23, 59, tzinfo=KST)
+
+
+def _stopover_leg(route):
+    """당일치기 경유의 하차 다리(2편인 방향의 첫 열차)."""
+    trains = route.go_trains if len(route.go_trains) >= 2 else route.back_trains
+    return trains[0]
+
+
+def _stopover_date(route) -> str:
+    """당일치기 경유 관광이 일어나는 날(하차역 도착일) YYYYMMDD."""
+    return _stopover_leg(route).arr_time.strftime("%Y%m%d")
+
+
+def _stopover_arrival(route):
+    """당일치기 경유 체류 시작(하차) 시각 dt."""
+    return _stopover_leg(route).arr_time
 
 
 def _visit_seg(place: RecommendedPlace, date_ymd: str | None, go: datetime) -> ItinerarySegment:
