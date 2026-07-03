@@ -178,6 +178,15 @@ let smoothedBearing = null;
 let lastProgress = null;
 let renderFrameCounter = 0;
 let targetBearingHistory = [];
+// 카메라 연속성 상태: 마지막으로 적용한 카메라와, 현재 세그먼트에 들어올 때의
+// 카메라. 세그먼트가 바뀌는 순간(이동<->정지, 정지 후 재출발, 구간 길이가 달라
+// 순항 줌이 달라질 때) 이전 카메라에서 목표 카메라로 이어서 보간해 줌/중심이
+// 튀지 않게 한다. null 이면 첫 세그먼트(기존 연출 유지).
+let lastCameraState = null; // { zoom, ahead, pitch, center }
+let moveEntryState = null;
+let moveEntryKey = null;
+let stopEntryState = null;
+let stopEntryKey = null;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -1348,24 +1357,46 @@ function applySceneForProgress(progress, useSmoothing) {
   };
 }
 
-function segmentCameraZoom(segmentKm, progress, settleStart = true, settleEnd = true) {
+// 구간 거리 -> 순항 줌/시야거리. 예전엔 3단계 계단(8.4/9.8/11.7)이라 구간
+// 길이가 달라지면 줌이 뚝 바뀌었는데, 로그 스케일 연속 함수로 바꿔 어떤
+// 거리 조합이든 순항 줌이 매끄럽게 이어지게 한다. (20km 이하 = 11.7,
+// 220km 이상 = 8.4, 사이는 로그 보간 — 기존 3단계와 비슷한 값을 지나간다)
+function cruiseBlendForKm(segmentKm) {
+  const km = Math.max(Number(segmentKm) || 0, 1);
+  return clamp(
+    (Math.log(km) - Math.log(20)) / (Math.log(220) - Math.log(20)),
+    0,
+    1
+  );
+}
+
+function cruiseZoomForKm(segmentKm) {
+  return lerp(11.7, 8.4, cruiseBlendForKm(segmentKm));
+}
+
+function cruiseAheadForKm(segmentKm) {
+  return lerp(1600, 5200, cruiseBlendForKm(segmentKm));
+}
+
+function segmentCameraZoom(segmentKm, progress, settleStart = true, settleEnd = true, entryZoom = null) {
   const zoomOutT = easeInOut(clamp(progress / 0.22, 0, 1));
   // settleEnd === false: skip the end zoom-in so the camera stays at cruise.
   const finishZoomT = settleEnd ? easeInOut(clamp((progress - 0.78) / 0.22, 0, 1)) : 0;
-  const cruiseZoom = segmentKm > 180 ? 8.4 : segmentKm > 45 ? 9.8 : 11.7;
-  // settleStart === false: begin at cruise (no 12.4 zoom-in flourish) so a move
-  // that departs from a photo-less pause doesn't pop bigger before settling.
-  const startZoom = settleStart ? 12.4 : cruiseZoom;
+  const cruiseZoom = cruiseZoomForKm(segmentKm);
+  // entryZoom: 직전 세그먼트(정지 클로즈업 15.35 나 다른 순항 줌)가 남긴 실제
+  // 카메라 줌. 있으면 거기서 이어서 순항 줌으로 보간해 재출발이 튀지 않는다.
+  // 없으면(영상 첫 이동) 기존 12.4 줌인 연출 유지.
+  const startZoom = entryZoom !== null ? entryZoom : settleStart ? 12.4 : cruiseZoom;
   const movingZoom = lerp(startZoom, cruiseZoom, zoomOutT);
   return lerp(movingZoom, 14.2, finishZoomT);
 }
 
-function segmentAheadDistance(segmentKm, progress, settleStart = true) {
+function segmentAheadDistance(segmentKm, progress, settleStart = true, entryAhead = null) {
   const zoomOutT = easeInOut(clamp(progress / 0.22, 0, 1));
-  const farDistance = segmentKm > 180 ? 5200 : segmentKm > 45 ? 3600 : 1600;
-  // settleStart === false: keep the far look-ahead from the start so the camera
-  // center doesn't jump when resuming from a pause.
-  const startAhead = settleStart ? 650 : farDistance;
+  const farDistance = cruiseAheadForKm(segmentKm);
+  // entryAhead: 직전 카메라의 look-ahead 거리(정지 = 0). 있으면 이어서 보간해
+  // 카메라 중심이 점프하지 않는다.
+  const startAhead = entryAhead !== null ? entryAhead : settleStart ? 650 : farDistance;
   return lerp(startAhead, farDistance, zoomOutT);
 }
 
@@ -1386,7 +1417,21 @@ function applyRouteSegment(
   const routeFraction = routeFractionForDistance(distanceKm);
   const point = pointAtDistanceKm(distanceKm);
   const segmentKm = Math.abs(endDistance - startDistance);
-  const aheadDistance = segmentAheadDistance(segmentKm, progress, settleStart);
+
+  // 세그먼트가 바뀌는 첫 프레임에 직전 카메라 상태를 캡처해 두고, 이 세그먼트
+  // 내내 시작값으로 사용한다 (map_pause 는 직전 move 와 같은 인덱스 쌍으로
+  // 호출되므로 키가 안 바뀌어 상태가 유지된다).
+  const segmentKey = `${startIndex}:${endIndex}`;
+  if (segmentKey !== moveEntryKey) {
+    moveEntryKey = segmentKey;
+    moveEntryState = lastCameraState;
+    stopEntryKey = null;
+  }
+  const entryZoom = moveEntryState ? moveEntryState.zoom : null;
+  const entryAhead = moveEntryState ? moveEntryState.ahead : null;
+  const entryPitch = moveEntryState ? moveEntryState.pitch : null;
+
+  const aheadDistance = segmentAheadDistance(segmentKm, progress, settleStart, entryAhead);
   const offsetCenter = offsetCoordinate(point.coord, point.bearing, aheadDistance);
   // settleEnd === false: keep looking ahead (don't recenter onto the point) so a
   // photo-less pause stays in the moving framing instead of closing up.
@@ -1415,17 +1460,26 @@ function applyRouteSegment(
   setSourceData(MARKER_SOURCE_ID, mediaMarkerFeatures(null));
   setSourceData(DESTINATION_LABEL_SOURCE_ID, stopLabelFeature(endIndex, "", 0));
 
-  const cameraZoom = segmentCameraZoom(segmentKm, progress, settleStart, settleEnd);
+  const cameraZoom = segmentCameraZoom(segmentKm, progress, settleStart, settleEnd, entryZoom);
   updateTrainModel(point.bearing, cameraZoom);
+
+  // 피치도 직전 카메라에서 이어서 순항 피치(67)로 보간.
+  const startPitch = entryPitch !== null ? entryPitch : settleStart ? 60 : 67;
+  const cameraPitch = lerp(startPitch, 67, easeInOut(clamp(progress / 0.25, 0, 1)));
 
   map.jumpTo({
     center,
     zoom: cameraZoom,
-    // settleStart === false: start at cruise pitch (67) instead of the post-stop
-    // 60→67 ramp, so departing a pause doesn't tilt.
-    pitch: lerp(settleStart ? 60 : 67, 67, easeInOut(clamp(progress / 0.25, 0, 1))),
+    pitch: cameraPitch,
     bearing: bearingState.bearing
   });
+
+  lastCameraState = {
+    zoom: cameraZoom,
+    ahead: aheadDistance,
+    pitch: cameraPitch,
+    center
+  };
 
   return {
     routeFraction,
@@ -1438,7 +1492,7 @@ function applyRouteSegment(
   };
 }
 
-function applyStopPoint(trackIndex, name = "") {
+function applyStopPoint(trackIndex, name = "", holdProgress = 1) {
   const index = Math.round(clamp(trackIndex, 0, routePoints.length - 1));
   const distanceKm = trackDistanceAt(index);
   const point = pointAtDistanceKm(distanceKm);
@@ -1449,6 +1503,24 @@ function applyStopPoint(trackIndex, name = "") {
     smoothedBearing = normalizeAngle(point.bearing);
   }
   lastProgress = routeFraction;
+
+  // 정지 첫 프레임에 직전 카메라(이동 도착 프레임: 줌 14.2, 중심이 점보다
+  // 앞쪽)를 캡처하고, 정지 시간 전반 45% 동안 클로즈업 카메라(15.35, 점
+  // 중심)로 이어서 보간한다 — 도착 시 줌/중심이 튀지 않는다.
+  if (stopEntryKey !== index) {
+    stopEntryKey = index;
+    stopEntryState = lastCameraState;
+    moveEntryKey = null;
+  }
+  const settleT = easeInOut(clamp(holdProgress / 0.45, 0, 1));
+  const stopCoord = routePointCoord(routePoints[index]);
+  const entry = stopEntryState;
+  const cameraZoom = lerp(entry ? entry.zoom : 15.35, 15.35, settleT);
+  const cameraPitch = lerp(entry ? entry.pitch : 68, 68, settleT);
+  const cameraCenter =
+    entry && entry.center
+      ? interpolateCoord(entry.center, stopCoord, settleT)
+      : stopCoord;
 
   setSourceData(
     PROGRESS_ROUTE_SOURCE_ID,
@@ -1461,16 +1533,24 @@ function applyStopPoint(trackIndex, name = "") {
     })
   );
   setSourceData(MARKER_SOURCE_ID, mediaMarkerFeatures(index));
-  setSourceData(DESTINATION_LABEL_SOURCE_ID, stopLabelFeature(index, label, 1));
+  // 라벨은 카메라 정착에 맞춰 페이드인.
+  setSourceData(DESTINATION_LABEL_SOURCE_ID, stopLabelFeature(index, label, settleT));
 
-  updateTrainModel(point.bearing, 15.35);
+  updateTrainModel(point.bearing, cameraZoom);
 
   map.jumpTo({
-    center: routePointCoord(routePoints[index]),
-    zoom: 15.35,
-    pitch: 68,
+    center: cameraCenter,
+    zoom: cameraZoom,
+    pitch: cameraPitch,
     bearing: smoothedBearing
   });
+
+  lastCameraState = {
+    zoom: cameraZoom,
+    ahead: 0,
+    pitch: cameraPitch,
+    center: cameraCenter
+  };
 
   return {
     routeFraction,
@@ -1523,7 +1603,8 @@ window.renderRouteSegment = async function (
 window.renderStopPoint = async function (
   trackIndex,
   name = "",
-  waitMode = "map-render"
+  waitMode = "map-render",
+  holdProgress = 1
 ) {
   if (!renderReady || !map) {
     throw new Error("Map is not initialized.");
@@ -1531,7 +1612,7 @@ window.renderStopPoint = async function (
 
   renderFrameCounter += 1;
   const renderStart = performance.now();
-  const scene = applyStopPoint(trackIndex, name);
+  const scene = applyStopPoint(trackIndex, name, holdProgress);
   const renderEventReady = await waitForRenderMode(waitMode);
   const renderWaitMs = performance.now() - renderStart;
 

@@ -2174,16 +2174,26 @@ def render_timeline_frames(
 
             if segment.type == "map_hold":
                 frame_count = frame_count_for_seconds(segment.duration, config.fps)
-                for _ in range(frame_count):
+                for local_index in range(frame_count):
                     if benchmark_done():
                         break
+                    # 정지 진행률: 브라우저가 도착 카메라(줌 14.2, 앞쪽 중심)에서
+                    # 클로즈업 카메라(15.35, 점 중심)로 이어서 보간하는 데 쓴다.
+                    hold_progress = (
+                        local_index / (frame_count - 1) if frame_count > 1 else 1.0
+                    )
                     frame_started = time.perf_counter()
                     try:
                         render_started = time.perf_counter()
                         frame_info = page.evaluate(
-                            "([trackIndex, name, waitMode]) => "
-                            "window.renderStopPoint(trackIndex, name, waitMode)",
-                            [segment.track_index, segment.name or "", render_wait_mode],
+                            "([trackIndex, name, waitMode, holdProgress]) => "
+                            "window.renderStopPoint(trackIndex, name, waitMode, holdProgress)",
+                            [
+                                segment.track_index,
+                                segment.name or "",
+                                render_wait_mode,
+                                hold_progress,
+                            ],
                         )
                         render_call_ms = (time.perf_counter() - render_started) * 1000.0
                         render_wait_ms = (

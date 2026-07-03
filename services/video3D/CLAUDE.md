@@ -68,12 +68,15 @@ Input is `trackPoints` + `mediaPoints` (see `assets/travel_data.json`):
 
 ### Browser entry points (called from Python via page.evaluate)
 - `window.initializeMap()` — creates the Mapbox map, adds terrain/atmosphere/buildings/route layers, waits for idle.
-- `window.renderRouteSegment(startIndex, endIndex, progress, waitMode)` — one `map_move` frame.
-- `window.renderStopPoint(trackIndex, name, waitMode)` — one `map_hold` frame; its captured PNG is reused as the base for photo compositing.
+- `window.renderRouteSegment(startIndex, endIndex, progress, waitMode, settleStart, settleEnd)` — one `map_move` frame.
+- `window.renderStopPoint(trackIndex, name, waitMode, holdProgress)` — one `map_hold` frame; `holdProgress` (0→1 across the hold) eases the camera from the arrival framing into the close-up. Its captured PNG is reused as the base for photo compositing (the last hold frame is fully settled).
 - `window.renderFrame(progress, waitMode)` — the legacy continuous-camera entry (still used by `render_map_frames`).
 - `window.isRenderReady()`, `window.getWebGLInfo()`, `window.warmUpRouteTiles()` — readiness / diagnostics / optional tile warmup.
 
 Every frame uses `map.jumpTo()` (not animated `flyTo`) so rendering is deterministic and decoupled from wall-clock time.
+
+### Camera zoom continuity
+Cruise zoom / look-ahead distance are **continuous (log-scale) functions of segment distance** (`cruiseZoomForKm` / `cruiseAheadForKm`: ≤20km → 11.7, ≥220km → 8.4) — not discrete steps. Cross-segment smoothness comes from entry-state carryover in `map_animation.js`: `lastCameraState` records the camera every frame; on a segment-key change `moveEntryState`/`stopEntryState` capture it, and the new segment interpolates zoom/pitch/look-ahead/center **from the previous camera** to its own targets (moves: first 22% of progress; holds: first 45% of `holdProgress`). This kills zoom pops at stop→move, move→pause→move, and arrival→close-up boundaries. `entryZoom === null` (very first move) falls back to the original 12.4 zoom-in flourish. Frames must be rendered in timeline order for this state to be valid.
 
 ### Bearing smoothing
 Camera heading is the subtle part. `smoothBearingForFrame` applies: shortest-angle interpolation, an exponential smoothing factor, a max turn-rate cap (`BEARING_MAX_DEGREES_PER_SECOND` / fps), a look-ahead point (`BEARING_LOOK_AHEAD_POINTS`), and a circular-mean over recent targets (`BEARING_TARGET_HISTORY_SIZE`). State (`smoothedBearing`, `lastProgress`, `targetBearingHistory`) resets on backward or large progress jumps. With `window.DEBUG_BEARING` on, `[bearing] …` lines are logged and surfaced in Python output; debug frames at progress 0.45/0.50/0.55 are saved to `debug/bearing_*`. Use `--bearing-test-route` to exercise sharp turns.
