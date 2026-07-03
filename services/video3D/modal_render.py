@@ -58,6 +58,11 @@ image = (
             "output/**", "frames/**", "temp/**", "debug/**",
             "*.mp4", "**/*.mp4", ".env", "__pycache__/**",
             "modal_*.py", "*.md",
+            # 3D 기차 디자인 소스(~80MB)는 로컬 변환용 — 렌더는 train_color.glb 만 읽음
+            "assets/Little train/**", "assets/lokomotiv/**",
+            # 구버전 원본 GLB(11MB, 법선 깨짐) — train_fixed.glb 가 폴백으로 충분
+            "assets/train.glb",
+            "convert_train_model.py", "benchmark_train_model.py",
         ],
     )
 )
