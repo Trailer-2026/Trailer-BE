@@ -583,6 +583,7 @@ def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
         if r.via_nights == 0:
             start_dt, end_dt = _via_window(r)  # 이 경로의 경유역 체류 시간대(방향에 따라 다름)
             visits = _stopover_visits(recs, start_dt, end_dt)  # 체류시간 안에서 순차 배치
+            # 체류시간 안에 방문 시각을 못 잡는 곳(vt=None: 폐점·축제 등)은 실행 불가라 타임라인에서 제외.
             r.stopover_places = [
                 StopoverPlace(
                     place_idx=rec["place_idx"], name=rec["name"], region=rec["region"],
@@ -590,7 +591,7 @@ def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
                     open_time=rec["open_time"], close_time=rec["close_time"],
                     visit_time=vt,
                 )
-                for rec, vt in zip(recs, visits)
+                for rec, vt in zip(recs, visits) if vt is not None
             ]
         scored.append((r, score))
 
