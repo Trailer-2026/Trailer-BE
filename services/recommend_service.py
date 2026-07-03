@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -257,6 +257,102 @@ def _course_for_route(scored: list, criteria: SearchCriteria, k: int, anchor, ro
     return best
 
 
+def _caps_arrival_only(arr, k: int) -> tuple[int | None, int | None]:
+    """도착일만 제약하고 마지막날은 출발 제약 없는 구간의 (첫날, 마지막날) 상한.
+
+    '먼저 묵는 도시'용 — 마지막날은 그 밤을 자고 다음날 아침에 이동하므로 하루 종일 관광 가능(제약 없음).
+    """
+    if arr is None:
+        return None, None
+    arr_h = arr.hour + arr.minute / 60 + _ARRIVE_BUFFER_H
+    return _cap_from_hours(_DAY_END_HOUR - arr_h), None
+
+
+def _windows_arrival_only(arr, k: int) -> list[tuple[float, float]] | None:
+    """도착일만 도착시각으로 시작하고 나머지·마지막날은 하루 종일(9~21)인 시간대 목록('먼저 묵는 도시')."""
+    if arr is None:
+        return None
+    arr_h = arr.hour + arr.minute / 60 + _ARRIVE_BUFFER_H
+    return [(arr_h if i == 0 else _DAY_START_HOUR, _DAY_END_HOUR) for i in range(k)]
+
+
+def _overnight_segments(route) -> list:
+    """숙박 경유 경로 → 도시 구간 [(is_via, 도착dt, 출발dt)] (도착시각순 = 방문 순서).
+
+    가는편 숙박(go_trains 2편): 경유 먼저(leg1 도착~leg2 출발) → 목적지(leg2 도착~귀가 출발).
+    오는편 숙박(back_trains 2편): 목적지 먼저(가는 도착~목적지 출발) → 경유(도착~귀가 출발).
+    """
+    go, back = route.go_trains, route.back_trains
+    if len(go) >= 2:   # 가는편 숙박: 출발→[경유]→(숙박)→목적지
+        via = (True, go[0].arr_time, go[1].dep_time)
+        dest = (False, go[-1].arr_time, back[0].dep_time)
+    else:              # 오는편 숙박: 출발→목적지→[경유]→(숙박)→귀가
+        dest = (False, go[0].arr_time, back[0].dep_time)
+        via = (True, back[0].arr_time, back[1].dep_time)
+    return sorted([via, dest], key=lambda s: s[1])  # 도착 이른 구간이 앞
+
+
+def _course_for_overnight(db, dest_scored, criteria, k, dest_anchor, route, memo, via_cache) -> Course | None:
+    """숙박 경유 경로용 '두 도시' 코스. 먼저 묵는 도시 + 나중 도시 구간을 만들어 병합한다.
+
+    구간 나눔: 먼저 묵는 도시(seg0)는 첫날 도착~여러 날, 마지막날 출발 제약 없음(자고 다음날 이동).
+    나중 도시(seg1)는 (도착~귀가) 표준. 일수는 전이 열차 날짜로 가른다(seg0.dep 날짜 - 가는날).
+    각 구간을 build_courses로 만들고 day_no·날짜를 1..k로 재부여해 이어붙인 뒤, 좌표 기반
+    _assign_lodgings 한 번으로 경유/목적지 각 도시 숙소를 배정한다(마지막 날=귀가일은 없음).
+    경유 추천지·운영시간은 여기서 실시간 조회(via_cache로 경유역 간 중복 방지). 실패 시 None.
+    """
+    if route.via_nights < 1 or route.via_station_idx is None:
+        return None
+    via_st = station_dao.get_by_idx(db, route.via_station_idx)
+    if via_st is None or via_st.latitude is None or via_st.longitude is None:
+        return None
+    via_anchor = (via_st.latitude, via_st.longitude)
+
+    # 경유역 추천지 점수화+운영시간(경유역당 1회, via_cache 공유). 목적지 scored는 재사용.
+    if route.via_station_idx not in via_cache:
+        via_places = tour_place.live_places(via_anchor[0], via_anchor[1], criteria.themes)
+        via_cache[route.via_station_idx] = _prepare_scored(via_places, criteria, k)
+    via_scored = via_cache[route.via_station_idx]
+
+    go = datetime.strptime(criteria.go_date, "%Y%m%d")
+    segs = _overnight_segments(route)
+    first_days = (segs[0][2].date() - go.date()).days   # 먼저 묵는 도시 일수 = 전이 열차 출발일 - 가는날
+    if first_days < 1 or k - first_days < 1:
+        return None
+
+    days: list = []
+    for idx, (is_via, arr, dep) in enumerate(segs):
+        seg_k = first_days if idx == 0 else (k - first_days)
+        seg_anchor = via_anchor if is_via else dest_anchor
+        seg_scored = via_scored if is_via else dest_scored
+        if idx == 0:  # 먼저 묵는 도시: 마지막날 출발 제약 없음(자고 다음날 이동)
+            fc, lc = _caps_arrival_only(arr, seg_k)
+            win = _windows_arrival_only(arr, seg_k)
+        else:         # 나중 도시: 도착~귀가 표준
+            fc, lc = _caps_between(arr, dep, seg_k)
+            win = _windows_between(arr, dep, seg_k)
+        sub = pipeline.build_courses(seg_scored, criteria, seg_k, seg_anchor, fc, lc, win)
+        if sub:
+            days.extend(max(sub, key=lambda c: c.total_preference_score).days)
+
+    if not days:
+        return None
+    # 이어붙인 뒤 day_no·날짜를 여행 첫날 기준 1..k로 재부여(구간별 build_courses는 각자 1부터라).
+    for i, d in enumerate(days):
+        d.day_no = i + 1
+        d.date = (go + timedelta(days=i)).strftime("%Y%m%d")
+    merged = Course(
+        label="숙박경유",
+        origin_station_idx=criteria.origin_station_idx,
+        days=days,
+        total_preference_score=round(sum(p.preference_score for d in days for p in d.places), 4),
+        is_round_trip_closed=bool(criteria.round_trip),
+        note=None,
+    )
+    _assign_lodgings([merged], memo)  # 좌표 기반 → 경유일=경유숙소, 목적지일=목적지숙소, 마지막날=없음
+    return merged
+
+
 def _attach_hours(scored: list, criteria: SearchCriteria, k: int) -> None:
     """코스에 배정될 상위 후보(작업셋)에 한해 운영시간(오픈/마감·휴무요일)을 채운다.
 
@@ -283,49 +379,57 @@ def _cap_from_hours(hours: float) -> int:
     return max(0, int(hours // _HOURS_PER_PLACE))
 
 
-def _day_caps(route, k: int) -> tuple[int | None, int | None]:
-    """이 경로의 도착/출발 시각으로 (첫날, 마지막날) 관광지 상한을 구한다.
+def _caps_between(arr, dep, k: int) -> tuple[int | None, int | None]:
+    """도착 dt(arr)~출발 dt(dep) 사이 k일 일정의 (첫날, 마지막날) 관광지 상한.
 
-    첫날은 '도착시각~하루 끝', 마지막날은 '하루 시작~출발시각'의 가용 시간으로 제한한다
-    (오후 도착이면 첫날을 덜, 오전 귀가면 마지막날을 거의 안 채움). 당일치기(k<=1)는
-    도착~출발 사이만. 경유는 go_trains[-1](최종 도착)·back_trains[0](첫 귀가)라 경유 체류가
-    반영된다. 경로 없음/시각 못 구하면 (None, None) → pipeline이 기본 상한을 쓴다.
+    첫날은 '도착시각+버퍼~하루 끝', 마지막날은 '하루 시작~출발시각-버퍼'의 가용 시간으로 제한.
+    k<=1이면 도착~출발 한 구간. arr/dep가 없으면(None) (None, None) → pipeline 기본 상한.
     """
-    if route is None or not route.go_trains or not route.back_trains:
+    if arr is None or dep is None:
         return None, None
-    arr = route.go_trains[-1].arr_time    # 도착일 도착 시각
-    dep = route.back_trains[0].dep_time   # 귀가일 출발 시각
-    # 역↔관광지 이동/탑승 여유를 뺀 실제 관광 가능 시각(도착은 미루고 출발은 당김).
     arr_h = arr.hour + arr.minute / 60 + _ARRIVE_BUFFER_H
     dep_h = dep.hour + dep.minute / 60 - _DEPART_BUFFER_H
     if k <= 1:
         cap = _cap_from_hours((dep - arr).total_seconds() / 3600 - _ARRIVE_BUFFER_H - _DEPART_BUFFER_H)
         return cap, cap
-    first = _cap_from_hours(_DAY_END_HOUR - arr_h)
-    last = _cap_from_hours(dep_h - _DAY_START_HOUR)
-    return first, last
+    return _cap_from_hours(_DAY_END_HOUR - arr_h), _cap_from_hours(dep_h - _DAY_START_HOUR)
 
 
-def _day_windows(route, k: int) -> list[tuple[float, float]] | None:
-    """이 경로의 도착/출발 시각으로 날짜별 관광 가능 시간대 (start_h, end_h) 목록을 만든다.
+def _windows_between(arr, dep, k: int) -> list[tuple[float, float]] | None:
+    """도착 dt(arr)~출발 dt(dep) 사이 k일 일정의 날짜별 관광 가능 시간대 (start_h, end_h) 목록.
 
-    첫날은 열차 도착시각~하루 끝, 마지막날은 하루 시작~열차 출발시각, 중간날은 하루 종일(9~21).
-    양 끝에 역↔관광지 이동/탑승 여유(_ARRIVE/_DEPART_BUFFER_H)를 반영해 도착 후 바로 관광·관광
-    직후 바로 승차하는 비현실을 막는다. 당일치기(k<=1)는 도착~출발 한 구간. pipeline이 이 시간대
-    안에서 관광지 운영시간에 맞춰 방문 시각을 배정한다. 경로 없음/시각 못 구하면 None → 기본(9~21).
+    첫날은 도착시각+버퍼~하루 끝, 마지막날은 하루 시작~출발시각-버퍼, 중간날은 하루 종일(9~21).
+    k<=1이면 도착~출발 한 구간. arr/dep가 없으면 None → pipeline 기본 시간대(9~21).
     """
-    if route is None or not route.go_trains or not route.back_trains:
+    if arr is None or dep is None:
         return None
-    arr = route.go_trains[-1].arr_time
-    dep = route.back_trains[0].dep_time
-    arr_h = arr.hour + arr.minute / 60 + _ARRIVE_BUFFER_H   # 역→첫 관광지 여유
-    dep_h = dep.hour + dep.minute / 60 - _DEPART_BUFFER_H    # 막 관광지→역+탑승 여유
+    arr_h = arr.hour + arr.minute / 60 + _ARRIVE_BUFFER_H
+    dep_h = dep.hour + dep.minute / 60 - _DEPART_BUFFER_H
     if k <= 1:
         return [(arr_h, dep_h)]
     return [
         (arr_h if i == 0 else _DAY_START_HOUR, dep_h if i == k - 1 else _DAY_END_HOUR)
         for i in range(k)
     ]
+
+
+def _route_arr_dep(route):
+    """경로의 (목적지 도착 dt, 귀가 출발 dt). 경유는 go_trains[-1]/back_trains[0]라 체류가 반영된다."""
+    if route is None or not route.go_trains or not route.back_trains:
+        return None, None
+    return route.go_trains[-1].arr_time, route.back_trains[0].dep_time
+
+
+def _day_caps(route, k: int) -> tuple[int | None, int | None]:
+    """이 경로의 목적지 도착/귀가 출발 시각으로 (첫날, 마지막날) 관광지 상한을 구한다."""
+    arr, dep = _route_arr_dep(route)
+    return _caps_between(arr, dep, k)
+
+
+def _day_windows(route, k: int) -> list[tuple[float, float]] | None:
+    """이 경로의 목적지 도착/귀가 출발 시각으로 날짜별 관광 가능 시간대를 만든다."""
+    arr, dep = _route_arr_dep(route)
+    return _windows_between(arr, dep, k)
 
 
 def _assign_lodgings(courses: list[Course], memo: dict | None = None) -> None:
