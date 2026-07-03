@@ -230,19 +230,21 @@ def _build_courses_from(places, criteria: SearchCriteria, k: int, anchor,
     detailIntro2로 운영시간을 채운 뒤 pipeline이 이를 반영해 방문 시각을 배정한다.
     """
     scored = scoring.score_places(places, criteria.themes)
-    _attach_hours(scored, k)
+    _attach_hours(scored, criteria, k)
     courses = pipeline.build_courses(scored, criteria, k, anchor, first_cap, last_cap, day_windows)
     _assign_lodgings(courses)
     return courses
 
 
-def _attach_hours(scored: list, k: int) -> None:
+def _attach_hours(scored: list, criteria: SearchCriteria, k: int) -> None:
     """코스에 배정될 상위 후보(작업셋)에 한해 운영시간(오픈/마감·휴무요일)을 채운다.
 
-    detailIntro2는 장소당 1콜이라, 실제 코스 후보가 되는 pipeline.max_working(k)개까지만
+    detailIntro2는 장소당 1콜이라, 실제 코스 후보가 되는 pipeline.working_set(k)개까지만
     조회해 호출 수를 제한한다(공모전 quota·응답속도 보호). 미상은 그대로 두어 시간 제약 없음으로 본다.
+    조회 대상은 반드시 build_courses와 같은 working_set이어야 한다(다중 테마 시 원점수 상위 N개와
+    달라 미조회 후보가 코스에 섞이는 것을 방지).
     """
-    pool = scored[: pipeline.max_working(k)]
+    pool = pipeline.working_set(scored, criteria.themes, k)
     refs = [(str(sp.place_idx), sp.content_type_id) for sp in pool if sp.content_type_id]
     if not refs:
         return

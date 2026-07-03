@@ -94,8 +94,10 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 
 - **데이터 취득 — `services/recommend_service.py` + `utils/tour_place.py`** (네트워크)
   - `locationBasedList2`엔 운영시간이 없다. `detailIntro2`(콘텐츠타입별 상세)에서만 나온다.
-  - `_attach_hours`가 **코스에 실제 배정될 상위 후보(`pipeline.max_working(k)`개, ≈일수×9)에 한해**
+  - `_attach_hours`가 **코스에 실제 배정될 후보(`pipeline.working_set(scored, themes, k)`, ≈일수×9)에 한해**
     `tour_place.fetch_hours`(detailIntro2 병렬)로 운영시간을 채운다. 장소당 1콜이라 코스 후보로만 제한(quota·속도 보호).
+    조회 대상은 반드시 `build_courses`와 **같은 `working_set`**이어야 한다(다중 테마 시 테마 쿼터로 원점수 상위 N개와
+    달라져, `scored[:max_working]`로 조회하면 차순위 후보가 미조회인 채 코스에 섞인다).
   - 파싱은 자유텍스트라 방어적(`_parse_hours`/`_parse_closed_weekdays`): `HH:MM~HH:MM` 앞 구간, `24시간·상시·연중무휴`,
     `매주 X요일` 정도만 해석. 자정 넘김은 +24. 격주·첫째주 등 불규칙 휴무는 과제약을 피해 무시. **미상은 시간 제약 없음**으로 둔다.
 - **스케줄링 — `recommend/scheduling.py`** (순수 계산)
