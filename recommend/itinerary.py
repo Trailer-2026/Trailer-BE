@@ -20,6 +20,10 @@ from utils.train_api import KST
 # 관광지 1곳 점유 시간(h) — scheduling·recommend_service와 같은 가정(방문 종료시각 표기용).
 _HOURS_PER_PLACE = 2.5
 
+# 경유역 관광 1곳 점유 시간(h) — recommend_service._VIA_STAY_H와 동기화(역 근처 잠깐이라 목적지보다 짧게).
+# 경유 관광 종료시각은 이 값과 '다음 열차 출발' 중 이른 쪽으로 상한한다(열차 출발 후로 새지 않게).
+_STOPOVER_HOURS = 1.0
+
 
 def build_itinerary(route, course, go_date: str) -> Itinerary:
     """기차 경로(route)와 대표 코스(course)를 하나의 시간순 여정으로 병합한다.
@@ -40,10 +44,17 @@ def build_itinerary(route, course, go_date: str) -> Itinerary:
         if route.stopover_places:
             d = _stopover_date(route)
             dwell = _stopover_arrival(route)  # 체류 시작(하차) 시각 — 방문시각 미상 관광의 정렬 기준
+            depart = _stopover_departure(route)  # 다음(둘째) 열차 출발 시각 — 방문 종료 상한
             for sp in route.stopover_places:
                 seg = _visit_seg(_stopover_to_place(sp), d, go)
                 if seg.start_time is None:  # 체류 중 폐점 등으로 방문시각 미상 → 체류 슬롯에 정렬
                     seg.start_time = dwell
+                # 경유 관광 종료시각은 (시작+경유 점유) 또는 다음 열차 출발 중 이른 쪽으로 상한.
+                # _visit_seg가 목적지용 2.5h로 찍은 end를 여기서 경유 모델(_STOPOVER_HOURS)로 덮어써
+                # 열차 출발(예: 12:16)을 넘겨 "일정 충돌"이 나던 문제를 막는다.
+                if seg.start_time is not None:
+                    end = seg.start_time + timedelta(hours=_STOPOVER_HOURS)
+                    seg.end_time = min(end, depart) if depart is not None else end
                 segs.append(seg)
     if course is not None:
         for day in course.days:
@@ -91,6 +102,12 @@ def _stopover_date(route) -> str:
 def _stopover_arrival(route):
     """당일치기 경유 체류 시작(하차) 시각 dt."""
     return _stopover_leg(route).arr_time
+
+
+def _stopover_departure(route):
+    """당일치기 경유의 승차 다리(2편인 방향의 둘째 열차) 출발 시각 dt — 경유 관광 종료 상한."""
+    trains = route.go_trains if len(route.go_trains) >= 2 else route.back_trains
+    return trains[1].dep_time
 
 
 def _visit_seg(place: RecommendedPlace, date_ymd: str | None, go: datetime) -> ItinerarySegment:
@@ -168,6 +185,9 @@ def _selfcheck() -> None:
     assert it.segments[1].day_no == 1
     assert it.total_fare == 30000
     assert it.route_type == "경유"
+    # 경유 관광 종료시각은 둘째 열차 출발(13:00)을 넘지 않아야 한다(일정 충돌 방지).
+    leg2_dep = via.go_trains[1].dep_time
+    assert it.segments[1].end_time <= leg2_dep, (it.segments[1].end_time, leg2_dep)
 
     # 직통(1편) + 현지 여행(route None) 경계.
     direct = RouteCandidate(

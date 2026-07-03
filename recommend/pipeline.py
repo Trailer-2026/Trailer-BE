@@ -179,9 +179,16 @@ def _assemble(
         weekday = (go + timedelta(days=idx)).weekday() if go else None
         # 클러스터 전체를 점수순으로 넘겨 운영시간에 안 맞는 곳을 차순위로 대체할 여지를 준다.
         candidates = sorted(cl.members, key=lambda p: p.score, reverse=True)
-        # 중간(풀타임) 날은 식당만이면 2끼로 끝나므로, 근처 미사용 비-식당 관광지를 후보에 보태
-        # 3번째 슬롯을 채울 여지를 준다. 없으면 그대로 2곳 유지(schedule_day가 실제 선별).
-        if 0 < idx < n - 1 and attraction_pool:
+        # 이 날에 비-식당 관광지를 보충해 슬롯을 더 채울지 판정한다(식당만이면 2끼로 끝나므로).
+        #   - 첫날(idx 0): 항상 제외(도착일이라 원래 짧음).
+        #   - 중간 날(idx < n-1): 채운다.
+        #   - 마지막 날(idx == n-1): last_cap이 None일 때만 채운다.
+        # 보통 왕복은 마지막 날이 '귀가 열차 타는 날'이라 last_cap이 숫자다(→ 안 채움). 하지만
+        # 숙박경유 코스는 도시별로 쪼개 _assemble이 '도시 구간'마다 돌아가는데, 앞 도시(먼저 묵는
+        # 도시) 구간의 마지막 날은 여행 마지막 날이 아니라 '그 밤 자고 다음날 이동'하는 종일 관광
+        # 날이라 열차 제약이 없다 → last_cap=None. 이런 날만 마지막 위치여도 채운다.
+        fillable = idx > 0 and (idx < n - 1 or last_cap is None)
+        if fillable and attraction_pool:
             # 다른 날이 이미 소유(native)하거나 이미 배치된 관광지는 제외 → 코스 내 중복 방지.
             extras = sorted(
                 (p for p in attraction_pool
