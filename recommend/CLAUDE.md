@@ -61,7 +61,7 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 - **지정**: 그 역 좌표를 `origin`으로 `build_courses` → 코스 A/B/C(단일 도착지).
 - **미지정**: **2단계 점수화**로 순위·도착역·코스를 모두 *도착역 주변* 기준으로 일치시킨다.
   - **Phase A (거친 선별)**: `scan_area_profiles`(시도별 테마분포 라이브 스캔)는 큰 도를 **지리적 부분권(해안/내륙 등)으로 분리**해 각각 후보로 낸다(경북 동부해안→포항, 내륙→영천처럼). 각 후보를 `nearest_major`로 도착역에 매핑 → `rank_and_diversify(top_k=_SHORTLIST_N)`로 상위 N(기본 5, 권역 다양성)개를 추린다. 같은 본부는 점수 높은 부분권 하나만 살아남아(해안권이 내륙권을 이긴다) 해안 도시가 후보에서 누락되지 않는다.
-  - **Phase B (정밀 재점수)**: 후보별 **도착역 주변을 실측 스캔**(`tour_place.live_places`)해 그 분포로 `AreaProfile`을 다시 만들어 `rank_and_diversify(top_k=3)`로 최종 top-3. 이 스캔 결과를 **코스 생성에 재사용**(`_build_courses_from`)하므로 추가 호출은 +2회 수준. 코스 앵커는 **도착역 좌표**다.
+  - **Phase B (정밀 재점수)**: 후보별 **도착역 주변을 실측 스캔**(`tour_place.live_places`)해 그 분포로 `AreaProfile`을 다시 만들어 `rank_and_diversify(top_k=3)`로 최종 top-3. 이 스캔 결과를 **여정 생성에 재사용**(`_itineraries_from`)하므로 추가 호출은 +2회 수준. 코스 앵커는 **도착역 좌표**다.
   - 효과: 시도 평균이 아닌 *역 주변 실측*으로 최종 순위를 매겨, "나주 도착인데 일정은 44km 떨어진 보성"처럼 도착역과 코스가 어긋나던 문제를 없앤다. 내륙역은 주변 실측이 약하면 자연히 밀린다.
   - ⚠️ **철도 도달성**: area 중심과 매핑된 도착역의 거리가 `MAX_STATION_GAP_KM`를 넘으면(바다 건너 제주 등) Phase A에서 제외한다(기차 여행 플랫폼이라 철도 미연결 지역은 도착지가 될 수 없음).
 
@@ -180,5 +180,8 @@ CommonResponse
 ```
 
 > 내부 엔진 타입(응답 비노출): `RouteCandidate`·`Course`/`DayPlan`·`StopoverPlace`. recommend.itinerary.build_itinerary가
-> (경로, 대표코스)를 시간순 segments로 병합한다. Phase 1은 대표 코스 1개를 각 경로에 그대로 엮음(코스는 routes[0] 시각 기준).
-> 경유역 관광은 두 기차 다리 사이 visit 세그먼트로 편입. **경로별 코스 재계산·경유역 1박은 Phase 2/3 예정.**
+> (경로, 코스)를 시간순 segments로 병합한다. 경유역 관광은 두 기차 다리 사이 visit 세그먼트로 편입.
+> **코스는 경로별로 재계산**(`_itineraries_from`→`_course_for_route`): 장소조회·운영시간은 목적지당 1회
+> (`_prepare_scored`), `build_courses`는 경로마다 그 경로의 도착/출발 시각(`_day_caps`/`_day_windows`)에 맞춰
+> 다시 돌린다 → 경유의 늦은 도착이 첫날 관광량에 반영된다. 숙소 조회는 경로 간 memo 공유로 중복 방지.
+> **경유역 1박(중간 도시 숙박)은 Phase 3 예정.**
