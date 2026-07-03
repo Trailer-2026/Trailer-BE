@@ -409,15 +409,27 @@ def _cap_from_hours(hours: float) -> int:
     return max(0, int(hours // _HOURS_PER_PLACE))
 
 
-def _caps_between(arr, dep, k: int) -> tuple[int | None, int | None]:
+def _time_of(dt, ref) -> float:
+    """도착 시각을 시(hour) 실수로. ref(여행 첫날 dt)가 있으면 그 날 자정 기준 경과시간
+    (자정을 넘겨 도착하면 24+). 없으면 그 날의 시각. 심야 열차로 첫날을 넘겨 도착할 때
+    '새벽 도착=같은 날 이른 아침'으로 오해하지 않도록 첫날 기준으로 환산한다.
+    """
+    if ref is None:
+        return dt.hour + dt.minute / 60
+    base = datetime(ref.year, ref.month, ref.day, tzinfo=dt.tzinfo)
+    return (dt - base).total_seconds() / 3600
+
+
+def _caps_between(arr, dep, k: int, ref=None) -> tuple[int | None, int | None]:
     """도착 dt(arr)~출발 dt(dep) 사이 k일 일정의 (첫날, 마지막날) 관광지 상한.
 
     첫날은 '도착시각+버퍼~하루 끝', 마지막날은 '하루 시작~출발시각-버퍼'의 가용 시간으로 제한.
+    ref(여행 첫날)를 주면 자정 넘긴 도착을 첫날 기준 24+시로 봐서 첫날 상한이 0이 된다(빈 날).
     k<=1이면 도착~출발 한 구간. arr/dep가 없으면(None) (None, None) → pipeline 기본 상한.
     """
     if arr is None or dep is None:
         return None, None
-    arr_h = arr.hour + arr.minute / 60 + _ARRIVE_BUFFER_H
+    arr_h = _time_of(arr, ref) + _ARRIVE_BUFFER_H
     dep_h = dep.hour + dep.minute / 60 - _DEPART_BUFFER_H
     if k <= 1:
         cap = _cap_from_hours((dep - arr).total_seconds() / 3600 - _ARRIVE_BUFFER_H - _DEPART_BUFFER_H)
@@ -425,15 +437,16 @@ def _caps_between(arr, dep, k: int) -> tuple[int | None, int | None]:
     return _cap_from_hours(_DAY_END_HOUR - arr_h), _cap_from_hours(dep_h - _DAY_START_HOUR)
 
 
-def _windows_between(arr, dep, k: int) -> list[tuple[float, float]] | None:
+def _windows_between(arr, dep, k: int, ref=None) -> list[tuple[float, float]] | None:
     """도착 dt(arr)~출발 dt(dep) 사이 k일 일정의 날짜별 관광 가능 시간대 (start_h, end_h) 목록.
 
     첫날은 도착시각+버퍼~하루 끝, 마지막날은 하루 시작~출발시각-버퍼, 중간날은 하루 종일(9~21).
+    ref(여행 첫날)를 주면 자정 넘긴 도착이 첫날 창을 벗어나(24+시) 첫날은 비고 관광이 다음날로 밀린다.
     k<=1이면 도착~출발 한 구간. arr/dep가 없으면 None → pipeline 기본 시간대(9~21).
     """
     if arr is None or dep is None:
         return None
-    arr_h = arr.hour + arr.minute / 60 + _ARRIVE_BUFFER_H
+    arr_h = _time_of(arr, ref) + _ARRIVE_BUFFER_H
     dep_h = dep.hour + dep.minute / 60 - _DEPART_BUFFER_H
     if k <= 1:
         return [(arr_h, dep_h)]
@@ -450,16 +463,21 @@ def _route_arr_dep(route):
     return route.go_trains[-1].arr_time, route.back_trains[0].dep_time
 
 
+def _trip_start(route):
+    """여행 첫날(가는편 첫 열차 출발 dt) — 자정 넘긴 도착 환산 기준. 없으면 None."""
+    return route.go_trains[0].dep_time if route and route.go_trains else None
+
+
 def _day_caps(route, k: int) -> tuple[int | None, int | None]:
     """이 경로의 목적지 도착/귀가 출발 시각으로 (첫날, 마지막날) 관광지 상한을 구한다."""
     arr, dep = _route_arr_dep(route)
-    return _caps_between(arr, dep, k)
+    return _caps_between(arr, dep, k, _trip_start(route))
 
 
 def _day_windows(route, k: int) -> list[tuple[float, float]] | None:
     """이 경로의 목적지 도착/귀가 출발 시각으로 날짜별 관광 가능 시간대를 만든다."""
     arr, dep = _route_arr_dep(route)
-    return _windows_between(arr, dep, k)
+    return _windows_between(arr, dep, k, _trip_start(route))
 
 
 def _assign_lodgings(courses: list[Course], memo: dict | None = None, fallback=None) -> None:
