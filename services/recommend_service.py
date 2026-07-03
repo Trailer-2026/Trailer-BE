@@ -35,6 +35,10 @@ _STOPOVER_N = 3
 _HOURS_PER_PLACE = 2.5
 _DAY_START_HOUR = 9
 _DAY_END_HOUR = 21
+# 역 ↔ 첫·마지막 관광지 이동/탑승 여유(h). 도착 후 바로 관광·관광 직후 바로 승차하는
+# 비현실을 막는다. 출발 버퍼는 이동+탑승 대기라 더 크게. 실제 도시별로 다르니 튜닝 여지 상수.
+_ARRIVE_BUFFER_H = 0.5   # 도착역 → 첫 관광지
+_DEPART_BUFFER_H = 1.0   # 마지막 관광지 → 귀가역 + 탑승 여유
 
 
 def recommend_courses(db: Session, criteria: SearchCriteria) -> RecommendResponse:
@@ -291,11 +295,14 @@ def _day_caps(route, k: int) -> tuple[int | None, int | None]:
         return None, None
     arr = route.go_trains[-1].arr_time    # 도착일 도착 시각
     dep = route.back_trains[0].dep_time   # 귀가일 출발 시각
+    # 역↔관광지 이동/탑승 여유를 뺀 실제 관광 가능 시각(도착은 미루고 출발은 당김).
+    arr_h = arr.hour + arr.minute / 60 + _ARRIVE_BUFFER_H
+    dep_h = dep.hour + dep.minute / 60 - _DEPART_BUFFER_H
     if k <= 1:
-        cap = _cap_from_hours((dep - arr).total_seconds() / 3600)
+        cap = _cap_from_hours((dep - arr).total_seconds() / 3600 - _ARRIVE_BUFFER_H - _DEPART_BUFFER_H)
         return cap, cap
-    first = _cap_from_hours(_DAY_END_HOUR - (arr.hour + arr.minute / 60))
-    last = _cap_from_hours((dep.hour + dep.minute / 60) - _DAY_START_HOUR)
+    first = _cap_from_hours(_DAY_END_HOUR - arr_h)
+    last = _cap_from_hours(dep_h - _DAY_START_HOUR)
     return first, last
 
 
@@ -303,15 +310,16 @@ def _day_windows(route, k: int) -> list[tuple[float, float]] | None:
     """이 경로의 도착/출발 시각으로 날짜별 관광 가능 시간대 (start_h, end_h) 목록을 만든다.
 
     첫날은 열차 도착시각~하루 끝, 마지막날은 하루 시작~열차 출발시각, 중간날은 하루 종일(9~21).
-    당일치기(k<=1)는 도착~출발 한 구간. pipeline이 이 시간대 안에서 관광지 운영시간에 맞춰
-    방문 시각을 배정한다. 경로 없음/시각 못 구하면 None → pipeline이 기본 시간대(9~21)를 쓴다.
+    양 끝에 역↔관광지 이동/탑승 여유(_ARRIVE/_DEPART_BUFFER_H)를 반영해 도착 후 바로 관광·관광
+    직후 바로 승차하는 비현실을 막는다. 당일치기(k<=1)는 도착~출발 한 구간. pipeline이 이 시간대
+    안에서 관광지 운영시간에 맞춰 방문 시각을 배정한다. 경로 없음/시각 못 구하면 None → 기본(9~21).
     """
     if route is None or not route.go_trains or not route.back_trains:
         return None
     arr = route.go_trains[-1].arr_time
     dep = route.back_trains[0].dep_time
-    arr_h = arr.hour + arr.minute / 60
-    dep_h = dep.hour + dep.minute / 60
+    arr_h = arr.hour + arr.minute / 60 + _ARRIVE_BUFFER_H   # 역→첫 관광지 여유
+    dep_h = dep.hour + dep.minute / 60 - _DEPART_BUFFER_H    # 막 관광지→역+탑승 여유
     if k <= 1:
         return [(arr_h, dep_h)]
     return [
