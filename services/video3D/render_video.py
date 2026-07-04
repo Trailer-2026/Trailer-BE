@@ -271,9 +271,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--travel-data", type=Path, help="trackPoints/mediaPoints JSON 파일")
     parser.add_argument(
         "--theme",
-        choices=["winter"],
+        choices=["winter", "spring"],
         default=None,
-        help="지도 테마 (winter: 눈)",
+        help="지도 테마 (winter: 눈 / spring: 벚꽃)",
     )
     parser.add_argument(
         "--bgm",

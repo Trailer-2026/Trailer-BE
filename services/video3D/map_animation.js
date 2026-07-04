@@ -731,6 +731,8 @@ function addTerrain() {
 // snow 는 setSnow(GL JS v3.9+) 파티클 옵션.
 // - winter: 초저녁(dusk) + 흰 눈. Mapbox 기본 프리셋(density 0.85,
 //   intensity 1.0, vignette 0.3)은 화면을 뒤덮어 과함 → 가볍게 낮춤.
+// - spring: 새벽(dawn) 분홍빛 + 눈 파티클을 연분홍으로 물들여 벚꽃잎 연출.
+//   꽃잎은 눈보다 크고(flake-size) 옆으로 흩날리게(direction 방위각) 설정.
 // intensity(낙하 속도)는 wall-clock 기반이라 프레임 캡처 간격(~0.3s)이
 // 재생 간격(1/30s)보다 길어 영상에서 빨라 보임 → 낮게 잡는다.
 const THEME_PRESETS = {
@@ -746,6 +748,21 @@ const THEME_PRESETS = {
       "flake-size": 0.6,
       vignette: 0.1,
       "vignette-color": "#ffffff"
+    }
+  },
+  spring: {
+    // 조명 프리셋 없음 — 기본 주간 조명 위에 벚꽃 파티클만 얹는다.
+    lightPreset: null,
+    snow: {
+      density: 0.15,
+      intensity: 0.15,
+      "center-thinning": 0.1,
+      direction: [40, 65],
+      opacity: 0.9,
+      color: "#ffb7c5",
+      "flake-size": 1.0,
+      vignette: 0.08,
+      "vignette-color": "#ffd7e0"
     }
   }
 };
