@@ -764,8 +764,92 @@ const THEME_PRESETS = {
       vignette: 0.08,
       "vignette-color": "#ffd7e0"
     }
+  },
+  summer: {
+    // 일본 여름 애니메이션 톤: 쨍한 한낮 햇빛 + 깊고 새파란 하늘 + 진한 채도.
+    // fog 로 하늘을 청량하게 만들고, colorGrade(LUT)로 색감을 끌어올린다.
+    lightPreset: null,
+    fog: {
+      color: "rgb(235, 246, 255)",
+      "high-color": "rgb(46, 130, 232)",
+      "horizon-blend": 0.14,
+      "space-color": "rgb(28, 108, 214)",
+      "star-intensity": 0
+    },
+    colorGrade: {
+      saturation: 1.5,
+      contrast: 1.12,
+      brightness: 0.02,
+      highlightWarmth: 0.05,
+      shadowCool: 0.06
+    }
   }
 };
+
+// 32³ 색상 LUT 를 1024x32 스트립(타일=B 슬라이스, 타일 내 x=R, y=G)으로
+// canvas 에 구워 base64 PNG 로 반환한다. Photoshop LUT 스트립과 동일한 배치.
+function buildColorGradeLUT(grade) {
+  const size = 32;
+  const canvas = document.createElement("canvas");
+  canvas.width = size * size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  const image = ctx.createImageData(size * size, size);
+  const data = image.data;
+  const clamp01 = (value) => Math.min(1, Math.max(0, value));
+  for (let b = 0; b < size; b += 1) {
+    for (let g = 0; g < size; g += 1) {
+      for (let r = 0; r < size; r += 1) {
+        let rr = r / (size - 1);
+        let gg = g / (size - 1);
+        let bb = b / (size - 1);
+        // 대비 (0.5 기준)
+        rr = 0.5 + (rr - 0.5) * grade.contrast;
+        gg = 0.5 + (gg - 0.5) * grade.contrast;
+        bb = 0.5 + (bb - 0.5) * grade.contrast;
+        // 채도 (luma 기준으로 색 성분만 증폭)
+        const luma = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
+        rr = luma + (rr - luma) * grade.saturation;
+        gg = luma + (gg - luma) * grade.saturation;
+        bb = luma + (bb - luma) * grade.saturation;
+        // 밝기 + 하이라이트는 따뜻하게, 그림자는 푸르게 (애니메이션 색감)
+        rr += grade.brightness + grade.highlightWarmth * luma;
+        gg += grade.brightness + grade.highlightWarmth * luma * 0.55;
+        bb += grade.brightness + grade.shadowCool * (1 - luma);
+        const idx = (g * size * size + (b * size + r)) * 4;
+        data[idx] = Math.round(clamp01(rr) * 255);
+        data[idx + 1] = Math.round(clamp01(gg) * 255);
+        data[idx + 2] = Math.round(clamp01(bb) * 255);
+        data[idx + 3] = 255;
+      }
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  return canvas.toDataURL("image/png").split(",")[1];
+}
+
+// LUT 색보정을 루트 스타일과 basemap import 양쪽에 적용한다 (Standard 를
+// 직접 로드하면 지도 레이어는 basemap import 밑에 있다).
+function applyColorGrade(grade) {
+  if (typeof map.setColorTheme !== "function") {
+    console.warn("map.setColorTheme unavailable; color grade skipped.");
+    return;
+  }
+  const theme = { data: buildColorGradeLUT(grade) };
+  try {
+    map.setColorTheme(theme);
+  } catch (error) {
+    console.warn(`Color grade (root) failed: ${error.message}`);
+  }
+  if (typeof map.setImportColorTheme === "function") {
+    try {
+      map.setImportColorTheme("basemap", theme);
+    } catch (error) {
+      // Standard 가 import 로 래핑되지 않은 버전이면 루트 적용만으로 충분.
+      console.warn(`Color grade (basemap) skipped: ${error.message}`);
+    }
+  }
+}
 
 function applyMapTheme() {
   const preset = THEME_PRESETS[MAP_THEME];
@@ -779,6 +863,10 @@ function applyMapTheme() {
     } catch (error) {
       console.warn(`Theme lightPreset failed: ${error.message}`);
     }
+  }
+  if (preset.colorGrade) {
+    applyColorGrade(preset.colorGrade);
+    console.info(`[theme] ${MAP_THEME}: color grade applied`);
   }
   if (!preset.snow) {
     return;
@@ -797,19 +885,21 @@ function applyMapTheme() {
 
 function addAtmosphere() {
   // lightPreset 을 바꾸는 테마는 해당 프리셋 자체의 대기/하늘 톤을 살리기
-  // 위해 주간용 커스텀 fog 를 씌우지 않는다.
+  // 위해 주간용 커스텀 fog 를 씌우지 않는다. 테마 전용 fog 가 있으면 그걸 쓴다.
   const preset = THEME_PRESETS[MAP_THEME];
-  if (preset && preset.lightPreset) {
+  if (preset && preset.lightPreset && !preset.fog) {
     return;
   }
   try {
-    map.setFog({
-      color: "rgb(204, 226, 255)",
-      "high-color": "rgb(64, 114, 180)",
-      "horizon-blend": 0.18,
-      "space-color": "rgb(8, 18, 36)",
-      "star-intensity": 0.12
-    });
+    map.setFog(
+      (preset && preset.fog) || {
+        color: "rgb(204, 226, 255)",
+        "high-color": "rgb(64, 114, 180)",
+        "horizon-blend": 0.18,
+        "space-color": "rgb(8, 18, 36)",
+        "star-intensity": 0.12
+      }
+    );
   } catch (error) {
     console.warn(`Atmosphere setup skipped: ${error.message}`);
   }
