@@ -783,6 +783,37 @@ const THEME_PRESETS = {
       highlightWarmth: 0.05,
       shadowCool: 0.06
     }
+  },
+  autumn: {
+    // 가을: 녹지를 단풍빛(호박색)으로 물들이고, 따뜻하고 옅은 안개 낀 하늘에
+    // 주황갈색 낙엽이 옆으로 흩날린다.
+    lightPreset: null,
+    fog: {
+      color: "rgb(244, 230, 208)",
+      "high-color": "rgb(126, 146, 184)",
+      "horizon-blend": 0.12,
+      "space-color": "rgb(44, 62, 98)",
+      "star-intensity": 0
+    },
+    colorGrade: {
+      saturation: 1.35,
+      contrast: 1.08,
+      brightness: 0,
+      highlightWarmth: 0.12,
+      shadowCool: 0.03,
+      greenToAmber: 0.8
+    },
+    snow: {
+      density: 0.15,
+      intensity: 0.12,
+      "center-thinning": 0.1,
+      direction: [60, 70],
+      opacity: 0.9,
+      color: "#d08a3e",
+      "flake-size": 1.3,
+      vignette: 0.06,
+      "vignette-color": "#e8c49a"
+    }
   }
 };
 
@@ -803,6 +834,12 @@ function buildColorGradeLUT(grade) {
         let rr = r / (size - 1);
         let gg = g / (size - 1);
         let bb = b / (size - 1);
+        // 초록 → 호박색 (가을 단풍): 초록 우세 성분만 붉은 쪽으로 민다.
+        if (grade.greenToAmber) {
+          const greenness = Math.max(0, gg - Math.max(rr, bb));
+          rr += greenness * grade.greenToAmber;
+          gg -= greenness * grade.greenToAmber * 0.35;
+        }
         // 대비 (0.5 기준)
         rr = 0.5 + (rr - 0.5) * grade.contrast;
         gg = 0.5 + (gg - 0.5) * grade.contrast;
