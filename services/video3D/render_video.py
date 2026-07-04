@@ -270,6 +270,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--photo-seconds", type=float, help="목적지 사진 유지 시간")
     parser.add_argument("--travel-data", type=Path, help="trackPoints/mediaPoints JSON 파일")
     parser.add_argument(
+        "--theme",
+        choices=["winter"],
+        default=None,
+        help="지도 테마 (winter: 눈)",
+    )
+    parser.add_argument(
         "--bgm",
         type=Path,
         default=None,
@@ -1857,6 +1863,7 @@ def render_timeline_frames(
     gpu_mode: str = "auto",
     headed: bool = False,
     disable_software_rasterizer: bool = False,
+    theme: str | None = None,
 ) -> tuple[int, bytes]:
     chromium_args = build_chromium_args(gpu_mode, disable_software_rasterizer)
     headless = not headed
@@ -1943,6 +1950,7 @@ def render_timeline_frames(
             "window.MAPBOX_ACCESS_TOKEN = "
             f"{json.dumps(token)};"
             f"window.TRAVEL_DATA = {json.dumps(browser_travel_data, ensure_ascii=False)};"
+            f"window.MAP_THEME = {json.dumps(theme or '')};"
             f"window.RENDER_FPS = {config.fps};"
             f"window.RENDER_MODE = {json.dumps(config.mode_name)};"
             "window.DEBUG_BEARING = true;"
@@ -2396,6 +2404,7 @@ def run() -> int:
             gpu_mode=args.gpu_mode,
             headed=args.headed,
             disable_software_rasterizer=args.disable_software_rasterizer,
+            theme=args.theme,
         )
         close_seconds = frame_writer.close()
         perf.add_stage("ffmpeg_encode_and_finalize", close_seconds)

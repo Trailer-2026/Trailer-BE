@@ -1,4 +1,6 @@
 const MAP_STYLE = "mapbox://styles/mapbox/standard";
+// 지도 테마 (window.MAP_THEME 로 주입). "winter": dusk 조명 + 눈 파티클.
+const MAP_THEME = String(window.MAP_THEME || "").toLowerCase();
 const TERRAIN_SOURCE_ID = "mapbox-dem";
 const FULL_ROUTE_SOURCE_ID = "route-planned";
 const PROGRESS_ROUTE_SOURCE_ID = "route-progress";
@@ -725,7 +727,64 @@ function addTerrain() {
   }
 }
 
+// 테마별 설정. lightPreset 은 Standard 스타일 조명(dawn/day/dusk/night),
+// snow 는 setSnow(GL JS v3.9+) 파티클 옵션.
+// - winter: 초저녁(dusk) + 흰 눈. Mapbox 기본 프리셋(density 0.85,
+//   intensity 1.0, vignette 0.3)은 화면을 뒤덮어 과함 → 가볍게 낮춤.
+// intensity(낙하 속도)는 wall-clock 기반이라 프레임 캡처 간격(~0.3s)이
+// 재생 간격(1/30s)보다 길어 영상에서 빨라 보임 → 낮게 잡는다.
+const THEME_PRESETS = {
+  winter: {
+    lightPreset: "dusk",
+    snow: {
+      density: 0.15,
+      intensity: 0.2,
+      "center-thinning": 0.15,
+      direction: [0, 50],
+      opacity: 0.8,
+      color: "#ffffff",
+      "flake-size": 0.6,
+      vignette: 0.1,
+      "vignette-color": "#ffffff"
+    }
+  }
+};
+
+function applyMapTheme() {
+  const preset = THEME_PRESETS[MAP_THEME];
+  if (!preset) {
+    return;
+  }
+  if (preset.lightPreset) {
+    try {
+      map.setConfigProperty("basemap", "lightPreset", preset.lightPreset);
+      console.info(`[theme] ${MAP_THEME}: lightPreset=${preset.lightPreset}`);
+    } catch (error) {
+      console.warn(`Theme lightPreset failed: ${error.message}`);
+    }
+  }
+  if (!preset.snow) {
+    return;
+  }
+  if (typeof map.setSnow !== "function") {
+    console.warn("map.setSnow unavailable (GL JS < 3.9?); particles skipped.");
+    return;
+  }
+  try {
+    map.setSnow(preset.snow);
+    console.info(`[theme] ${MAP_THEME}: particles enabled`);
+  } catch (error) {
+    console.warn(`Theme particles failed: ${error.message}`);
+  }
+}
+
 function addAtmosphere() {
+  // lightPreset 을 바꾸는 테마는 해당 프리셋 자체의 대기/하늘 톤을 살리기
+  // 위해 주간용 커스텀 fog 를 씌우지 않는다.
+  const preset = THEME_PRESETS[MAP_THEME];
+  if (preset && preset.lightPreset) {
+    return;
+  }
   try {
     map.setFog({
       color: "rgb(204, 226, 255)",
@@ -1658,6 +1717,7 @@ window.initializeMap = async function () {
 
   await waitForEvent(map, "load", 45000);
   map.resize();
+  applyMapTheme();
   addTerrain();
   addAtmosphere();
   addBuildings();
