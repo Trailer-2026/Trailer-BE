@@ -3,6 +3,7 @@
 핵심 규칙:
 - 식당(content_type_id=39)은 '식사'로 보고 점심(~12시)·저녁(~18시) 앵커에만 놓는다(하루 최대 2끼).
   → 밥 먹고 또 밥 먹는(식당 연속) 일정을 막는다. 식당만 있어도 하루 2끼까지만.
+  → 그 시간대 관광 동선 근처 식당을 우선 골라(점수−이탈거리 감점) 밥 먹으러 멀리 도는 걸 줄인다.
 - 관광지는 동선(지리 NN+2-opt) 순으로, 체류(_DWELL_H)와 장소 간 이동시간(_travel_h)을 반영해
   채운다. 가까운 장소는 촘촘히, 먼 장소는 이동시간만큼 더 벌어져 하루에 덜 들어간다.
 - 운영시간(오픈/마감·휴무요일)은 소프트 제약: 개점 전이면 미루고, 마감/창을 넘으면 그 곳을
@@ -39,6 +40,9 @@ def _travel_h(a: ScoredPlace, b: ScoredPlace) -> float:
 _MEAL_CT = 39
 # 식사 앵커: (목표 방문시각, 허용 시작 하한, 허용 시작 상한). 점심·저녁 두 끼.
 _MEALS = ((12.0, 11.0, 14.0), (18.0, 17.0, 20.0))
+# 식당 선택 시 동선에서 벗어난 거리(km)당 점수 감점 — 밥 먹으러 멀리 도는 걸 막는다.
+# 점수 비슷하면 가까운 집, 훨씬 좋은 집이면 조금 멀어도 선택되도록 하는 블렌드 계수(튜닝 가능).
+_MEAL_DIST_PENALTY = 0.03
 
 
 def _is_meal(p: ScoredPlace) -> bool:
@@ -81,11 +85,12 @@ def schedule_day(
     plan: list[tuple[ScoredPlace, float]] = []
     busy: list[tuple[float, float]] = []  # 이미 점유된 시간 구간들
 
-    # 1) 식사: 점심·저녁 앵커에 최고점 식당을 개점시각 지켜 배치(최대 2끼).
-    for target, lo, hi in _MEALS:
+    # 1) 식사: 점심·저녁 앵커에, 그 시간대 관광 동선 근처 + 점수 좋은 식당을 골라 배치(최대 2끼).
+    for mi, (target, lo, hi) in enumerate(_MEALS):
         if len(plan) >= cap or not meals:
             break
-        picked = _place_meal(meals, target, max(lo, start), min(hi, end), start, end)
+        ref = _meal_ref(attrs, mi)  # 점심=동선 앞쪽, 저녁=뒤쪽 무게중심(그때 있을 위치 추정)
+        picked = _place_meal(meals, target, max(lo, start), min(hi, end), start, end, ref)
         if picked is None:
             continue
         m, arrive = picked
@@ -121,19 +126,37 @@ def schedule_day(
     return plan
 
 
-def _place_meal(meals, target, lo, hi, start, end):
-    """식사 앵커(target, [lo,hi] 창) 안에서 개점시각 지켜 방문 가능한 최고점 식당을 고른다.
+def _meal_ref(attrs: list, meal_idx: int) -> tuple[float, float] | None:
+    """그 식사때 있을 위치 추정 — 관광 동선을 반으로 나눠 점심=앞쪽·저녁=뒤쪽 무게중심.
 
-    도착=max(목표, 하루시작, 개점). 그 시각이 창[lo,hi] 안이고 마감/하루끝 전에 끝나야 채택.
+    관광지가 없으면 None(위치 기준 없음 → 점수만으로 식당 선택).
     """
+    if not attrs:
+        return None
+    half = len(attrs) // 2 or len(attrs)
+    seg = attrs[:half] if meal_idx == 0 else (attrs[half:] or attrs)
+    return (sum(p.lat for p in seg) / len(seg), sum(p.lng for p in seg) / len(seg))
+
+
+def _place_meal(meals, target, lo, hi, start, end, ref=None):
+    """식사 앵커([lo,hi] 창) 안에서 방문 가능한 식당 중 '점수 − 동선 이탈거리 감점'이 최고인 곳을 고른다.
+
+    도착=max(목표, 하루시작, 개점). 그 시각이 창 안이고 마감/하루끝 전에 끝나야 후보.
+    ref(그 시간대 위치)가 있으면 거기서 먼 식당을 감점해 밥 먹으러 멀리 도는 걸 막는다.
+    """
+    best = None
+    best_key = None
     for m in meals:
         arrive = max(target, start, _open_of(m, target))
         if arrive < lo - _EPS or arrive > hi + _EPS:
             continue
         if arrive + _DWELL_H > min(_close_of(m, end), end) + _EPS:
             continue
-        return m, arrive
-    return None
+        detour = routing.haversine(m.lat, m.lng, ref[0], ref[1]) if ref else 0.0
+        key = m.score - _MEAL_DIST_PENALTY * detour  # 점수 높고 가까울수록↑
+        if best_key is None or key > best_key:
+            best, best_key = (m, arrive), key
+    return best
 
 
 def _busy_end_after(t: float, busy: list) -> float | None:
@@ -186,7 +209,15 @@ def _selfcheck() -> None:
     # 배치된 방문은 시각순이고 관람 구간이 안 겹친다(이동 간격 확보).
     ts = [t for _, t in rc]
     assert all(ts[i] + _DWELL_H <= ts[i + 1] + _EPS for i in range(len(ts) - 1)), ts
-    print(f"scheduling selfcheck OK (close={len(rc)} > far={len(rf)})")
+
+    # 식당 위치 인식: 관광 동선 근처 식당(점수 0.9)이 멀지만 살짝 높은 식당(0.95)보다 우선 선택.
+    near_food = place(500, 39, 0.90, lat=35.0, lng=129.0)     # 관광지 옆
+    far_food = place(501, 39, 0.95, lat=36.5, lng=127.5)      # 멀리(점수 약간↑)
+    attractions = [place(600 + i, 12, 0.8, lat=35.0 + i * 0.002, lng=129.0) for i in range(3)]
+    r4 = schedule_day([near_food, far_food] + attractions, cap=4, window=(9.0, 21.0), weekday=None)
+    lunch = [p for p, t in r4 if _is_meal(p) and t < 15.0]
+    assert lunch and lunch[0].place_idx == 500, f"근처 식당(500) 우선이어야: {[p.place_idx for p in lunch]}"
+    print(f"scheduling selfcheck OK (close={len(rc)} > far={len(rf)}, 근처식당 우선)")
 
 
 if __name__ == "__main__":
