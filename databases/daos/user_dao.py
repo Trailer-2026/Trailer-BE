@@ -22,8 +22,9 @@ def get_by_idx(db: Session, user_idx: int):
     ).first()
 
 
-def create(db: Session, provider: str, provider_id: str, email: Optional[str] = None):
-    user = User(provider=provider, provider_id=provider_id, email=email)
+def create(db: Session, provider: str, provider_id: str, email: Optional[str] = None,
+           nickname: Optional[str] = None):
+    user = User(provider=provider, provider_id=provider_id, email=email, nickname=nickname)
     db.add(user)
     db.flush()
     return user

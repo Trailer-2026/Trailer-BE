@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from databases.daos import user_dao, refresh_token_dao
 from databases.models.user import User
 from utils import oauth
+from utils.nickname import generate_nickname
 from core.security import (
     create_access_token,
     create_refresh_token,
@@ -36,8 +37,12 @@ def _login_with_social_user(provider: str, social_user: dict, db: Session) -> To
     provider_id = social_user["provider_id"]
     user = user_dao.get_by_provider(db, provider, provider_id)
     if not user:
+        # 첫 로그인(회원가입): 랜덤 닉네임 자동 부여(사용자가 나중에 변경 가능).
         # user_dao.create() 내부에서 flush 하므로 여기서 user_idx 사용 가능
-        user = user_dao.create(db, provider, provider_id, social_user.get("email"))
+        user = user_dao.create(
+            db, provider, provider_id, social_user.get("email"),
+            nickname=generate_nickname(),
+        )
 
     tokens = _issue_tokens(user, db)
     db.commit()
