@@ -15,7 +15,7 @@ from schemas.recommend_schema import (
 )
 from schemas.route_schema import StopoverPlace
 from services import route_service
-from utils import tour_place
+from utils import plan_cache, tour_place
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +80,29 @@ def recommend_courses(db: Session, criteria: SearchCriteria) -> RecommendRespons
 
     k = _trip_days(criteria.go_date, criteria.back_date)
     if criteria.dest_station_idx is not None:
-        return _recommend_fixed_dest(db, criteria, origin, k)
-    return _recommend_auto_dest(db, criteria, origin, k)
+        response = _recommend_fixed_dest(db, criteria, origin, k)
+    else:
+        response = _recommend_auto_dest(db, criteria, origin, k)
+    _cache_plans(db, response, criteria)  # 각 플랜에 plan_id 부여 + 저장용 캐시
+    return response
+
+
+def _cache_plans(db: Session, response: RecommendResponse, criteria: SearchCriteria) -> None:
+    """각 여정(플랜)에 plan_id를 부여하고, 저장(POST /api/travels)에 필요한 정보를 캐시한다.
+
+    fallback_coord는 기차 출발역 좌표를 station 테이블에서 못 찾을 때 대체할 목적지 좌표.
+    """
+    for dest in response.destinations:
+        st = station_dao.get_by_idx(db, dest.destination_station_idx)
+        fallback = (st.latitude, st.longitude) if st and st.latitude is not None else None
+        for it in dest.itineraries:
+            it.plan_id = plan_cache.put({
+                "itinerary": it,
+                "go_date": criteria.go_date,
+                "back_date": criteria.back_date,
+                "region": dest.destination_name,
+                "fallback_coord": fallback,
+            })
 
 
 def _recommend_fixed_dest(db, criteria, origin, k) -> RecommendResponse:

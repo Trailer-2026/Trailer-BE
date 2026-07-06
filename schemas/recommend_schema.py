@@ -166,6 +166,9 @@ class Itinerary(BaseModel):
     경로별로 하나씩 제공(직통/경유A/경유B…). 기차 없는 현지 여행이면 route_type="현지".
     """
 
+    plan_id: str | None = Field(
+        None, description="이 플랜을 저장(POST /api/travels)할 때 쓰는 id. 서버 캐시 키(TTL)."
+    )
     plan_label: str | None = Field(None, description="플랜 슬롯 라벨 (A/B/C…). 카드 '플랜 A' 칩용")
     title: str | None = Field(
         None, description="플랜 카드 제목 (대표 명소 기준, 예: '부산 중앙공원 코스'). 방문지가 없으면 null"
