@@ -83,3 +83,15 @@ async def logout_all(current_user: User = Depends(get_current_user), db: Session
 async def get_me(current_user: User = Depends(get_current_user)):
     result = UserResponse.model_validate(current_user)
     return CommonResponse.success_response("조회 성공", data=result)
+
+
+@router.delete(
+    "/me",
+    summary="회원 탈퇴",
+    description="현재 사용자를 소프트 삭제(deleted_at)하고 모든 refresh token·FCM 토큰을 정리합니다. "
+                "탈퇴 후 같은 소셜 계정으로 재가입(신규 유저 생성)할 수 있습니다. (access token 인증 필요)",
+    response_model=CommonResponse[None],
+)
+async def withdraw(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    auth_service.withdraw(current_user.user_idx, db)
+    return CommonResponse.success_response("회원 탈퇴 성공")

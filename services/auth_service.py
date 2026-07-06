@@ -2,7 +2,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from databases.daos import user_dao, refresh_token_dao
+from databases.daos import user_dao, refresh_token_dao, fcm_token_dao
 from databases.models.user import User
 from utils import oauth
 from utils.nickname import generate_nickname
@@ -103,6 +103,22 @@ def logout(token: str, db: Session) -> None:
 def logout_all(user_idx: int, db: Session) -> None:
     """해당 사용자의 모든 refresh 토큰을 무효화한다 (모든 기기 로그아웃)."""
     refresh_token_dao.revoke_all_for_user(db, user_idx)
+    db.commit()
+
+
+def withdraw(user_idx: int, db: Session) -> None:
+    """회원 탈퇴 — 모든 refresh 토큰 폐기 + FCM 토큰 정리 + 유저 소프트 삭제.
+
+    soft-delete라 user_idx를 FK로 물린 다른 테이블은 FK가 깨지진 않지만 데이터가 남는다.
+    유저 소유 테이블을 새로 추가하면 여기서 함께 soft-delete하도록 한 줄씩 보태야 한다.
+    (예: travel/schedule 머지 시 travel_dao.soft_delete_by_user 등 추가)
+    현재 정리 대상: refresh_token, fcm_token, user.
+    """
+    refresh_token_dao.revoke_all_for_user(db, user_idx)
+    tokens = fcm_token_dao.get_tokens_by_user(db, user_idx)
+    if tokens:
+        fcm_token_dao.soft_delete_by_tokens(db, tokens)
+    user_dao.soft_delete(db, user_idx)
     db.commit()
 
 
