@@ -49,9 +49,9 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 |---|---|
 | `types.py` | 내부 값 객체: `ScoredPlace`(점수화된 장소), `Cluster`(Day 묶음), `Tour`(방문순서) |
 | `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`) |
-| `clustering.py` | ② k-means(결정적)로 일수만큼 날짜 묶기 (`kmeans_by_geo`) |
+| `clustering.py` | ② k-means(결정적)로 중심 잡고 **용량 균형 재배정**으로 날짜 묶기 — 각 날 floor~ceil(n/k)개로 과밀·빈 날 없이 정확히 k일 보장 (`kmeans_by_geo`/`_balanced_assign`) |
 | `routing.py` | ③④ Nearest Neighbor + 2-opt + 순환 복귀, `haversine` (`nearest_neighbor`/`two_opt`/`close_cycle`) |
-| `scheduling.py` | ⑤ Day 내부 **시각 스케줄링**. 관광지 운영시간(오픈/마감·휴무요일)에 맞춰 방문 시각 배정·재정렬, 운영시간 밖이면 차순위 후보로 대체(소프트). 운영시간 정보가 없는 날은 `routing` 동선 순서로 폴백 (`schedule_day`) |
+| `scheduling.py` | ⑤ Day 내부 **시각 스케줄링**. 체류(`_DWELL_H`)+장소 간 이동시간(`_travel_h`) 반영해 동선 순 배치, 식당은 그 시간대 동선 근처 우선(점수−이탈거리 감점). 관광지 운영시간(오픈/마감·휴무요일) 소프트 제약, 밖이면 차순위 대체. 운영시간 정보 없는 날은 `routing` 동선 순서로 폴백 (`schedule_day`) |
 | `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 최대 3곳(첫/마지막날은 열차 시각 기반 `first_cap`/`last_cap`으로 축소), Day 순서는 `scheduling`이 운영시간 반영해 확정 |
 | `destination.py` | **도착지 선택**(코스 파이프라인과 별개). 도착역 미지정 시 `theme + party` 기준으로 시도 area 후보를 점수화·권역 다양성 필터 (`rank_and_diversify`, 값 객체 `AreaProfile`) |
 
@@ -85,7 +85,7 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 - **테마 미선택 방어**: 프론트가 테마 최소 1개 선택을 강제하지만, 백엔드도 빈 테마를 방어한다 — `SearchCriteria.themes`는 스키마상 빈 리스트를 허용하고, 빈 값이 들어오면 `utils/tour_place.py:_DEFAULT_CTYPES`(관광지12·문화14·음식39)로 기본 조회한다. 프론트 검증을 신뢰하되 잘못된/직접 호출로 조용히 빈 추천이 나가지 않도록 최후 방어선으로 남겨둔 것. 스키마에서 `min_length=1`을 강제하지 않는 이유가 이 폴백을 살리기 위함이니, 폴백을 지우려면 스키마 강제를 먼저 넣어라.
 - `destination.py` 가중치/휴리스틱 표(`WEIGHT_*`, `_AGE_SUIT`, `_GROUP_FRIENDLY`, `_IDEAL_KM`, `GROUP_LARGE`)는 전부 모듈 상수다. 값을 바꿔 튜닝하되, 연령/그룹 표는 **실데이터가 아니라 휴리스틱**임을 잊지 마라(데이터가 생기면 표를 교체).
 - `Theme`는 `core.enums`에서 import. 출력 타입(`Course`/`DayPlan`/`RecommendedPlace`)·`Party`는 `schemas.recommend_schema`.
-- 클러스터링·NN·도착지 점수화는 결정적이어야 한다(같은 입력 → 같은 추천). `random`/`Date.now` 류 비결정 요소 넣지 마라.
+- 클러스터링(용량 균형 재배정 포함)·NN·도착지 점수화는 결정적이어야 한다(같은 입력 → 같은 추천). `_balanced_assign`은 정렬키 `(거리, 점idx, 중심idx)`로 완전 결정적 — `random`/`Date.now` 류 비결정 요소 넣지 마라.
 - 거리 계산은 `routing.haversine`로 통일.
 
 ## 관광지 운영시간 (open/close) 반영
@@ -103,17 +103,24 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 - **스케줄링 — `recommend/scheduling.py`** (순수 계산)
   - `schedule_day`는 **식사와 관광을 분리**한다: 식당(`content_type_id=39`)은 점심(~12시)·저녁(~18시)
     앵커에만 배치(`_MEALS`, **하루 최대 2끼**), 관광지는 동선(NN+2-opt+원점복귀) 순으로 식사 점유 시간을
-    피해 2.5h 슬롯에 채운다. → "밥 먹고 또 밥"(식당 연속) 방지. 식당만 있어도(FOOD 단독) 2끼까지만.
+    피해 채운다. → "밥 먹고 또 밥"(식당 연속) 방지. 식당만 있어도(FOOD 단독) 2끼까지만.
+  - **식당은 동선 근처로**(`_meal_ref`/`_place_meal`): 앵커 시간대의 관광 동선 무게중심(점심=동선 앞쪽 절반,
+    저녁=뒤쪽 절반)에서 가까운 식당을 우선한다. 최고점만 보지 않고 **`score − _MEAL_DIST_PENALTY·이탈거리`**로
+    골라 "밥 먹으러 멀리 도는" detour를 막는다(점수 비슷하면 가까운 집, 훨씬 좋으면 조금 멀어도 채택). 관광지 없으면 점수만.
   - 운영시간은 소프트 제약: 개점 전이면 미루고, 마감/창을 넘으면 그 곳을 건너뛰고 **차순위로 대체**.
     그 날 휴무인 곳은 제외. 채울 비식당이 부족하면 가짜 식사로 메우지 않고 그 시간을 비운다.
   - `ScoredPlace.open_hour/close_hour/closed_weekdays`(recommend_service가 채움)를 읽고, 결과 방문 시각은
     `RecommendedPlace.open_time/close_time/visit_time`(HH:MM)로 노출된다. 방문시각은 `reason`에도 표기.
-  - ⚠️ **시간 가정**: 관광지 1곳 `_HOURS_PER_PLACE`=**2.5h(150분) 점유**(관람+이동 뭉뚱그림).
-    **관광지 간 실측 이동시간은 계산하지 않는다**(Haversine 거리는 방문 *순서* 최적화에만 쓰고 시각 배정엔 미반영).
-    관광지 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 2.5h 간격으로 찍히되 **식사(식당) 구간은 건너뛴다**.
-    식당은 점심(~12)·저녁(~18) 앵커 시각에 배정된다(균등 그리드가 아님).
-    `_HOURS_PER_PLACE`는 **`recommend/scheduling.py`·`services/recommend_service.py` 두 곳에 동일**하며 `_day_caps`(방문 개수 상한)·
-    `_day_windows`(시각 배정)가 함께 쓰므로 바꿀 땐 둘 다 맞춘다. 실측 이동시간 연동은 추후.
+  - ⚠️ **시간 가정**: 관광지 1곳 = 체류 `_DWELL_H`=**2.0h**(관람) + **장소 간 이동시간 `_travel_h`**를 따로 더한다.
+    `_travel_h` = Haversine 직선거리 × `_DETOUR`(1.3) ÷ `_SPEED_KMH`(30) — 인접해도 `_MIN_MOVE_H`(15분) 하한.
+    → **가까운 장소는 촘촘, 먼 장소는 벌어져 하루에 덜 들어간다**(예전 고정 2.5h 슬롯을 체류+가변 이동으로 대체).
+    Haversine는 이제 방문 *순서*(NN+2-opt) 최적화 **와** 이 이동시간 추정 **양쪽**에 쓰인다(예전엔 순서에만).
+    관광지 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 체류 2.0h+가변 이동시간 간격으로 찍히되
+    **식사(식당) 구간은 건너뛴다**. 식당은 점심(~12)·저녁(~18) 앵커 시각에 배정된다(균등 그리드가 아님).
+    체류 상수는 **`scheduling._DWELL_H`(2.0) = `itinerary._HOURS_PER_PLACE`(2.0)**로 반드시 일치해야 방문 종료시각
+    표기가 어긋나지 않는다(바꿀 땐 둘 다). `services/recommend_service._HOURS_PER_PLACE`(2.5)는 **별개** —
+    `_day_caps`(하루 방문 개수 상한)를 열차 시각에서 뽑는 '평균 슬롯' 근사치일 뿐 실제 시각 배치엔 안 쓴다.
+    정밀 도로 이동시간 API 연동은 추후.
 
 ## 경유역 관광지 (via / stopover)
 
@@ -146,6 +153,7 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 
 - 기차 구간: 여기서 안 푼다. `services/route_service.py`(그래프 탐색)가 담당. 경유역(`via_station_idx`) 경로 생성도 route_service 몫(위 "경유역 관광지" 참조).
 - 관광지·숙소 데이터: 실시간 TourAPI 호출이며 `utils/tour_place.py` + `recommend_service`가 담당(경유역 근처 관광지 부착 포함).
+- **열차 정차역 수(`RouteTrain.stop_station_count`/`stop_stations`)**: 이 순수 엔진이 아니라 `recommend_service._attach_train_stops`가 부착한다. 한국철도공사 열차운행정보 API를 적재한 `train_stop` 테이블(열차번호별 정차 시퀀스)에서 탑승구간(출발~도착, 양끝 포함)을 잘라 붙이고, 데이터 없는 열차(SRT·임시)는 null. 적재·자동 갱신은 **상위 `CLAUDE.md`의 "열차 정차역 자동 갱신" 섹션** 참조.
 
 ## 응답 스키마
 ```
@@ -175,7 +183,8 @@ CommonResponse
               ├─ day_no: int       // 1=Day1
               ├─ start_time?: datetime   // 열차 출발 / 방문 시작 (KST)
               ├─ end_time?: datetime     // 열차 도착 / 방문 종료 (KST)
-              ├─ train?: RouteTrain      // kind=train (train_no/grade/dep·arr_station/dep·arr_time/duration_minutes/fare)
+              ├─ train?: RouteTrain      // kind=train (train_no/grade/dep·arr_station/dep·arr_time/duration_minutes/fare/
+              │                            //   stop_station_count·stop_stations = 탑승구간 정차역 수·순서, 데이터 없으면 null(예: SRT))
               ├─ place?: RecommendedPlace  // kind=visit (경유역·목적지 공통. place_idx/name/lat·lng/themes/
               │                            //   preference_score/reason/image_url/open·close·visit_time)
               └─ lodging?: Lodging       // kind=lodging (name/lodging_type/region/lat·lng/tel/image_url)
