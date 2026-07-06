@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from core.exceptions.custom import BadRequestException, NotFoundException
-from databases.daos import station_dao
+from databases.daos import station_dao, train_stop_dao
 from recommend import destination, itinerary, pipeline, scoring
 from recommend.routing import haversine
 from recommend.types import ScoredPlace
@@ -674,10 +674,49 @@ def _fetch_routes(db: Session, origin, dest, criteria: SearchCriteria, k: int) -
             except Exception as e:  # 숙박 경유 실패해도 당일치기·직통 경로는 유지
                 logger.warning("숙박 경유 조회 실패(기본 경로는 유지): %s", e)
         routes = _enrich_stopovers(db, routes, criteria)
+        _attach_train_stops(db, routes)
         return routes, None
     except Exception as e:
         logger.warning("기차 경로 조회 실패: %s", e)
         return [], "기차 경로를 불러오지 못했습니다(코스만 제공)."
+
+
+def _attach_train_stops(db: Session, routes) -> None:
+    """경로의 각 열차편(RouteTrain)에 '탑승구간 정차역 수·순서'를 채운다.
+
+    train_stop 테이블(열차운행정보 적재분)을 열차번호로 조회해, 그 열차의 정차 시퀀스에서
+    출발역~도착역 구간만 잘라 붙인다. 데이터 없는 열차(SRT·임시열차·미적재)는 null로 둔다.
+    """
+    trains = [t for r in routes for t in (list(r.go_trains) + list(r.back_trains))]
+    if not trains:
+        return
+    # 정차역은 부가 정보 — 조회 실패(미적재·DB 오류 등)해도 경로/코스는 그대로 살린다(null 폴백).
+    try:
+        stops_map = train_stop_dao.get_stops_for(db, {t.train_no for t in trains})
+    except Exception as e:
+        logger.warning("정차역 조회 실패(정차수 생략): %s", e)
+        return
+    for t in trains:
+        names = _stops_between(stops_map.get(t.train_no), t.dep_station, t.arr_station)
+        if names:
+            t.stop_stations = names
+            t.stop_station_count = len(names)
+
+
+def _stops_between(rows, dep_name: str, arr_name: str) -> list[str] | None:
+    """정차역 시퀀스(seq 오름차순 TrainStop)에서 출발~도착 구간의 정차역명 목록(양끝 포함).
+
+    '통과'는 제외하고 실제 정차역만 센다. 출발/도착역이 시퀀스에 없으면(역명 불일치 등) None.
+    상·하행 모두 시퀀스 순서상 출발이 도착보다 앞서므로 [출발..도착] 슬라이스면 된다.
+    """
+    if not rows:
+        return None
+    names = [r.stn_nm for r in rows if r.stop_se_nm != "통과"]
+    try:
+        i, j = names.index(dep_name), names.index(arr_name)
+    except ValueError:
+        return None
+    return names[i:j + 1] if i <= j else names[j:i + 1][::-1]
 
 
 def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:

@@ -40,6 +40,15 @@ class RouteTrain(BaseModel):
     arr_time: datetime = Field(..., description="도착 일시")
     duration_minutes: int = Field(..., description="소요시간(분)")
     fare: int | None = Field(None, description="어른 1인 편도 운임(원, TAGO API adultcharge). 좌석등급·할인 미반영, 미제공 시 null")
+    stop_station_count: int | None = Field(
+        None,
+        description="이 열차가 탑승구간(출발~도착)에서 정차하는 역 수(출발·도착역 포함). "
+                    "정차역 데이터 없으면 null(예: SRT, 임시열차)",
+    )
+    stop_stations: list[str] | None = Field(
+        None,
+        description="탑승구간 정차역명 순서(출발~도착 포함). 데이터 없으면 null",
+    )
 
 
 class RouteCandidate(BaseModel):
