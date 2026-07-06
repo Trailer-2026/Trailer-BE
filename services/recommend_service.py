@@ -168,12 +168,15 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
         return _auto_fallback(db, criteria, origin, origin_coords, k)
 
     plans = []
-    for p in final:
+    # 자동목적지는 '목적지 3곳' 자체가 플랜 A/B/C라, 목적지당 최적 여정 1개만(target=1) 뽑고
+    # 라벨은 목적지 순서대로 부여(di=0→A). 목적지 지정 모드처럼 한 목적지에 3코스로 펴지 않는다.
+    for di, p in enumerate(final):
         st = p.station
         # 경로별로 그 경로의 도착/출발 시각에 맞춘 코스를 엮는다. Phase B 장소를 재사용(추가 조회 없음).
         routes, rnote = _fetch_routes(db, origin, st, criteria, k)
         itineraries = _itineraries_from(
-            db, place_cache[st.station_idx], criteria, k, (st.latitude, st.longitude), routes
+            db, place_cache[st.station_idx], criteria, k, (st.latitude, st.longitude), routes,
+            target=1, label_start=di,
         )
         plans.append(DestinationPlan(
             destination_station_idx=st.station_idx,
@@ -225,10 +228,11 @@ def _auto_fallback(db, criteria, origin, origin_coords, k) -> RecommendResponse:
     return RecommendResponse(auto_selected=True, destinations=[plan], note=None)
 
 
-def _itineraries_at(db, criteria: SearchCriteria, k: int, anchor, routes: list) -> list:
-    """현지 기준점(anchor) 반경 추천지를 실시간 조회 후 경로별 여정 생성(지정/폴백용)."""
+def _itineraries_at(db, criteria: SearchCriteria, k: int, anchor, routes: list,
+                    target: int = 3, label_start: int = 0) -> list:
+    """현지 기준점(anchor) 반경 추천지를 실시간 조회 후 여정 생성(지정/폴백용). 기본 플랜 3개."""
     places = tour_place.live_places(anchor[0], anchor[1], criteria.themes)
-    return _itineraries_from(db, places, criteria, k, anchor, routes)
+    return _itineraries_from(db, places, criteria, k, anchor, routes, target, label_start)
 
 
 def _has_visits(itineraries: list) -> bool:
@@ -236,30 +240,108 @@ def _has_visits(itineraries: list) -> bool:
     return any(s.kind == "visit" for it in itineraries for s in it.segments)
 
 
-def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, routes: list) -> list:
-    """이미 받아둔 추천지(places)로 경로별 통합 여정을 만든다.
+_PLAN_LABELS = ["A", "B", "C", "D", "E"]
 
-    점수화·운영시간 조회(네트워크)는 목적지당 한 번만 하고(_prepare_scored), build_courses는
-    경로마다 그 경로의 도착/출발 시각(_day_caps/_day_windows)에 맞춰 새로 돌린다(경유는 늦은
-    도착이 첫날에 반영됨). 숙박 경유(via_nights>=1)는 두 도시로 나눈 _course_for_overnight로
-    코스를 만든다(경유역 추천지는 via_cache로 경유역당 1회 조회). 숙소 조회 memo는 경로 간 공유.
 
-    경로가 없으면(같은 역·조회 실패) 기차 없는 '현지 여행' 여정 하나. 코스가 비면(추천지 없음)
-    각 경로는 기차만 있는 여정으로 나온다(경로 정보 보존).
+def _plan_places(course) -> frozenset:
+    """코스에 든 관광지 place_idx 집합 — 플랜 간 관광지 겹침 계산용."""
+    return frozenset(p.place_idx for d in course.days for p in d.places)
+
+
+def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, routes: list,
+                      target: int = 3, label_start: int = 0) -> list:
+    """추천지(places)로 최대 target개의 '플랜' 여정을 만든다.
+
+    플랜끼리 관광지가 겹치지 않도록, build_courses가 만드는 '장소 분리된 코스 버킷'(working[i::3])을
+    플랜마다 다른 것으로 배정한다. 경로가 여럿이면 경로도 번갈아 써 경로·코스 둘 다 다르게 한다
+    (플랜 j = 경로 j%R + 버킷 j). 경로가 target보다 적으면 남는 버킷으로 채운다(채움). 이미 나온
+    것과 관광지 구성이 같은 코스는 건너뛴다(중복 방지). label_start는 플랜 라벨(A/B/C…) 시작
+    인덱스로, 자동목적지 모드에서 목적지별로 A/B/C를 부여할 때 쓴다.
+
+    점수화·운영시간 조회(네트워크)는 목적지당 한 번(_prepare_scored). build_courses는 경로마다
+    그 경로 도착/출발 시각에 맞춰 새로 돌린다(인메모리라 쌈). 숙박 경유(via_nights>=1)는 두 도시로
+    나눈 _course_for_overnight로 코스 1개(변형 없음). 숙소 조회 memo는 경로 간 공유.
+
+    코스가 하나도 안 나오는데 경로는 있으면(추천지 없음) 기차만 있는 여정을 남겨 경로 정보를 보존한다.
     """
     scored = _prepare_scored(places, criteria, k)
     memo: dict = {}       # 숙소 조회 캐시(경로 간 공유) — 종점 좌표가 같으면 재사용
     via_cache: dict = {}  # 경유역 scored 캐시(경유역당 1회 조회)
-    if not routes:
-        best = _course_for_route(scored, criteria, k, anchor, None, memo)
-        return [itinerary.build_itinerary(None, best, criteria.go_date)] if best is not None else []
-    out = []
-    for r in routes:
-        if r.via_nights >= 1:  # 숙박 경유: 경유 도시 + 목적지 두 구간 코스
-            course = _course_for_overnight(db, scored, criteria, k, anchor, r, memo, via_cache)
+    route_list = routes or [None]
+
+    # 경로별 코스 변형 목록(선호도 내림차순). 숙박 경유는 이어붙인 단일 코스라 변형 1개.
+    variants = []
+    for r in route_list:
+        if r is not None and r.via_nights >= 1:
+            c = _course_for_overnight(db, scored, criteria, k, anchor, r, memo, via_cache)
+            variants.append((r, [c] if c is not None else []))
         else:
-            course = _course_for_route(scored, criteria, k, anchor, r, memo)
-        out.append(itinerary.build_itinerary(r, course, criteria.go_date))
+            variants.append((r, _courses_for_route(scored, criteria, k, anchor, r)))
+
+    # 경로를 라운드로빈으로 하나씩 소비하되(경로 다양성), 각 경로에선 '이미 뽑힌 관광지와
+    # 겹침이 가장 적은(새 관광지 최다)' 버킷을 골라 플랜 간 관광지 중복을 최소화한다.
+    # 경유 관광·중간날 보충(attraction_pool) 때문에 버킷 간에도 일부 겹칠 수 있어, 완전 분리가
+    # 아니라 '겹침 최소'를 목표로 한다. 경로가 target보다 적으면 남은 버킷으로 채운다(채움).
+    out: list = []
+    used: set = set()          # 지금까지 플랜에 들어간 관광지 place_idx 누적
+    taken: dict = {}           # 경로 인덱스 → 이미 쓴 버킷 인덱스 집합(같은 버킷 재사용 방지)
+    R = len(variants)
+    guard = ri = 0
+    while len(out) < target and guard < R * len(_PLAN_LABELS):
+        idx = ri % R
+        guard += 1
+        ri += 1
+        r, courses = variants[idx]
+        avail = [(bi, c) for bi, c in enumerate(courses) if bi not in taken.get(idx, set())]
+        if not avail:
+            continue
+        bi, course = max(avail, key=lambda t: len(_plan_places(t[1]) - used))
+        taken.setdefault(idx, set()).add(bi)
+        ids = _plan_places(course)
+        if not ids or (out and ids <= used):  # 관광지 없거나 이미 나온 것에 완전 포함이면 스킵
+            continue
+        _assign_lodgings([course], memo, fallback=anchor)  # 관광 없는 날도 도착지 근처 숙소 확보
+        it = itinerary.build_itinerary(r, course, criteria.go_date)
+        it.plan_label = _PLAN_LABELS[min(label_start + len(out), len(_PLAN_LABELS) - 1)]
+        out.append(it)
+        used |= ids
+
+    def _add(r, course):
+        if course is not None:
+            _assign_lodgings([course], memo, fallback=anchor)  # 관광 없는 날도 도착지 근처 숙소
+            used.update(_plan_places(course))
+        it = itinerary.build_itinerary(r, course, criteria.go_date)
+        it.plan_label = _PLAN_LABELS[min(label_start + len(out), len(_PLAN_LABELS) - 1)]
+        out.append(it)
+
+    # 채움 1) 서로 다른 코스가 target보다 적으면, 남은 버킷을 '겹침 허용'하고 새 관광지 많은 순으로
+    # 더 넣어 3장을 맞춘다(중복 관광지가 좀 섞여도 카드 수는 채움).
+    if len(out) < target:
+        leftover = [
+            (idx, c) for idx, (r, courses) in enumerate(variants)
+            for bi, c in enumerate(courses)
+            if bi not in taken.get(idx, set()) and _plan_places(c)
+        ]
+        leftover.sort(key=lambda t: len(_plan_places(t[1]) - used), reverse=True)
+        for idx, course in leftover:
+            if len(out) >= target:
+                break
+            _add(variants[idx][0], course)
+
+    # 추천지가 아예 없어 플랜이 안 나왔지만 실제 경로가 있으면 기차만 있는 여정으로 경로 보존.
+    if not out and routes:
+        for r in routes[:target]:
+            _add(r, None)
+
+    # 채움 2) 최후: 후보가 바닥나도 target 미만이면 이미 만든 플랜을 복제해 무조건 target장을 맞춘다
+    # (관광지가 극히 적은 목적지 대비 — 복제 카드는 내용이 앞 카드와 같다).
+    base = list(out)
+    i = 0
+    while base and len(out) < target:
+        dup = base[i % len(base)].model_copy()
+        dup.plan_label = _PLAN_LABELS[min(label_start + len(out), len(_PLAN_LABELS) - 1)]
+        out.append(dup)
+        i += 1
     return out
 
 
@@ -270,20 +352,16 @@ def _prepare_scored(places, criteria: SearchCriteria, k: int) -> list:
     return scored
 
 
-def _course_for_route(scored: list, criteria: SearchCriteria, k: int, anchor, route, memo: dict) -> Course | None:
-    """한 경로의 도착/출발 시각에 맞춰 대표 코스(최고 선호도)를 만든다. 추천지 없으면 None.
+def _courses_for_route(scored: list, criteria: SearchCriteria, k: int, anchor, route) -> list:
+    """한 경로의 도착/출발 시각에 맞춘 코스 후보 전부(선호도 내림차순). 추천지 없으면 빈 목록.
 
-    route=None이면 시각 제약 없는 기본 코스(현지 여행). build_courses는 인메모리라 경로마다
-    반복해도 싸다. 숙소만 memo 공유로 중복 조회를 막는다.
+    build_courses가 관광지가 겹치지 않는 코스 A/B/C를 만든다(working[i::3]). 숙소는 실제
+    채택된 코스에만 나중에 배정한다(_itineraries_from). route=None이면 시각 제약 없는 현지 코스.
     """
     first_cap, last_cap = _day_caps(route, k)
     windows = _day_windows(route, k)
     courses = pipeline.build_courses(scored, criteria, k, anchor, first_cap, last_cap, windows)
-    if not courses:
-        return None
-    best = max(courses, key=lambda c: c.total_preference_score)
-    _assign_lodgings([best], memo, fallback=anchor)  # 관광 없는 날도 도착지 근처 숙소 확보
-    return best
+    return sorted(courses, key=lambda c: c.total_preference_score, reverse=True)
 
 
 def _caps_arrival_only(arr, k: int) -> tuple[int | None, int | None]:

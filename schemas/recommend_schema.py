@@ -161,9 +161,20 @@ class Itinerary(BaseModel):
     경로별로 하나씩 제공(직통/경유A/경유B…). 기차 없는 현지 여행이면 route_type="현지".
     """
 
+    plan_label: str | None = Field(None, description="플랜 슬롯 라벨 (A/B/C…). 카드 '플랜 A' 칩용")
+    title: str | None = Field(
+        None, description="플랜 카드 제목 (대표 명소 기준, 예: '부산 중앙공원 코스'). 방문지가 없으면 null"
+    )
     label: str = Field(..., description="여정 라벨 (경로 표기, 예: 서울→대전→부산)")
     route_type: str = Field(..., description="직통 | 경유 | 현지")
     via_station_idx: int | None = Field(None, description="경유역 station_idx. 직통/현지면 null")
+    main_themes: list[Theme] = Field(
+        default_factory=list,
+        description="이 여정의 대표 테마(방문지 테마 최빈 상위 2개). 플랜 카드 '메인 테마' 표기용. 방문지가 없으면 빈 목록",
+    )
+    cover_image_url: str | None = Field(
+        None, description="플랜 카드 대표 이미지(선호도 최고 방문지 이미지). 이미지 있는 방문지가 없으면 null"
+    )
     segments: list[ItinerarySegment] = Field(..., description="시간순 세그먼트(기차·방문·숙소 통합)")
     total_preference_score: float = Field(..., description="코스 전체 선호도 점수 합")
     total_travel_minutes: int = Field(..., description="총 기차 이동시간(분, 체류 제외)")

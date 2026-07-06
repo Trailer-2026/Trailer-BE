@@ -8,6 +8,7 @@
 Phase 1: 대표 코스 1개를 각 경로에 그대로 엮는다(코스는 routes[0] 시각 기준으로 계산됨).
 경로별 코스 재계산·경유역 1박은 Phase 2/3에서.
 """
+from collections import Counter
 from datetime import datetime, timedelta
 
 from schemas.recommend_schema import (
@@ -67,10 +68,22 @@ def build_itinerary(route, course, go_date: str) -> Itinerary:
     # 뒤·목적지 관광 앞에 자연히 놓인다). 숙소는 시각이 없어 그 날 끝으로 정렬.
     segs.sort(key=lambda s: _sort_key(s, go))
 
+    # 플랜 카드 표시용 요약: 테마 최빈 상위 2개 + 대표 명소(선호도 최고, 이미지 있는 방문지)에서
+    # 제목·커버를 함께 뽑아 한 장소를 가리키게 한다. 플랜마다 대표 명소가 달라 제목도 갈린다.
+    visits = [s.place for s in segs if s.kind == "visit" and s.place]
+    main_themes = [t for t, _ in Counter(t for v in visits for t in v.themes).most_common(2)]
+    with_img = [v for v in visits if v.image_url]
+    headline = max(with_img or visits, key=lambda v: v.preference_score) if visits else None
+    title = f"{headline.name} 코스" if headline is not None else None
+    cover_image_url = headline.image_url if headline is not None else None
+
     return Itinerary(
+        title=title,
         label=route.path if route is not None else "현지 여행",
         route_type=route.route_type if route is not None else "현지",
         via_station_idx=route.via_station_idx if route is not None else None,
+        main_themes=main_themes,
+        cover_image_url=cover_image_url,
         segments=segs,
         total_preference_score=course.total_preference_score if course is not None else 0.0,
         total_travel_minutes=route.total_travel_minutes if route is not None else 0,
@@ -199,6 +212,20 @@ def _selfcheck() -> None:
     assert [s.kind for s in it2.segments] == ["train", "visit", "train"]
     it3 = build_itinerary(None, course, "20260710")
     assert [s.kind for s in it3.segments] == ["visit"] and it3.route_type == "현지"
+
+    # 카드 요약: 메인 테마=방문지 최빈 상위2, 커버=선호도 최고 방문지 이미지.
+    from core.enums import Theme
+    def vp(idx, themes, score, img):
+        return RecommendedPlace(place_idx=idx, name=f"p{idx}", region="부산", lat=35.1, lng=129.0,
+                                themes=themes, preference_score=score, reason="t", visit_time="14:00", image_url=img)
+    themed = Course(label="A", origin_station_idx=1, total_preference_score=1.4,
+                    is_round_trip_closed=False, days=[DayPlan(day_no=1, date="20260710", lodging=None,
+                    places=[vp(1, [Theme.NATURE, Theme.OCEAN], 0.5, "a.jpg"),
+                            vp(2, [Theme.NATURE], 0.9, "b.jpg")])])
+    it4 = build_itinerary(None, themed, "20260710")
+    assert it4.main_themes == [Theme.NATURE, Theme.OCEAN], it4.main_themes  # NATURE 2회 > OCEAN 1회
+    assert it4.cover_image_url == "b.jpg", it4.cover_image_url            # 선호도 0.9 > 0.5
+    assert it4.title == "p2 코스", it4.title                              # 대표 명소(p2)=커버와 동일 장소
     print("itinerary selfcheck OK")
 
 
