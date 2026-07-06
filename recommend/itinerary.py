@@ -18,8 +18,9 @@ from schemas.recommend_schema import (
 )
 from utils.train_api import KST
 
-# 관광지 1곳 점유 시간(h) — scheduling·recommend_service와 같은 가정(방문 종료시각 표기용).
-_HOURS_PER_PLACE = 2.5
+# 관광지 1곳 체류 시간(h) — 방문 종료시각 표기용. scheduling._DWELL_H와 반드시 일치해야
+# 타임라인에서 방문 종료가 다음 방문 시작을 넘지 않는다(장소 간 이동은 시각 간격으로 드러남).
+_HOURS_PER_PLACE = 2.0
 
 # 경유역 관광 1곳 점유 시간(h) — recommend_service._VIA_STAY_H와 동기화(역 근처 잠깐이라 목적지보다 짧게).
 # 경유 관광 종료시각은 이 값과 '다음 열차 출발' 중 이른 쪽으로 상한한다(열차 출발 후로 새지 않게).

@@ -54,7 +54,8 @@ def _pick_stopover(places: list, n: int) -> list:
 # 자동 경유(도착역만 지정)일 때 최종 노출할 경유 후보 수.
 _STOPOVER_N = 3
 
-# 코스에 열차 시각 반영: 관광지 1곳당 소요(관람+이동) 추정 시간(h)과 하루 관광 가능 시간대.
+# 첫날/막날 방문 상한(cap)을 열차 시각에서 대략 뽑을 때 쓰는 '평균 슬롯' 추정(체류+이동, h).
+# 정밀 배치는 scheduling(체류 _DWELL_H + 실제 이동시간)이 하므로 여기선 코스 상한용 근사치.
 _HOURS_PER_PLACE = 2.5
 _DAY_START_HOUR = 9
 _DAY_END_HOUR = 21

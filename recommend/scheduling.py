@@ -3,7 +3,8 @@
 핵심 규칙:
 - 식당(content_type_id=39)은 '식사'로 보고 점심(~12시)·저녁(~18시) 앵커에만 놓는다(하루 최대 2끼).
   → 밥 먹고 또 밥 먹는(식당 연속) 일정을 막는다. 식당만 있어도 하루 2끼까지만.
-- 관광지는 동선(지리 NN+2-opt) 순으로 식사 점유 시간을 피해 2.5h 슬롯에 채운다.
+- 관광지는 동선(지리 NN+2-opt) 순으로, 체류(_DWELL_H)와 장소 간 이동시간(_travel_h)을 반영해
+  채운다. 가까운 장소는 촘촘히, 먼 장소는 이동시간만큼 더 벌어져 하루에 덜 들어간다.
 - 운영시간(오픈/마감·휴무요일)은 소프트 제약: 개점 전이면 미루고, 마감/창을 넘으면 그 곳을
   건너뛰고 차순위로 대체한다.
 
@@ -14,12 +15,25 @@
 from recommend import routing
 from recommend.types import ScoredPlace
 
-# 관광지/식사 1곳당 관람+이동 추정 소요(h). recommend_service._HOURS_PER_PLACE와 같은 가정.
-_HOURS_PER_PLACE = 2.5
+# 장소 1곳 체류(관람/식사) 소요(h). 표시용 방문 종료시각(itinerary._DWELL_H)과 반드시 일치.
+# 예전엔 여기에 이동시간까지 뭉뚱그린 2.5였으나, 이제 이동은 _travel_h로 분리한다.
+_DWELL_H = 2.0
 # day_window가 없을 때의 기본 관광 가능 시간대(9~21시).
 _DAY_START = 9.0
 _DAY_END = 21.0
 _EPS = 1e-9
+
+# 장소 간 이동시간(h): 직선거리 × 우회계수 ÷ 평속. 인접해도 최소 이동/준비 시간은 둔다.
+# 직선거리라 도로거리 대비 낙관적이므로 _DETOUR로 보정(정밀 도로시간은 라우팅 API 자리).
+_SPEED_KMH = 30.0   # 도보·대중교통 혼합 보수적 평속
+_DETOUR = 1.3       # 직선→실제 경로 보정 계수
+_MIN_MOVE_H = 0.25  # 인접해도 최소 15분(하차·도보·준비)
+
+
+def _travel_h(a: ScoredPlace, b: ScoredPlace) -> float:
+    """두 장소 간 이동 추정 시간(h). 가까울수록 작아 코스가 촘촘해진다."""
+    km = routing.haversine(a.lat, a.lng, b.lat, b.lng) * _DETOUR
+    return max(_MIN_MOVE_H, km / _SPEED_KMH)
 
 # 식당으로 보는 TourAPI contentTypeId(음식점).
 _MEAL_CT = 39
@@ -76,32 +90,32 @@ def schedule_day(
             continue
         m, arrive = picked
         plan.append((m, arrive))
-        busy.append((arrive, arrive + _HOURS_PER_PLACE))
+        busy.append((arrive, arrive + _DWELL_H))
         meals.remove(m)
 
-    # 2) 관광지: start부터 2.5h 그리드로, 식사 점유 구간을 건너뛰며 동선 순으로 채운다.
-    cursor = start
+    # 2) 관광지: 동선 순으로, 장소 사이 '이동시간'을 반영해 배치한다(가까울수록 촘촘, 멀수록 시간↑).
+    cursor = start   # 다음 이동을 시작할 수 있는 시각(직전 장소 관람 종료 시각)
+    prev = None      # 직전 배치 관광지(이동시간 기준). 식사 뒤엔 None으로 리셋(식사↔관광 이동은 별도).
     ai = 0
-    while len(plan) < cap and ai < len(attrs) and cursor + _HOURS_PER_PLACE <= end + _EPS:
-        jump = _busy_end_after(cursor, busy)  # 이 슬롯이 식사와 겹치면 그 끝으로 점프
-        if jump is not None:
-            cursor = jump
-            continue
+    while len(plan) < cap and ai < len(attrs):
         p = attrs[ai]
         ai += 1
-        arrive = max(cursor, _open_of(p, start))
-        # 마감/창을 넘으면 이 관광지는 건너뛰고 차순위로(cursor 유지).
-        if arrive + _HOURS_PER_PLACE > min(_close_of(p, end), end) + _EPS:
-            continue
-        # 개점 대기가 식사 구간과 겹치면 그 뒤로 미룬다(다음 루프에서 재배치).
+        move = _travel_h(prev, p) if prev is not None else 0.0
+        arrive = max(cursor + move, _open_of(p, start))
+        # 도착~관람종료가 식사 점유와 겹치면 식사 끝으로 미루고 이 장소 재시도(이동 기준 리셋).
         jump = _busy_end_after(arrive, busy)
         if jump is not None:
             cursor = jump
-            ai -= 1  # 이 관광지는 아직 안 썼으니 되돌림
+            prev = None
+            ai -= 1
+            continue
+        # 마감/하루 끝 전에 관람이 끝나야 채택. 아니면 이 곳 건너뜀(cursor 유지).
+        if arrive + _DWELL_H > min(_close_of(p, end), end) + _EPS:
             continue
         plan.append((p, arrive))
-        busy.append((arrive, arrive + _HOURS_PER_PLACE))
-        cursor = arrive + _HOURS_PER_PLACE
+        busy.append((arrive, arrive + _DWELL_H))
+        cursor = arrive + _DWELL_H
+        prev = p
 
     plan.sort(key=lambda x: x[1])  # 시각순
     return plan
@@ -116,7 +130,7 @@ def _place_meal(meals, target, lo, hi, start, end):
         arrive = max(target, start, _open_of(m, target))
         if arrive < lo - _EPS or arrive > hi + _EPS:
             continue
-        if arrive + _HOURS_PER_PLACE > min(_close_of(m, end), end) + _EPS:
+        if arrive + _DWELL_H > min(_close_of(m, end), end) + _EPS:
             continue
         return m, arrive
     return None
@@ -124,7 +138,7 @@ def _place_meal(meals, target, lo, hi, start, end):
 
 def _busy_end_after(t: float, busy: list) -> float | None:
     """시각 t에서 시작하는 슬롯이 점유 구간과 겹치면 그 겹치는 구간의 끝을 반환, 없으면 None."""
-    ends = [e for (s, e) in busy if t < e - _EPS and s < t + _HOURS_PER_PLACE - _EPS]
+    ends = [e for (s, e) in busy if t < e - _EPS and s < t + _DWELL_H - _EPS]
     return max(ends) if ends else None
 
 
@@ -158,11 +172,21 @@ def _selfcheck() -> None:
     kinds = [_is_meal(p) for p, _ in r2]  # 시각순
     assert not any(kinds[i] and kinds[i + 1] for i in range(len(kinds) - 1)), f"식당 연속 금지: {kinds}"
 
-    # 관광지만 → 기존처럼 동선순 채움.
+    # 관광지만 → 기존처럼 동선순 채움(넉넉한 창이면 3곳 다).
     only_attr = [place(200 + i, 12, 0.9 - i * 0.01, lat=35.0 + i * 0.02) for i in range(3)]
     r3 = schedule_day(only_attr, cap=3, window=(9.0, 21.0), weekday=None)
     assert len(r3) == 3, f"관광지 3곳 다 배치: {len(r3)}"
-    print("scheduling selfcheck OK")
+
+    # 이동시간 반영: 같은 개수·같은 창이라도 '가까운' 관광지가 '먼' 관광지보다 더 많이 들어간다.
+    close = [place(300 + i, 12, 0.9, lat=35.0 + i * 0.001) for i in range(3)]   # ~0.1km 간격
+    far = [place(400 + i, 12, 0.9, lat=35.0 + i * 0.5) for i in range(3)]       # ~55km 간격
+    rc = schedule_day(close, cap=3, window=(9.0, 14.0), weekday=None)           # 짧은 5h 창
+    rf = schedule_day(far, cap=3, window=(9.0, 14.0), weekday=None)
+    assert len(rc) > len(rf), f"가까우면 더 많이: close={len(rc)} far={len(rf)}"
+    # 배치된 방문은 시각순이고 관람 구간이 안 겹친다(이동 간격 확보).
+    ts = [t for _, t in rc]
+    assert all(ts[i] + _DWELL_H <= ts[i + 1] + _EPS for i in range(len(ts) - 1)), ts
+    print(f"scheduling selfcheck OK (close={len(rc)} > far={len(rf)})")
 
 
 if __name__ == "__main__":
