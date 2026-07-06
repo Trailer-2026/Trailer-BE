@@ -7,6 +7,7 @@ from core.exceptions.custom import BadRequestException, NotFoundException
 from databases.daos import station_dao
 from recommend import destination, itinerary, pipeline, scoring
 from recommend.routing import haversine
+from recommend.types import ScoredPlace
 from schemas.recommend_schema import (
     Course,
     DestinationPlan,
@@ -28,6 +29,9 @@ _SHORTLIST_N = 5
 # 경유역 인근 관광지: '역 근처'로 제한할 조회 반경(m)과 노출 개수.
 _VIA_RADIUS_M = 3000
 _VIA_PLACES_N = 3
+# 경유 관광지 추천 이유 앞에 붙이는 표시 — 목적지 관광이 아니라 '가는 길 역 근처'임을 명시.
+# schemas.route_schema.StopoverPlace.reason 기본값과 같은 문구(그 필드가 이 폴백을 쓴다).
+_VIA_REASON_PREFIX = "경유역 근처 추천지"
 # 당일치기 경유지 1곳당 근사 소요(h) — 순차 방문 시각 배치용. 역 근처 잠깐이라 목적지(2.5h)보다 짧게.
 # ponytail: 고정 1.0h 근사. 실측 이동 연동 시 상향 조정.
 _VIA_STAY_H = 1.0
@@ -703,13 +707,19 @@ def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
                 scan_cache[idx] = (-1, [])  # 좌표 없어 스캔 불가 → 점수 -1로 자동 경유 정렬 맨 뒤로
             else:
                 places = tour_place.live_places(st.latitude, st.longitude, criteria.themes, radius_m=_VIA_RADIUS_M)
+                # 목적지 코스와 '같은 점수식'(테마 가중 코사인 + 이미지 품질)으로 경유역 관광지도 선호도를 매긴다.
+                # → 경유 관광이 0점 고정이 아니라 목적지 관광과 같은 척도로 비교·노출된다.
+                score_map = {sp.place_idx: sp.score for sp in scoring.score_places(places, criteria.themes)}
                 places.sort(key=lambda p: haversine(st.latitude, st.longitude, p.lat, p.lng))
                 top = _pick_stopover(places, _VIA_PLACES_N)
                 # 노출할 경유 관광지의 운영시간을 실시간(detailIntro2)으로 조회(역 근처 ≤3곳).
                 hours = tour_place.fetch_hours(
                     [(str(p.place_idx), p.content_type_id) for p in top if p.content_type_id]
                 )
-                recs = [_stopover_record(p, hours.get(str(p.place_idx))) for p in top]
+                recs = [
+                    _stopover_record(p, hours.get(str(p.place_idx)), score_map.get(p.place_idx, 0.0))
+                    for p in top
+                ]
                 scan_cache[idx] = (len(places), recs)  # 역 근처 테마 관광지 수 = 테마 관련도
         return scan_cache[idx]
 
@@ -727,7 +737,9 @@ def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
                     place_idx=rec["place_idx"], name=rec["name"], region=rec["region"],
                     lat=rec["lat"], lng=rec["lng"], themes=rec["themes"], image_url=rec["image_url"],
                     open_time=rec["open_time"], close_time=rec["close_time"],
-                    visit_time=vt,
+                    visit_time=_hhmm(vt),
+                    preference_score=rec["preference_score"],
+                    reason=_via_reason(rec, criteria.themes, vt),
                 )
                 for rec, vt in zip(recs, visits) if vt is not None
             ]
@@ -743,10 +755,11 @@ def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
     return [r for r in routes if r.route_type != "경유" or id(r) in keep]
 
 
-def _stopover_record(p, h) -> dict:
-    """LivePlace + 운영시간(Hours|None) → 경유 관광지 캐시 레코드(방향 무관 필드).
+def _stopover_record(p, h, score: float) -> dict:
+    """LivePlace + 운영시간(Hours|None) + 선호도 → 경유 관광지 캐시 레코드(방향 무관 필드).
 
     open_hour/close_hour는 방문 시각 계산용(float), open_time/close_time은 노출용(HH:MM).
+    preference_score는 목적지 코스와 같은 점수식(scoring.score_places) 결과라 방향 무관.
     """
     oh = h.open_hour if h else None
     ch = h.close_hour if h else None
@@ -755,7 +768,22 @@ def _stopover_record(p, h) -> dict:
         "lat": p.lat, "lng": p.lng, "themes": p.themes, "image_url": p.image_url,
         "open_hour": oh, "close_hour": ch,
         "open_time": _hhmm(oh), "close_time": _hhmm(ch),
+        "preference_score": round(score, 4),
     }
+
+
+def _via_reason(rec: dict, themes, arrive_hour: float | None) -> str:
+    """경유 관광지 추천 이유 — '경유역 근처 추천지' 표시 + 목적지와 같은 선호도/시각 문구.
+
+    맨 앞의 '경유역 근처 추천지'로 경유지임을 명시하고, 그 뒤에 pipeline._reason(목적지 코스와
+    동일: 테마 태그 + 선호도 + 방문/운영 시각)을 이어 붙인다. 테마 미선택이면 '인기 추천지'.
+    """
+    sp = ScoredPlace(
+        place_idx=rec["place_idx"], name=rec["name"], region=rec["region"],
+        lat=rec["lat"], lng=rec["lng"], themes=rec["themes"], score=rec["preference_score"],
+        image_url=rec["image_url"], open_hour=rec["open_hour"], close_hour=rec["close_hour"],
+    )
+    return f"{_VIA_REASON_PREFIX} · {pipeline._reason(sp, set(themes or []), arrive_hour)}"
 
 
 def _via_window(r) -> tuple:
@@ -772,11 +800,12 @@ def _via_window(r) -> tuple:
 
 
 def _stopover_visits(recs: list, start_dt, end_dt) -> list:
-    """경유 체류 시간대 안에서 여러 경유지의 방문 시각을 '순차'로 배치한다(HH:MM 목록).
+    """경유 체류 시간대 안에서 여러 경유지의 방문 시각을 '순차'로 배치한다(도착 시각 float 목록).
 
     한 곳을 보고 다음 곳으로 이동하므로 커서를 _VIA_STAY_H씩 밀며 개점 시각을 존중한다
     (독립 배치 시 문 연 집들이 전부 하차시각에 몰리는 문제 해결). 체류 안에 못 넣는 곳은
     None(폐점 중이거나 출발 전까지 못 들름). start_dt 없으면 전부 None.
+    반환은 float(시각). 노출용 HH:MM·이유 문구는 호출부가 이 값으로 만든다.
     """
     if start_dt is None:
         return [None] * len(recs)
@@ -791,7 +820,7 @@ def _stopover_visits(recs: list, start_dt, end_dt) -> list:
         if (oh is not None and oh >= end_h) or (ch is not None and ch <= start_h) or arrive >= end_h:
             out.append(None)
             continue
-        out.append(_hhmm(arrive))
+        out.append(arrive)
         cursor = arrive + _VIA_STAY_H  # 다음 경유지는 이만큼 뒤(관람+이동 근사)
     return out
 

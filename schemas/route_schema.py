@@ -14,6 +14,11 @@ class StopoverPlace(BaseModel):
     lat: float = Field(..., description="위도")
     lng: float = Field(..., description="경도")
     themes: list[Theme] = Field(..., description="테마 태그")
+    preference_score: float = Field(
+        0.0,
+        description="선택 테마와의 선호도(0~1). 목적지 코스와 같은 점수식(테마 가중 코사인 + 이미지 품질)으로 산정",
+    )
+    reason: str = Field("경유역 근처 추천지", description="추천 이유 (목적지 코스와 같은 형식)")
     image_url: str | None = Field(None, description="대표 이미지 URL")
     open_time: str | None = Field(None, description="운영 시작 시각 (HH:MM). 미상이면 null")
     close_time: str | None = Field(None, description="운영 종료 시각 (HH:MM). 미상이면 null")

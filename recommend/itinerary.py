@@ -73,8 +73,11 @@ def build_itinerary(route, course, go_date: str) -> Itinerary:
     # 제목·커버를 함께 뽑아 한 장소를 가리키게 한다. 플랜마다 대표 명소가 달라 제목도 갈린다.
     visits = [s.place for s in segs if s.kind == "visit" and s.place]
     main_themes = [t for t, _ in Counter(t for v in visits for t in v.themes).most_common(2)]
-    with_img = [v for v in visits if v.image_url]
-    headline = max(with_img or visits, key=lambda v: v.preference_score) if visits else None
+    # 카드 대표(제목·커버)는 목적지 코스 관광지에서만 뽑는다 — 경유역 관광지도 이제 선호도 점수가
+    # 있어(recommend_service), 지나가는 경유지가 대표를 가로채 목적지 아닌 곳이 카드 얼굴이 되는 걸 막는다.
+    faces = [p for day in course.days for p in day.places] if course is not None else visits
+    with_img = [v for v in faces if v.image_url]
+    headline = max(with_img or faces, key=lambda v: v.preference_score) if faces else None
     title = f"{headline.name} 코스" if headline is not None else None
     cover_image_url = headline.image_url if headline is not None else None
 
@@ -137,12 +140,13 @@ def _visit_seg(place: RecommendedPlace, date_ymd: str | None, go: datetime) -> I
 def _stopover_to_place(sp) -> RecommendedPlace:
     """경유역 관광지(StopoverPlace)를 방문 세그먼트용 RecommendedPlace로 변환(타입 통일).
 
-    경유지는 선호도 점수·추천이유가 없어 0.0/고정 문구로 채운다(역 근처 접근성 기반 추천).
+    선호도·추천이유는 recommend_service가 목적지 코스와 같은 점수식으로 매겨 StopoverPlace에
+    실어 보내므로 그대로 옮긴다(역 근처 접근성 + 테마 적합도).
     """
     return RecommendedPlace(
         place_idx=sp.place_idx, name=sp.name, region=sp.region,
         lat=sp.lat, lng=sp.lng, themes=sp.themes,
-        preference_score=0.0, reason="경유역 근처 추천지",
+        preference_score=sp.preference_score, reason=sp.reason,
         image_url=sp.image_url,
         open_time=sp.open_time, close_time=sp.close_time, visit_time=sp.visit_time,
     )
