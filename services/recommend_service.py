@@ -269,6 +269,11 @@ def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, rout
     via_cache: dict = {}  # 경유역 scored 캐시(경유역당 1회 조회)
     route_list = routes or [None]
 
+    # 다시받기(page): page*target개를 건너뛴 다음 target개를 반환하도록, 전체를 build_count까지
+    # 만든 뒤 page 창을 잘라낸다. 결정적이라 같은 page는 항상 같은 묶음(겹치지 않는 다음 플랜).
+    page = getattr(criteria, "page", 0) or 0
+    build_count = (page + 1) * target
+
     # 경로별 코스 변형 목록(선호도 내림차순). 숙박 경유는 이어붙인 단일 코스라 변형 1개.
     variants = []
     for r in route_list:
@@ -287,7 +292,7 @@ def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, rout
     taken: dict = {}           # 경로 인덱스 → 이미 쓴 버킷 인덱스 집합(같은 버킷 재사용 방지)
     R = len(variants)
     guard = ri = 0
-    while len(out) < target and guard < R * len(_PLAN_LABELS):
+    while len(out) < build_count and guard < R * (len(_PLAN_LABELS) + build_count):
         idx = ri % R
         guard += 1
         ri += 1
@@ -316,7 +321,7 @@ def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, rout
 
     # 채움 1) 서로 다른 코스가 target보다 적으면, 남은 버킷을 '겹침 허용'하고 새 관광지 많은 순으로
     # 더 넣어 3장을 맞춘다(중복 관광지가 좀 섞여도 카드 수는 채움).
-    if len(out) < target:
+    if len(out) < build_count:
         leftover = [
             (idx, c) for idx, (r, courses) in enumerate(variants)
             for bi, c in enumerate(courses)
@@ -324,25 +329,29 @@ def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, rout
         ]
         leftover.sort(key=lambda t: len(_plan_places(t[1]) - used), reverse=True)
         for idx, course in leftover:
-            if len(out) >= target:
+            if len(out) >= build_count:
                 break
             _add(variants[idx][0], course)
 
     # 추천지가 아예 없어 플랜이 안 나왔지만 실제 경로가 있으면 기차만 있는 여정으로 경로 보존.
     if not out and routes:
-        for r in routes[:target]:
+        for r in routes[:build_count]:
             _add(r, None)
 
     # 채움 2) 최후: 후보가 바닥나도 target 미만이면 이미 만든 플랜을 복제해 무조건 target장을 맞춘다
     # (관광지가 극히 적은 목적지 대비 — 복제 카드는 내용이 앞 카드와 같다).
     base = list(out)
     i = 0
-    while base and len(out) < target:
+    while base and len(out) < build_count:
         dup = base[i % len(base)].model_copy()
-        dup.plan_label = _PLAN_LABELS[min(label_start + len(out), len(_PLAN_LABELS) - 1)]
         out.append(dup)
         i += 1
-    return out
+
+    # page 창 잘라내고, 그 페이지의 카드에 A/B/C를 위치순으로 부여(각 페이지는 A부터 시작).
+    sliced = out[page * target: page * target + target]
+    for i, it in enumerate(sliced):
+        it.plan_label = _PLAN_LABELS[min(label_start + i, len(_PLAN_LABELS) - 1)]
+    return sliced
 
 
 def _prepare_scored(places, criteria: SearchCriteria, k: int) -> list:

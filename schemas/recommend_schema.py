@@ -56,6 +56,11 @@ class SearchCriteria(BaseModel):
                     "(도착역만 지정한 자동 경유 추천으로 동작). 선택",
     )
     use_naeilpass: bool = Field(False, description="내일로 패스 사용 여부")
+    page: int = Field(
+        0, ge=0,
+        description="추천 다시받기 페이지(0=최초). 1씩 올리면 이전과 겹치지 않는 다음 플랜 묶음을 "
+                    "반환한다. 관광지가 부족한 목적지는 페이지가 커지면 앞 결과와 겹치거나 반복될 수 있다.",
+    )
 
     @field_validator("go_date", "back_date")
     @classmethod
