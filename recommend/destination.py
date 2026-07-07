@@ -193,10 +193,12 @@ def _diversify(ranked: list[AreaProfile], top_k: int) -> list[AreaProfile]:
     picked: list[AreaProfile] = []
     seen_prov: set = set()
     for p in ranked:
-        if p.province in seen_prov:
+        # province=None(권역 미상)은 서로 같은 권역이 아니므로 dedup 대상에서 제외 — 항상 통과.
+        if p.province is not None and p.province in seen_prov:
             continue
         picked.append(p)
-        seen_prov.add(p.province)
+        if p.province is not None:
+            seen_prov.add(p.province)
         if len(picked) >= top_k:
             return picked
 
