@@ -52,11 +52,20 @@ def fetch_day(ymd: str, *, rows_per_page: int = 2000, max_pages: int = 30) -> li
             if x.get("run_ymd") != ymd:
                 continue
             matched_this_page = True
+            # 필수 필드(열차번호·정차순번·역명)가 없거나 순번이 숫자가 아니면 그 행만 건너뛴다
+            # — 불량 행 하나가 KeyError/ValueError로 하루치 전체 적재를 무너뜨리지 않도록.
+            trn_no, stn_nm = x.get("trn_no"), x.get("stn_nm")
+            try:
+                seq = int(x["trn_run_sn"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not trn_no or not stn_nm:
+                continue
             out.append({
-                "trn_no": x["trn_no"],
-                "seq": int(x["trn_run_sn"]),
+                "trn_no": trn_no,
+                "seq": seq,
                 "stn_cd": x.get("stn_cd"),
-                "stn_nm": x["stn_nm"],
+                "stn_nm": stn_nm,
                 "stop_se_cd": x.get("stop_se_cd"),
                 "stop_se_nm": x.get("stop_se_nm"),
                 "mrnt_nm": x.get("mrnt_nm"),
