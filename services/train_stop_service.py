@@ -62,7 +62,11 @@ def refresh_if_stale(max_age_hours: int = _FRESH_WITHIN_HOURS) -> int | None:
     finally:
         db.close()
     if latest is not None:
-        age = datetime.now(latest.tzinfo or _KST) - latest
+        # sqlite 폴백·tz 미설정 환경에선 created_at이 naive로 온다 → KST로 간주해 aware로 정규화한 뒤
+        # 비교한다(aware now - naive latest는 TypeError). Postgres(timestamptz)는 이미 aware라 무영향.
+        if latest.tzinfo is None:
+            latest = latest.replace(tzinfo=_KST)
+        age = datetime.now(_KST) - latest
         if age < timedelta(hours=max_age_hours):
             return None
     return refresh()
