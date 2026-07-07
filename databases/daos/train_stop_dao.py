@@ -7,8 +7,16 @@ from databases.models.train_stop import TrainStop
 
 
 def latest_created_at(db: Session) -> datetime | None:
-    """가장 최근 적재 시각(created_at 최댓값). 없으면 None. 갱신 신선도 판단용."""
-    return db.query(func.max(TrainStop.created_at)).scalar()
+    """가장 최근 적재 시각(created_at 최댓값). 없으면 None. 갱신 신선도 판단용.
+
+    train_stop은 하드 삭제(replace_all) 테이블이라 실제 soft-delete 행은 없지만,
+    읽기 DAO 관례(전역 불변식)대로 deleted_at 필터를 유지해 get_stops_for와 일관을 맞춘다.
+    """
+    return (
+        db.query(func.max(TrainStop.created_at))
+        .filter(TrainStop.deleted_at.is_(None))
+        .scalar()
+    )
 
 
 def get_stops_for(db: Session, trn_nos: set[str]) -> dict[str, list[TrainStop]]:
