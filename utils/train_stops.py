@@ -11,8 +11,8 @@ from config import Config
 from utils import dgo
 
 _RUN_INFO = "https://apis.data.go.kr/B551457/run/v2/travelerTrainRunInfo2"
-# 운행정보 API는 TAGO(1613000)와 같은 data.go.kr 계정 키로 접근된다 → traininfo 키 재사용.
-_KEY_SECTION, _KEY_NAME = "traininfo", "service_key"
+# 운행정보 API는 TAGO(1613000)와 같은 data.go.kr 계정 키로 접근된다 → tourapi 키 재사용.
+_KEY_SECTION, _KEY_NAME = "tourapi", "service_key"
 
 
 def _service_key() -> str:
