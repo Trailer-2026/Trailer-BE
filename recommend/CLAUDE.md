@@ -47,7 +47,7 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 
 | 파일 | 역할 |
 |---|---|
-| `types.py` | 내부 값 객체: `ScoredPlace`(점수화된 장소), `Cluster`(Day 묶음), `Tour`(방문순서) |
+| `types.py` | 내부 값 객체: `ScoredPlace`(점수화된 장소), `Cluster`(Day 묶음) |
 | `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`) |
 | `clustering.py` | ② k-means(결정적)로 중심 잡고 **용량 균형 재배정**으로 날짜 묶기 — 각 날 floor~ceil(n/k)개로 과밀·빈 날 없이 정확히 k일 보장 (`kmeans_by_geo`/`_balanced_assign`) |
 | `routing.py` | ③④ Nearest Neighbor + 2-opt + 순환 복귀, `haversine` (`nearest_neighbor`/`two_opt`/`close_cycle`) |
@@ -97,7 +97,7 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
   - `_attach_hours`가 **코스에 실제 배정될 후보(`pipeline.working_set(scored, themes, k)`, ≈일수×9)에 한해**
     `tour_place.fetch_hours`(detailIntro2 병렬)로 운영시간을 채운다. 장소당 1콜이라 코스 후보로만 제한(quota·속도 보호).
     조회 대상은 반드시 `build_courses`와 **같은 `working_set`**이어야 한다(다중 테마 시 테마 쿼터로 원점수 상위 N개와
-    달라져, `scored[:max_working]`로 조회하면 차순위 후보가 미조회인 채 코스에 섞인다).
+    달라져, `scored[:상한]`으로 조회하면 차순위 후보가 미조회인 채 코스에 섞인다).
   - 파싱은 자유텍스트라 방어적(`_parse_hours`/`_parse_closed_weekdays`): `HH:MM~HH:MM` 앞 구간, `24시간·상시·연중무휴`,
     `매주 X요일` 정도만 해석. 자정 넘김은 +24. 격주·첫째주 등 불규칙 휴무는 과제약을 피해 무시. **미상은 시간 제약 없음**으로 둔다.
 - **스케줄링 — `recommend/scheduling.py`** (순수 계산)
@@ -146,7 +146,8 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
   - route_service가 아니라 여기서 하는 이유: **route_service는 기차 그래프만**, 관광 데이터·테마는 `tour_place`+`recommend_service` 담당(레이어 경계).
 
 출력 타입 `StopoverPlace`와 `RouteCandidate.stopover_places`/`via_station_idx`는 **`schemas/route_schema.py`** 에 있다
-(`recommend_schema`가 `route_schema`를 import하므로 `RecommendedPlace` 재사용은 순환 참조라 불가 → route_schema에 독립 정의).
+(`recommend_schema`가 `route_schema`를 import하므로 `RecommendedPlace` 직접 재사용은 순환 참조라 불가 → `StopoverPlace`로
+별도 정의하되, 둘 다 leaf 모듈 `schemas/place_schema.py`의 `PlaceBase`(표시 공통 필드)를 상속해 계약을 공유한다).
 경유 관광지는 "어떤 기차를 타느냐"에 종속되므로 **코스(`Course`)가 아니라 경로(`RouteCandidate`)에** 붙인다(코스와 route는 형제, 코스는 route 선택과 무관).
 
 ## 비범위

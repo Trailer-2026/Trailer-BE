@@ -19,13 +19,17 @@ def _dist(a: ScoredPlace, b: ScoredPlace) -> float:
     return haversine(a.lat, a.lng, b.lat, b.lng)
 
 
-def path_length(order: list[ScoredPlace]) -> float:
-    """열린 경로(원점 복귀 없음) 총 길이(km).
+def hhmm(hour: float | None) -> str | None:
+    """시각(float 시간) → 'HH:MM'. None이면 None. 자정 넘김(≥24)은 다음날 시각으로 표기.
 
-    체류·이동시간 휴리스틱이 제거된 뒤로 코스 소요시간 계산엔 쓰지 않는다.
-    방문순서 최적화(2-opt 비교)·숙소 배정·거리 판단 용도로만 사용.
+    엔진(pipeline)·서비스(recommend_service)가 공유하는 유일한 시각 포맷터.
     """
-    return sum(_dist(order[i], order[i + 1]) for i in range(len(order) - 1))
+    if hour is None:
+        return None
+    total = int(round(hour * 60))
+    hh, mm = divmod(total, 60)
+    hh %= 24  # 24:00·26:00 등은 00:00·02:00로 표기
+    return f"{hh:02d}:{mm:02d}"
 
 
 def nearest_neighbor(

@@ -1,10 +1,7 @@
-import logging
-
 from sqlalchemy.orm import Session
 
 from databases.models.station import Station
 
-logger = logging.getLogger(__name__)
 
 def coord_by_name(db: Session, station_name: str) -> tuple[float, float] | None:
     """역명으로 (위도, 경도)를 조회한다. 없거나 좌표 미등록이면 None.
@@ -30,24 +27,6 @@ def get_by_idx(db: Session, station_idx: int) -> Station | None:
         Station.station_idx == station_idx,
         Station.deleted_at.is_(None),
     ).first()
-
-
-def nearest(db: Session, lat: float, lng: float, require_nat_code: bool = True) -> Station | None:
-    """좌표에서 가장 가까운 역(soft-delete 제외). 기차 추천용이라 기본 nat_code 보유 역만.
-
-    소규모(전국 246역)라 위경도 제곱거리로 Python에서 최근접을 고른다(대권거리 불필요).
-    """
-    q = db.query(Station).filter(
-        Station.deleted_at.is_(None),
-        Station.latitude.isnot(None),
-        Station.longitude.isnot(None),
-    )
-    if require_nat_code:
-        q = q.filter(Station.nat_code.isnot(None))
-    rows = q.all()
-    if not rows:
-        return None
-    return min(rows, key=lambda s: (s.latitude - lat) ** 2 + (s.longitude - lng) ** 2)
 
 
 def nearest_major(db: Session, lat: float, lng: float) -> Station | None:

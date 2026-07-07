@@ -16,10 +16,6 @@ from schemas.auth_schema import TokenResponse
 
 logger = logging.getLogger(__name__)
 
-_PROVIDER_FETCHERS = {
-    "kakao": oauth.fetch_kakao_user,
-}
-
 
 def _issue_tokens(user: User, db: Session) -> TokenResponse:
     """access/refresh 토큰을 발급하고, refresh 토큰을 화이트리스트에 기록한다.
@@ -50,11 +46,11 @@ def _login_with_social_user(provider: str, social_user: dict, db: Session) -> To
 
 
 async def social_login(provider: str, access_token: str, db: Session) -> TokenResponse:
-    fetcher = _PROVIDER_FETCHERS.get(provider)
-    if fetcher is None:
+    # access_token 방식은 현재 kakao만. 새 provider가 같은 흐름을 공유하면 그때 분기 추가.
+    if provider != "kakao":
         raise BadRequestException("지원하지 않는 소셜 제공자입니다.")
 
-    social_user = await fetcher(access_token)
+    social_user = await oauth.fetch_kakao_user(access_token)
     return _login_with_social_user(provider, social_user, db)
 
 

@@ -4,8 +4,9 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 from core.enums import Theme
-# recommend_schema → route_schema 단방향 의존. 그래서 경유 관광지 타입(StopoverPlace)은
-# RecommendedPlace를 재사용하지 못하고(역방향=순환) route_schema에 독립 정의돼 있다.
+from schemas.place_schema import PlaceBase
+# recommend_schema → route_schema 단방향 의존. StopoverPlace는 RecommendedPlace를 재사용하지
+# 못하지만(역방향=순환), 둘 다 leaf 모듈 place_schema의 PlaceBase(표시 공통 필드)를 상속해 계약을 공유한다.
 from schemas.route_schema import RouteTrain
 
 # 스웨거 표시용 테마 한글 라벨 (사진 명세 기준)
@@ -84,20 +85,14 @@ class SearchCriteria(BaseModel):
         return v if v and v > 0 else None
 
 
-class RecommendedPlace(BaseModel):
-    """추천 코스에 포함된 방문지 1곳 (코스 상세의 추천지 리스트)."""
+class RecommendedPlace(PlaceBase):
+    """추천 코스에 포함된 방문지 1곳 (코스 상세의 추천지 리스트).
 
-    place_idx: int = Field(..., description="추천지 PK")
-    name: str = Field(..., description="이름")
-    region: str | None = Field(None, description="지역")
-    lat: float = Field(..., description="위도")
-    lng: float = Field(..., description="경도")
-    themes: list[Theme] = Field(..., description="테마 태그")
+    표시 공통 필드는 PlaceBase 상속. 코스 맥락에 맞춰 아래 3개만 기본값·설명을 달리 정의한다.
+    """
+
     preference_score: float = Field(..., description="선호도 점수(가중 코사인 유사도)")
     reason: str = Field(..., description="추천 이유 한 줄 설명")
-    image_url: str | None = Field(None, description="대표 이미지 URL")
-    open_time: str | None = Field(None, description="운영 시작 시각 (HH:MM). 미상이면 null")
-    close_time: str | None = Field(None, description="운영 종료 시각 (HH:MM). 미상이면 null")
     visit_time: str | None = Field(
         None, description="예상 방문 시각 (HH:MM). 운영시간을 반영해 배정된 방문 순서상의 시각"
     )
