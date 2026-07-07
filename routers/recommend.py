@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/recommend", tags=["Recommend"])
                 "- 기차 경로 조회 실패(키 미설정 등) 시에도 코스는 제공되며 note로 표기됩니다.",
     response_model=CommonResponse[RecommendResponse],
 )
-async def recommend_courses(
+def recommend_courses(
     criteria: SearchCriteria,
     db: Session = Depends(get_db),
 ):

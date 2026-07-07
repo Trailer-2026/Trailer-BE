@@ -5,6 +5,7 @@
 """
 import logging
 import math
+import random
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -134,6 +135,38 @@ def live_places(lat: float, lng: float, themes: list[Theme], radius_m: int = _RA
             if selected and not (set(lp.themes) & selected):
                 continue
             out[lp.content_id] = lp
+    return list(out.values())
+
+
+_THEME_MAX_PAGE = 15  # 랜덤 페이지 상한 — 제목순 전 구간(가~하)에 흩뿌려 매번 다른 관광지를 보여준다.
+
+
+def places_by_theme(theme: Theme, limit: int = 10) -> list[LivePlace]:
+    """전국에서 해당 테마의 대표 관광지를 실시간 조회한다(홈 '테마별 여행지' 섹션용).
+
+    테마가 매핑되는 콘텐츠 유형별로 areaBasedList(arrange="O": 대표이미지 있는 것 우선)를 받아
+    _to_live로 변환하고, 실제 그 테마에 걸리며 썸네일이 있는 것만 남겨 content_id로 dedup 후 상위 limit개.
+    arrange="O"는 제목 가나다순이라 그대로면 매번 '가~' 고정 → 랜덤 페이지로 다양성을 준다.
+    """
+    out: dict[str, LivePlace] = {}
+    ctypes = _ctypes_for([theme])
+    # 1차: 랜덤 페이지(다양성). 2차: 끝 페이지라 부족하면 1페이지로 보충. content_id로 dedup.
+    for page in (random.randint(1, _THEME_MAX_PAGE), 1):
+        for ct in ctypes:
+            try:
+                items, _ = tour_api.area_based_list(
+                    content_type_id=ct, num_of_rows=100, arrange="O", page_no=page,
+                )
+            except Exception as e:
+                logger.warning("TourAPI 테마조회(ct=%s, page=%s) 실패: %s", ct, page, e)
+                continue
+            for it in items:
+                lp = _to_live(it)
+                if lp is None or theme not in lp.themes or lp.image_url is None:
+                    continue
+                out.setdefault(lp.content_id, lp)
+                if len(out) >= limit:
+                    return list(out.values())
     return list(out.values())
 
 

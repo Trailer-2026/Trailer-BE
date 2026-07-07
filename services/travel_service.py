@@ -5,18 +5,19 @@
 station 테이블에서 채운다. 추천 관광지/숙소 대표 이미지는 schedule.image_url에 저장한다.
 숙소는 시각이 없어 'ⓐ 그날 마지막 방문 종료~다음날 첫 일정 시작'으로 잡는다.
 """
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
 from core.exceptions.custom import BadRequestException
 from databases.daos import schedule_dao, station_dao, travel_dao
-from schemas.travel_schema import TravelResponse
+from schemas.travel_schema import HomeTravelCard, TravelResponse
 from utils import plan_cache
 
 _LODGING_CHECKIN = time(21, 0)   # 마지막 방문 종료를 못 구할 때 체크인 기본값
 _LODGING_CHECKOUT = time(9, 0)   # 다음날 첫 일정 시작을 못 구할 때 체크아웃 기본값
 _DEFAULT_TIME = time(9, 0)       # 방문/기차 시각이 비어 있을 때 안전 기본값
+_KST = timezone(timedelta(hours=9))  # 여행 진행 여부는 KST 오늘 기준으로 판단
 
 
 def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
@@ -61,6 +62,36 @@ def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
         start_date=travel.start_date, end_date=travel.end_date,
         region=travel.region, status=travel.status, schedule_count=count,
     )
+
+
+def current_travel(db: Session, user) -> HomeTravelCard | None:
+    """홈 화면 여행 카드 1건 — 진행 중 우선, 없으면 가장 가까운 예정, 둘 다 없으면 None.
+
+    status 컬럼은 저장 시 항상 PLANNED이고 자동 전환하는 배치가 없으므로, 진행 여부는
+    KST 오늘과 여행 기간으로 계산한다(스케줄러 불필요).
+    """
+    travels = travel_dao.list_by_user(db, user.user_idx)
+    today = datetime.now(_KST).date()
+    ongoing = [t for t in travels if t.start_date <= today <= t.end_date]
+    upcoming = sorted((t for t in travels if t.start_date > today), key=lambda t: t.start_date)
+    chosen = ongoing[0] if ongoing else (upcoming[0] if upcoming else None)
+    if chosen is None:
+        return None
+    return HomeTravelCard(
+        travel_idx=chosen.travel_idx, title=chosen.title,
+        start_date=chosen.start_date, end_date=chosen.end_date,
+        status=_effective_status(chosen.start_date, chosen.end_date, today),
+        cover_image_url=schedule_dao.cover_image(db, chosen.travel_idx),
+    )
+
+
+def _effective_status(start: date, end: date, today: date) -> str:
+    """여행 기간과 오늘로 진행 상태를 계산: 시작 전=PLANNED, 기간 내=ONGOING, 종료 후=COMPLETED."""
+    if today < start:
+        return "PLANNED"
+    if today > end:
+        return "COMPLETED"
+    return "ONGOING"
 
 
 def _day_bounds(segments) -> tuple[dict, dict]:
