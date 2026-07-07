@@ -67,7 +67,7 @@ class RouteCandidate(BaseModel):
     # 관광 데이터를 아는 recommend_service(_enrich_stopovers)가 나중에 채운다(레이어 경계).
     stopover_places: list[StopoverPlace] = Field(
         default_factory=list,
-        description="경유역 인근(역 근처) 추천 관광지. 사용자가 경유역을 지정한 경유 경로에만 채워지고, "
-                    "직통이거나 자동 경유면 빈 목록.",
+        description="경유역 인근(역 근처) 추천 관광지. 당일치기 경유(via_nights=0) 경로에 채워지고"
+                    "(지정·자동 경유 공통), 직통이거나 숙박 경유(관광이 코스 날에 편입)면 빈 목록.",
     )
     note: str | None = Field(None, description="비고(예: 직통 열차 없음)")
