@@ -7,13 +7,16 @@
 import json
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
 from config import Config
 
-_BASE = "http://apis.data.go.kr/1613000/TrainInfo/GetStrtpntAlocFndTrainInfo"
+_BASE = "https://apis.data.go.kr/1613000/TrainInfo/GetStrtpntAlocFndTrainInfo"
 _DT_FMT = "%Y%m%d%H%M%S"  # "20260703051300"
+# 열차 시각은 전부 한국 표준시(KST). 한국은 DST가 없어 고정 +09:00으로 둔다.
+# 파싱 시점에 붙여 출력 JSON이 '+09:00'을 달고 나가도록(naive라 프론트가 UTC로 오해하는 것 방지).
+KST = timezone(timedelta(hours=9))
 
 
 @lru_cache(maxsize=512)
@@ -49,8 +52,10 @@ def fetch_trains(dep_nat: str, arr_nat: str, ymd: str) -> tuple:
             "grade": x["traingradename"],
             "dep_station": x["depplacename"],
             "arr_station": x["arrplacename"],
-            "dep_time": datetime.strptime(x["depplandtime"], _DT_FMT),
-            "arr_time": datetime.strptime(x["arrplandtime"], _DT_FMT),
+            "dep_time": datetime.strptime(x["depplandtime"], _DT_FMT).replace(tzinfo=KST),
+            "arr_time": datetime.strptime(x["arrplandtime"], _DT_FMT).replace(tzinfo=KST),
+            # 운임: API가 주는 adultcharge(어른 1인 편도 요금, 원)를 그대로 사용.
+            # 좌석 등급(특실)·할인 구분 없고, 일부 열차는 값이 없어 None으로 둔다.
             "fare": int(x["adultcharge"]) if x.get("adultcharge") else None,
         }
         for x in rows
