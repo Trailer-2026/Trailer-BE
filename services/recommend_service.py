@@ -99,7 +99,7 @@ def _cache_plans(db: Session, response: RecommendResponse, criteria: SearchCrite
     """
     for dest in response.destinations:
         st = station_dao.get_by_idx(db, dest.destination_station_idx)
-        fallback = (st.latitude, st.longitude) if st and st.latitude is not None else None
+        fallback = (st.latitude, st.longitude) if st and st.latitude is not None and st.longitude is not None else None
         for it in dest.itineraries:
             it.plan_id = plan_cache.put({
                 "itinerary": it,
