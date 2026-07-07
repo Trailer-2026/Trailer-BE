@@ -74,7 +74,7 @@ def _headers():
 
 
 def _request(method: str, url: str, **kwargs):
-    """429(rate limit)·네트워크 오류(timeout/connection) 시 백오프 후 재시도."""
+    """429(rate limit)·5xx(overload/일시장애)·네트워크 오류 시 백오프 후 재시도."""
     res = None
     for attempt in range(6):
         time.sleep(THROTTLE_SEC)
@@ -85,8 +85,10 @@ def _request(method: str, url: str, **kwargs):
             print(f"  ! 네트워크 오류({type(e).__name__}) — {wait}s 후 재시도 ({attempt + 1}/6)")
             time.sleep(wait)
             continue
-        if res.status_code == 429:
-            wait = float(res.headers.get("Retry-After", "1"))
+        # 429(rate limit) + 5xx(529 service_overload·502·503 등 일시 장애) 재시도
+        if res.status_code == 429 or res.status_code >= 500:
+            wait = float(res.headers.get("Retry-After", 0)) or min(2 ** attempt, 10)
+            print(f"  ! Notion {res.status_code} — {wait}s 후 재시도 ({attempt + 1}/6)")
             time.sleep(wait)
             continue
         return res
