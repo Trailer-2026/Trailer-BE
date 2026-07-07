@@ -11,7 +11,7 @@ import urllib.request
 
 from config import Config
 
-_BASE = "http://apis.data.go.kr/B551011/KorService2"
+_BASE = "https://apis.data.go.kr/B551011/KorService2"
 _COMMON = {
     "MobileOS": "ETC",
     "MobileApp": "Trailer",

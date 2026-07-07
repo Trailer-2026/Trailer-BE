@@ -16,7 +16,7 @@ from config import Config
 from databases.database import SessionLocal
 from databases.models.station import Station
 
-_BASE = "http://apis.data.go.kr/1613000/TrainInfo/GetStrtpntAlocFndTrainInfo"
+_BASE = "https://apis.data.go.kr/1613000/TrainInfo/GetStrtpntAlocFndTrainInfo"
 _KEY = Config.read("traininfo", "service_key")
 YMD = sys.argv[1] if len(sys.argv) > 1 else "20260703"
 

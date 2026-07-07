@@ -12,7 +12,7 @@ from functools import lru_cache
 
 from config import Config
 
-_BASE = "http://apis.data.go.kr/1613000/TrainInfo/GetStrtpntAlocFndTrainInfo"
+_BASE = "https://apis.data.go.kr/1613000/TrainInfo/GetStrtpntAlocFndTrainInfo"
 _DT_FMT = "%Y%m%d%H%M%S"  # "20260703051300"
 # 열차 시각은 전부 한국 표준시(KST). 한국은 DST가 없어 고정 +09:00으로 둔다.
 # 파싱 시점에 붙여 출력 JSON이 '+09:00'을 달고 나가도록(naive라 프론트가 UTC로 오해하는 것 방지).
