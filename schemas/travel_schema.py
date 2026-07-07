@@ -23,3 +23,14 @@ class TravelResponse(BaseModel):
     region: str | None = Field(None, description="대표 지역")
     status: str = Field(..., description="PLANNED | ONGOING | COMPLETED")
     schedule_count: int = Field(..., description="저장된 일정 항목 수")
+
+
+class HomeTravelCard(BaseModel):
+    """홈 화면 '여행 카드'에 실제 보이는 필드만 담은 응답."""
+
+    travel_idx: int = Field(..., description="여행 PK (카드 탭 시 상세 이동용)")
+    title: str = Field(..., description="여행 제목")
+    start_date: date = Field(..., description="여행 시작일")
+    end_date: date = Field(..., description="여행 종료일")
+    status: str = Field(..., description="PLANNED | ONGOING | COMPLETED (여행 기간·오늘 KST 기준 계산)")
+    cover_image_url: str | None = Field(None, description="카드 썸네일 — 여행 첫 일정 대표 이미지. 없으면 null")

@@ -19,3 +19,18 @@ def create(
     db.add(schedule)
     db.flush()
     return schedule
+
+
+def cover_image(db: Session, travel_idx: int) -> str | None:
+    """여행의 대표 썸네일 — 일정 순서(day_no, sequence)상 이미지가 있는 첫 항목의 image_url. 없으면 None."""
+    row = (
+        db.query(Schedule.image_url)
+        .filter(
+            Schedule.travel_idx == travel_idx,
+            Schedule.deleted_at.is_(None),
+            Schedule.image_url.isnot(None),
+        )
+        .order_by(Schedule.day_no, Schedule.sequence)
+        .first()
+    )
+    return row[0] if row else None

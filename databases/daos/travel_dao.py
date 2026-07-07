@@ -25,3 +25,13 @@ def get_by_idx(db: Session, travel_idx: int) -> Travel | None:
         Travel.travel_idx == travel_idx,
         Travel.deleted_at.is_(None),
     ).first()
+
+
+def list_by_user(db: Session, user_idx: int) -> list[Travel]:
+    """사용자의 여행 전체를 시작일 내림차순(최신/예정 먼저)으로 조회 (soft-delete 제외)."""
+    return (
+        db.query(Travel)
+        .filter(Travel.user_idx == user_idx, Travel.deleted_at.is_(None))
+        .order_by(Travel.start_date.desc())
+        .all()
+    )
