@@ -47,7 +47,7 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 
 | 파일 | 역할 |
 |---|---|
-| `types.py` | 내부 값 객체: `ScoredPlace`(점수화된 장소), `Cluster`(Day 묶음), `Tour`(방문순서) |
+| `types.py` | 내부 값 객체: `ScoredPlace`(점수화된 장소), `Cluster`(Day 묶음) |
 | `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`) |
 | `clustering.py` | ② k-means(결정적)로 중심 잡고 **용량 균형 재배정**으로 날짜 묶기 — 각 날 floor~ceil(n/k)개로 과밀·빈 날 없이 정확히 k일 보장 (`kmeans_by_geo`/`_balanced_assign`) |
 | `routing.py` | ③④ Nearest Neighbor + 2-opt + 순환 복귀, `haversine` (`nearest_neighbor`/`two_opt`/`close_cycle`) |

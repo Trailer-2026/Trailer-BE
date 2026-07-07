@@ -1,10 +1,14 @@
-import logging
+from datetime import datetime
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from databases.models.train_stop import TrainStop
 
-logger = logging.getLogger(__name__)
+
+def latest_created_at(db: Session) -> datetime | None:
+    """가장 최근 적재 시각(created_at 최댓값). 없으면 None. 갱신 신선도 판단용."""
+    return db.query(func.max(TrainStop.created_at)).scalar()
 
 
 def get_stops_for(db: Session, trn_nos: set[str]) -> dict[str, list[TrainStop]]:

@@ -9,8 +9,6 @@ scripts/sync_train_stops.py(수동)와 main.py의 일일 자동 갱신 루프가
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func
-
 from databases.daos import train_stop_dao
 from databases.database import SessionLocal, engine
 from databases.models.train_stop import TrainStop
@@ -30,13 +28,19 @@ def _yesterday_ymd() -> str:
     return (datetime.now(_KST) - timedelta(days=1)).strftime("%Y%m%d")
 
 
+def _ensure_table() -> None:
+    # 참조 데이터 테이블이라 마이그레이션 없이 자체 provision. 서버·standalone 스크립트 양쪽에서
+    # 호출되므로 startup이 아닌 여기 둔다(스크립트는 lifespan을 안 타 fresh DB에서 테이블이 필요).
+    TrainStop.__table__.create(bind=engine, checkfirst=True)
+
+
 def refresh(ymd: str | None = None) -> int:
     """대상일(기본 어제) 정차역을 받아 train_stop을 전량 교체 적재하고 적재 행수를 반환.
 
     빈 응답(그 날짜 미제공 등)이면 기존 데이터를 지우지 않고 0을 반환한다(good data 보존).
     """
     ymd = ymd or _yesterday_ymd()
-    TrainStop.__table__.create(bind=engine, checkfirst=True)  # 없으면 생성(참조 데이터)
+    _ensure_table()
     records = train_stops.fetch_day(ymd)
     if not records:
         logger.warning("train_stop: %s 정차역 0건 — 기존 데이터 유지, 갱신 건너뜀", ymd)
@@ -55,10 +59,10 @@ def refresh_if_stale(max_age_hours: int = _FRESH_WITHIN_HOURS) -> int | None:
 
     서버 시작 시 1회 호출용 — 데이터가 비었거나 하루 지났으면 즉시 채우고, 방금 갱신됐으면 건너뛴다.
     """
-    TrainStop.__table__.create(bind=engine, checkfirst=True)
+    _ensure_table()
     db = SessionLocal()
     try:
-        latest = db.query(func.max(TrainStop.created_at)).scalar()
+        latest = train_stop_dao.latest_created_at(db)
     finally:
         db.close()
     if latest is not None:

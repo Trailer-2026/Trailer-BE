@@ -36,12 +36,3 @@ class Cluster:
     day_no: int
     members: list[ScoredPlace] = field(default_factory=list)
     centroid: tuple[float, float] = (0.0, 0.0)  # (lat, lng)
-
-
-@dataclass
-class Tour:
-    """Day 내부 방문 순서 (Nearest Neighbor + 2-opt 결과)."""
-
-    order: list[ScoredPlace] = field(default_factory=list)
-    # 열린 경로 총 거리(km). 코스 소요시간이 아니라 순서 최적화·거리 판단용(체류/이동시간 휴리스틱은 제거됨).
-    length_km: float = 0.0

@@ -19,15 +19,6 @@ def _dist(a: ScoredPlace, b: ScoredPlace) -> float:
     return haversine(a.lat, a.lng, b.lat, b.lng)
 
 
-def path_length(order: list[ScoredPlace]) -> float:
-    """열린 경로(원점 복귀 없음) 총 길이(km).
-
-    체류·이동시간 휴리스틱이 제거된 뒤로 코스 소요시간 계산엔 쓰지 않는다.
-    방문순서 최적화(2-opt 비교)·숙소 배정·거리 판단 용도로만 사용.
-    """
-    return sum(_dist(order[i], order[i + 1]) for i in range(len(order) - 1))
-
-
 def nearest_neighbor(
     points: list[ScoredPlace],
     start: ScoredPlace | None = None,

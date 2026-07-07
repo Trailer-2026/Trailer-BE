@@ -1,11 +1,8 @@
-import logging
 from typing import Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from databases.models.user import User
-
-logger = logging.getLogger(__name__)
 
 
 def get_by_provider(db: Session, provider: str, provider_id: str):
