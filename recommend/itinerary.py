@@ -130,9 +130,11 @@ def _stopover_departure(route):
 def _visit_seg(place: RecommendedPlace, date_ymd: str | None, go: datetime) -> ItinerarySegment:
     st = _visit_dt(date_ymd, place.visit_time)
     end = st + timedelta(hours=_HOURS_PER_PLACE) if st is not None else None
+    # visit_time이 없어도 날짜(date_ymd)로 day_no를 유지 — 늦은 날 방문지가 day1로 뭉개지지 않게.
+    day_ref = st or _visit_dt(date_ymd, "00:00")
     return ItinerarySegment(
         kind="visit",
-        day_no=_day_no(st, go) if st is not None else 1,
+        day_no=_day_no(day_ref, go) if day_ref is not None else 1,
         start_time=st, end_time=end, place=place,
     )
 
