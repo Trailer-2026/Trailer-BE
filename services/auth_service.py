@@ -2,9 +2,10 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from databases.daos import user_dao, refresh_token_dao
+from databases.daos import user_dao, refresh_token_dao, fcm_token_dao
 from databases.models.user import User
 from utils import oauth
+from utils.nickname import generate_nickname
 from core.security import (
     create_access_token,
     create_refresh_token,
@@ -14,10 +15,6 @@ from core.exceptions.custom import BadRequestException, UnauthorizedException
 from schemas.auth_schema import TokenResponse
 
 logger = logging.getLogger(__name__)
-
-_PROVIDER_FETCHERS = {
-    "kakao": oauth.fetch_kakao_user,
-}
 
 
 def _issue_tokens(user: User, db: Session) -> TokenResponse:
@@ -36,8 +33,12 @@ def _login_with_social_user(provider: str, social_user: dict, db: Session) -> To
     provider_id = social_user["provider_id"]
     user = user_dao.get_by_provider(db, provider, provider_id)
     if not user:
+        # 첫 로그인(회원가입): 랜덤 닉네임 자동 부여(사용자가 나중에 변경 가능).
         # user_dao.create() 내부에서 flush 하므로 여기서 user_idx 사용 가능
-        user = user_dao.create(db, provider, provider_id, social_user.get("email"))
+        user = user_dao.create(
+            db, provider, provider_id, social_user.get("email"),
+            nickname=generate_nickname(),
+        )
 
     tokens = _issue_tokens(user, db)
     db.commit()
@@ -45,11 +46,11 @@ def _login_with_social_user(provider: str, social_user: dict, db: Session) -> To
 
 
 async def social_login(provider: str, access_token: str, db: Session) -> TokenResponse:
-    fetcher = _PROVIDER_FETCHERS.get(provider)
-    if fetcher is None:
+    # access_token 방식은 현재 kakao만. 새 provider가 같은 흐름을 공유하면 그때 분기 추가.
+    if provider != "kakao":
         raise BadRequestException("지원하지 않는 소셜 제공자입니다.")
 
-    social_user = await fetcher(access_token)
+    social_user = await oauth.fetch_kakao_user(access_token)
     return _login_with_social_user(provider, social_user, db)
 
 
@@ -98,6 +99,22 @@ def logout(token: str, db: Session) -> None:
 def logout_all(user_idx: int, db: Session) -> None:
     """해당 사용자의 모든 refresh 토큰을 무효화한다 (모든 기기 로그아웃)."""
     refresh_token_dao.revoke_all_for_user(db, user_idx)
+    db.commit()
+
+
+def withdraw(user_idx: int, db: Session) -> None:
+    """회원 탈퇴 — 모든 refresh 토큰 폐기 + FCM 토큰 정리 + 유저 소프트 삭제.
+
+    soft-delete라 user_idx를 FK로 물린 다른 테이블은 FK가 깨지진 않지만 데이터가 남는다.
+    유저 소유 테이블을 새로 추가하면 여기서 함께 soft-delete하도록 한 줄씩 보태야 한다.
+    (예: travel/schedule 머지 시 travel_dao.soft_delete_by_user 등 추가)
+    현재 정리 대상: refresh_token, fcm_token, user.
+    """
+    refresh_token_dao.revoke_all_for_user(db, user_idx)
+    tokens = fcm_token_dao.get_tokens_by_user(db, user_idx)
+    if tokens:
+        fcm_token_dao.soft_delete_by_tokens(db, tokens)
+    user_dao.soft_delete(db, user_idx)
     db.commit()
 
 
