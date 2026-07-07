@@ -70,6 +70,10 @@ async def lifespan(app: FastAPI):
     finally:
         if task is not None:
             task.cancel()
+            try:
+                await task  # 취소가 실제로 반영돼 진행 중인 갱신이 멈출 때까지 대기
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(lifespan=lifespan)
