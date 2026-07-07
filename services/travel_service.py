@@ -87,9 +87,12 @@ def _schedule_fields(db: Session, seg, day_first: dict, day_last: dict, fallback
 
     if seg.kind == "train" and seg.train is not None:
         t = seg.train
+        coord = _station_coords(db, t.dep_station, fallback)
+        if coord is None:  # 출발역 좌표 미상 → (0,0) 가짜 핀 대신 이 열차 세그먼트는 저장 생략
+            return None
         no = t.train_no.lstrip("0") or t.train_no
         title = f"{t.grade} {no} {t.dep_station}→{t.arr_station}"
-        lat, lng = _station_coords(db, t.dep_station, fallback)
+        lat, lng = coord
         st = seg.start_time.time() if seg.start_time else _DEFAULT_TIME
         en = seg.end_time.time() if seg.end_time else st
         return (title, st, en, lat, lng, None)
@@ -105,10 +108,14 @@ def _schedule_fields(db: Session, seg, day_first: dict, day_last: dict, fallback
     return None
 
 
-def _station_coords(db: Session, name: str, fallback) -> tuple[float, float]:
-    """기차 출발역명 → (위도, 경도). '서울'처럼 '역' 접미사가 없으면 붙여 재조회, 그래도 없으면 fallback."""
+def _station_coords(db: Session, name: str, fallback) -> tuple[float, float] | None:
+    """기차 출발역명 → (위도, 경도). '서울'처럼 '역' 접미사가 없으면 붙여 재조회, 그래도 없으면 fallback.
+
+    셋 다 실패하면 None을 반환한다 — (0,0) 같은 실좌표로 폴백하면 지도에 가짜 위치로 찍히므로,
+    호출부가 그 세그먼트를 저장 생략하도록 명시적 실패 신호를 준다.
+    """
     for candidate in (name, f"{name}역"):
         coord = station_dao.coord_by_name(db, candidate)
         if coord is not None:
             return coord
-    return fallback if fallback is not None else (0.0, 0.0)
+    return fallback  # 유효 좌표거나 None(미상)
