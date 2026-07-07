@@ -1,6 +1,8 @@
-from datetime import date
+from datetime import date, time
 
 from pydantic import BaseModel, Field
+
+DateType = date  # 'date' 필드명과 타입명이 겹칠 때 쓰는 별칭
 
 
 class TravelCreateRequest(BaseModel):
@@ -34,3 +36,42 @@ class HomeTravelCard(BaseModel):
     end_date: date = Field(..., description="여행 종료일")
     status: str = Field(..., description="PLANNED | ONGOING | COMPLETED (여행 기간·오늘 KST 기준 계산)")
     cover_image_url: str | None = Field(None, description="카드 썸네일 — 여행 첫 일정 대표 이미지. 없으면 null")
+
+
+class TravelScheduleItem(BaseModel):
+    """일정표 타임라인의 한 항목 (기차/방문지/숙소 공통, schedule 1행)."""
+
+    schedule_idx: int = Field(..., description="일정 항목 PK")
+    sequence: int = Field(..., description="그날의 n번째 일정 (0부터, 타임라인 정렬 순서)")
+    kind: str = Field(..., description="항목 종류 (train | visit | lodging)")
+    title: str = Field(..., description="장소명/일정명 (기차는 'KTX 101 서울→부산' 형태 표시용 폴백)")
+    train_no: str | None = Field(None, description="열차번호 (kind=train만, 아니면 null)")
+    train_grade: str | None = Field(None, description="열차 등급 (kind=train만, 예: KTX)")
+    dep_station: str | None = Field(None, description="출발역명 (kind=train만, 접미사 '역' 없음 — 프론트가 '역 승차' 조합)")
+    arr_station: str | None = Field(None, description="도착역명 (kind=train만, 접미사 '역' 없음 — 프론트가 '역 하차' 조합)")
+    start_time: time = Field(..., description="시작 시각 (HH:MM:SS)")
+    end_time: time = Field(..., description="종료 시각 (HH:MM:SS)")
+    latitude: float = Field(..., description="위도 (방문지·숙소는 자기 좌표, 기차는 출발역 좌표)")
+    longitude: float = Field(..., description="경도")
+    image_url: str | None = Field(None, description="대표 이미지 URL. 기차 등 없으면 null")
+    memo: str | None = Field(None, description="메모. 없으면 null")
+
+
+class TravelDayGroup(BaseModel):
+    """여행 하루치 일정 묶음 — DAY 카드 하나."""
+
+    day_no: int = Field(..., description="여행 일자 (day1=1)")
+    date: DateType = Field(..., description="해당 일자 날짜 (여행 시작일 + day_no-1)")
+    items: list[TravelScheduleItem] = Field(..., description="그날 일정 항목 (sequence 오름차순)")
+
+
+class TravelDetailResponse(BaseModel):
+    """여행 일정표 상세 — 일자별로 그룹된 타임라인."""
+
+    travel_idx: int = Field(..., description="여행 PK")
+    title: str = Field(..., description="여행 제목")
+    start_date: date = Field(..., description="여행 시작일")
+    end_date: date = Field(..., description="여행 종료일")
+    region: str | None = Field(None, description="대표 지역. 없으면 null")
+    status: str = Field(..., description="PLANNED | ONGOING | COMPLETED (여행 기간·오늘 KST 기준 계산)")
+    days: list[TravelDayGroup] = Field(..., description="일자별 일정 묶음 (day_no 오름차순). 일정이 없으면 빈 배열")

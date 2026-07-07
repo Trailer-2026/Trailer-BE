@@ -5,7 +5,12 @@ from core.response import CommonResponse
 from core.security import get_current_user
 from databases.database import get_db
 from databases.models.user import User
-from schemas.travel_schema import HomeTravelCard, TravelCreateRequest, TravelResponse
+from schemas.travel_schema import (
+    HomeTravelCard,
+    TravelCreateRequest,
+    TravelDetailResponse,
+    TravelResponse,
+)
 from services import travel_service
 
 router = APIRouter(prefix="/api/travels", tags=["Travel"])
@@ -46,3 +51,23 @@ def get_current_travel(
 ):
     result = travel_service.current_travel(db, current_user)
     return CommonResponse.success_response("홈 여행 카드 조회 성공", data=result)
+
+
+@router.get(
+    "/{travel_idx}",
+    summary="여행 일정표 상세 조회",
+    description="여행 1건의 일정표를 일자별 타임라인으로 반환합니다(내 일정 > 일정표 탭). "
+                "일정 항목을 `day_no`(DAY)로 묶고 각 일자의 항목은 `sequence` 오름차순으로 정렬합니다. "
+                "각 일자의 날짜는 여행 시작일 + (day_no-1)로 계산하며, 기차 항목의 title은 "
+                "'KTX 101 서울→부산' 형태입니다. status는 여행 기간과 오늘(KST)로 계산됩니다.\n\n"
+                "- 404: 존재하지 않거나 본인 여행이 아님\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[TravelDetailResponse],
+)
+def get_travel_detail(
+    travel_idx: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = travel_service.travel_detail(db, current_user, travel_idx)
+    return CommonResponse.success_response("여행 일정표 조회 성공", data=result)
