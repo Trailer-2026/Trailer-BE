@@ -267,6 +267,7 @@ def _has_visits(itineraries: list) -> bool:
 
 
 _PLAN_LABELS = ["A", "B", "C", "D", "E"]
+_MAX_PAGE = 3  # 새로고침 최대 3회(스키마 le=3과 동일) — 과대 page로 루프·model_copy 폭발 방지
 
 
 def _plan_places(course) -> frozenset:
@@ -298,6 +299,7 @@ def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, rout
     # 다시받기(page): page*target개를 건너뛴 다음 target개를 반환하도록, 전체를 build_count까지
     # 만든 뒤 page 창을 잘라낸다. 결정적이라 같은 page는 항상 같은 묶음(겹치지 않는 다음 플랜).
     page = getattr(criteria, "page", 0) or 0
+    page = min(max(page, 0), _MAX_PAGE)  # 방어: 스키마 밖 경로로 온 과대/음수 page 클램프
     build_count = (page + 1) * target
 
     # 경로별 코스 변형 목록(선호도 내림차순). 숙박 경유는 이어붙인 단일 코스라 변형 1개.
