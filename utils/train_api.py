@@ -4,13 +4,11 @@
 (dep, arr, date) 단위 lru_cache — 같은 검색 재요청 시 API 콜 0.
 코레일 데이터지만 응답에 SRT도 일부 포함된다.
 """
-import json
-import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
 from config import Config
+from utils import dgo
 
 _BASE = "https://apis.data.go.kr/1613000/TrainInfo/GetStrtpntAlocFndTrainInfo"
 _DT_FMT = "%Y%m%d%H%M%S"  # "20260703051300"
@@ -35,16 +33,9 @@ def fetch_trains(dep_nat: str, arr_nat: str, ymd: str) -> tuple:
         "arrPlaceId": arr_nat,
         "depPlandTime": ymd,
     }
-    url = _BASE + "?" + urllib.parse.urlencode(params)
-    with urllib.request.urlopen(url, timeout=20) as r:
-        body = json.load(r)["response"]["body"]
-
-    items = body.get("items") or ""
-    if not items:  # 0건이면 "" 로 옴 (data.go.kr 특성)
+    rows = dgo.items(dgo.get_body(_BASE, params, timeout=20))
+    if not rows:
         return ()
-    rows = items["item"]
-    if isinstance(rows, dict):  # 1건이면 list 아니라 dict
-        rows = [rows]
 
     out = [
         {

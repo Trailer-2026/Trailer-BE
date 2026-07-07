@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.request
 
 from config import Config
+from utils import dgo
 
 _BASE = "https://apis.data.go.kr/B551011/KorService2"
 _COMMON = {
@@ -40,17 +41,6 @@ def _get(operation: str, params: dict, timeout: int = 20) -> dict:
     return resp.get("body") or {}
 
 
-def _items(body: dict) -> list[dict]:
-    """body.items.item 을 항상 list로 정규화한다(0건이면 [], 1건이면 [dict])."""
-    items = body.get("items")
-    if not items:  # 0건이면 "" 로 옴 (data.go.kr 특성)
-        return []
-    item = items.get("item")
-    if item is None:
-        return []
-    return item if isinstance(item, list) else [item]
-
-
 def area_based_list(
     *,
     area_code: int | None = None,
@@ -70,7 +60,7 @@ def area_based_list(
     if content_type_id is not None:
         params["contentTypeId"] = content_type_id
     body = _get("areaBasedList2", params)
-    return _items(body), int(body.get("totalCount") or 0)
+    return dgo.items(body), int(body.get("totalCount") or 0)
 
 
 def location_based_list(
@@ -94,7 +84,7 @@ def location_based_list(
     if content_type_id is not None:
         params["contentTypeId"] = content_type_id
     body = _get("locationBasedList2", params)
-    return _items(body), int(body.get("totalCount") or 0)
+    return dgo.items(body), int(body.get("totalCount") or 0)
 
 
 def detail_intro(*, content_id: str, content_type_id: int, timeout: int = 20) -> dict:
@@ -109,5 +99,5 @@ def detail_intro(*, content_id: str, content_type_id: int, timeout: int = 20) ->
         {"contentId": content_id, "contentTypeId": content_type_id},
         timeout=timeout,
     )
-    items = _items(body)
+    items = dgo.items(body)
     return items[0] if items else {}

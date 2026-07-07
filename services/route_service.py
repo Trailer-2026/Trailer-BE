@@ -301,17 +301,33 @@ def _build(route_type, dep, via_label, arr, go_picks, stay, back_segs, note=None
     )
 
 
+def _assemble_stopover(dep, arr, via, leg1, leg2, *, carry, note, return_via, nights=None) -> RouteCandidate:
+    """경유 앞/뒤 다리(leg1·leg2, dict)로 경유 RouteCandidate를 조립 — 4개 경유 빌더의 공통 꼬리.
+
+    return_via=False(가는편 경유): 가는편이 leg1·leg2, 오는편은 carry(호출측 back_segs).
+    return_via=True(오는편 경유): 가는편은 carry(호출측 go_picks), 오는편이 leg1·leg2.
+    stay=leg1 도착~leg2 출발(분). nights를 주면 숙박 경유로 via_nights를 붙인다.
+    go/back에 따라 leg가 어느 쪽으로 가는지가 헷갈리기 쉬워 이 배치를 한 곳에 모은다.
+    """
+    stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
+    if return_via:
+        go_trains, back_segs = carry, [_to_train(leg1), _to_train(leg2)]
+    else:
+        go_trains, back_segs = [leg1, leg2], carry
+    route = _build("경유", dep, via.station_name, arr, go_trains, stay, back_segs, note, return_via=return_via)
+    route.via_station_idx = via.station_idx
+    if nights is not None:
+        route.via_nights = nights
+    return route
+
+
 def _stopover(dep, arr, via, go_date, go_start, back_segs, back_note, nail_pass) -> RouteCandidate | None:
-    """via 역에 2~6h 관광 체류하는 경유 경로 1건. 체류 조건에 맞는 열차가 없으면 None."""
+    """via 역에 2~6h 관광 체류하는 가는편 경유 경로 1건. 체류 조건에 맞는 열차가 없으면 None."""
+    # _via_pair가 MIN_STAY~MAX_STAY로 걸러 체류는 이미 2~6h 범위 안이다.
     pair = _via_pair(dep.nat_code, arr.nat_code, via.nat_code, go_date, go_start, MIN_STAY, MAX_STAY, nail_pass)
     if not pair:
         return None
-    leg1, leg2 = pair
-    # 실제 체류(도착~다음 출발). _via_pair가 MIN_STAY~MAX_STAY로 걸러 이미 2~6h 범위 안이다.
-    stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
-    route = _build("경유", dep, via.station_name, arr, [leg1, leg2], stay, back_segs, back_note)
-    route.via_station_idx = via.station_idx
-    return route
+    return _assemble_stopover(dep, arr, via, *pair, carry=back_segs, note=back_note, return_via=False)
 
 
 def _stopover_return(dep, arr, via, back_date, back_start, go_picks, go_note, nail_pass) -> RouteCandidate | None:
@@ -325,12 +341,7 @@ def _stopover_return(dep, arr, via, back_date, back_start, go_picks, go_note, na
     pair = _via_pair(arr.nat_code, dep.nat_code, via.nat_code, back_date, back_start, MIN_STAY, MAX_STAY, nail_pass)
     if not pair:
         return None
-    leg1, leg2 = pair  # 도착역→via, via→출발역
-    stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
-    back_segs = [_to_train(leg1), _to_train(leg2)]
-    route = _build("경유", dep, via.station_name, arr, go_picks, stay, back_segs, go_note, return_via=True)
-    route.via_station_idx = via.station_idx
-    return route
+    return _assemble_stopover(dep, arr, via, *pair, carry=go_picks, note=go_note, return_via=True)
 
 
 def _stopover_overnight(dep, arr, via, go_date, nights, go_start, back_segs, back_note, nail_pass) -> RouteCandidate | None:
@@ -347,11 +358,7 @@ def _stopover_overnight(dep, arr, via, go_date, nights, go_start, back_segs, bac
     leg2 = _earliest(_legs(via.nat_code, arr.nat_code, date2, nail_pass), _start_dt(_parse_date(date2), _NEXT_DAY_START))
     if not leg2:
         return None
-    stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
-    route = _build("경유", dep, via.station_name, arr, [leg1, leg2], stay, back_segs, back_note)
-    route.via_station_idx = via.station_idx
-    route.via_nights = nights
-    return route
+    return _assemble_stopover(dep, arr, via, leg1, leg2, carry=back_segs, note=back_note, return_via=False, nights=nights)
 
 
 def _stopover_overnight_return(dep, arr, via, back_date, nights, go_picks, go_note, nail_pass) -> RouteCandidate | None:
@@ -370,12 +377,7 @@ def _stopover_overnight_return(dep, arr, via, back_date, nights, go_picks, go_no
     leg2 = _earliest(_legs(via.nat_code, dep.nat_code, back_date, nail_pass), _start_dt(_parse_date(back_date), _NEXT_DAY_START))
     if not leg2:
         return None
-    stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
-    back_segs = [_to_train(leg1), _to_train(leg2)]
-    route = _build("경유", dep, via.station_name, arr, go_picks, stay, back_segs, go_note, return_via=True)
-    route.via_station_idx = via.station_idx
-    route.via_nights = nights
-    return route
+    return _assemble_stopover(dep, arr, via, leg1, leg2, carry=go_picks, note=go_note, return_via=True, nights=nights)
 
 
 def recommend(

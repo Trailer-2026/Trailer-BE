@@ -7,11 +7,8 @@ data.go.kr B551457. 이 API는 열차번호/날짜 필터 조회를 지원하지
 TAGO(GetStrtpntAlocFndTrainInfo)의 trainno와 이 API의 trn_no는 동일 코레일 번호 체계(검증됨).
 SRT(수서 출발, SR 운영)는 코레일이 아니라 이 API에 없다 → 미수록(정차수 null 폴백).
 """
-import json
-import urllib.parse
-import urllib.request
-
 from config import Config
+from utils import dgo
 
 _RUN_INFO = "https://apis.data.go.kr/B551457/run/v2/travelerTrainRunInfo2"
 # 운행정보 API는 TAGO(1613000)와 같은 data.go.kr 계정 키로 접근된다 → traininfo 키 재사용.
@@ -38,15 +35,9 @@ def fetch_day(ymd: str, *, rows_per_page: int = 2000, max_pages: int = 30) -> li
             "pageNo": page,
             "_type": "json",
         }
-        url = _RUN_INFO + "?" + urllib.parse.urlencode(params)
-        with urllib.request.urlopen(url, timeout=30) as r:
-            body = json.load(r)["response"]["body"]
-        items = body.get("items") or ""
-        rows = items.get("item") if isinstance(items, dict) else None
+        rows = dgo.items(dgo.get_body(_RUN_INFO, params, timeout=30))
         if not rows:
             break
-        if isinstance(rows, dict):
-            rows = [rows]
         matched_this_page = False
         for x in rows:
             if x.get("run_ymd") != ymd:
