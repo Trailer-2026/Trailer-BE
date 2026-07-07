@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/travels", tags=["Travel"])
                 "- 401: 인증 필요",
     response_model=CommonResponse[TravelResponse],
 )
-async def create_travel(
+def create_travel(
     req: TravelCreateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -40,7 +40,7 @@ async def create_travel(
                 "- 401: 인증 필요",
     response_model=CommonResponse[HomeTravelCard | None],
 )
-async def get_current_travel(
+def get_current_travel(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

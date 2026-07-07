@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/places", tags=["Place"])
                 "- 특정 테마를 고정해 받으려면 `theme`를 지정합니다.",
     response_model=CommonResponse[ThemedPlacesResponse],
 )
-async def get_themed_places(
+def get_themed_places(
     theme: Theme | None = Query(None, description="여행지 테마. 미지정이면 서버가 랜덤 선택('다른 테마' 버튼용)"),
 ):
     result = place_service.themed_places(theme)
