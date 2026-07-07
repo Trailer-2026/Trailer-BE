@@ -88,18 +88,19 @@ def close_cycle(
     order: list[ScoredPlace],
     origin: tuple[float, float],
 ) -> list[ScoredPlace]:
-    """순환 복귀 — 출발지(origin: lat/lng)에서 진입·복귀가 짧도록 경로 방향을 맞춘다.
+    """순환 복귀 — 마지막 방문지가 출발지(origin: lat/lng)에 가깝도록 경로 방향을 맞춘다.
 
-    열린 day 경로의 시작점이 출발지에 가깝도록 필요 시 뒤집는다(마지막 day에서 origin 복귀 유리).
-    방문 '집합'은 그대로 두고 방향(순서)만 origin 좌표 기준으로 뒤집을 뿐, 경로 길이는 불변이다.
+    열린 day 경로의 끝점이 출발지에 가깝도록 필요 시 뒤집는다(마지막 day에서 origin 복귀 유리 —
+    마지막 방문 뒤 귀가 열차 타러 가는 이동이 짧아진다). 방문 '집합'은 그대로 두고 방향(순서)만
+    origin 좌표 기준으로 뒤집을 뿐, 경로 길이는 불변이다.
     """
     if len(order) < 2:
         return order
     olat, olng = origin
-    # 양 끝점과 origin의 거리를 비교해, 끝점이 더 가까우면 뒤집어 시작점을 origin 쪽으로 맞춘다
+    # 양 끝점과 origin의 거리를 비교해, 시작점이 더 가까우면 뒤집어 끝점을 origin 쪽으로 맞춘다
     head = haversine(olat, olng, order[0].lat, order[0].lng)
     tail = haversine(olat, olng, order[-1].lat, order[-1].lng)
-    if tail < head:
+    if head < tail:
         return list(reversed(order))
     return order
 
