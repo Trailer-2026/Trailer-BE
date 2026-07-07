@@ -7,6 +7,7 @@ import logging
 import math
 import random
 import re
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -68,10 +69,10 @@ def _ctypes_for(themes: list[Theme]) -> set[int]:
     return out
 
 
-def _to_live(item: dict) -> LivePlace | None:
-    """TourAPI 응답 항목 1건 → LivePlace. 좌표·테마·contentid 중 하나라도 없으면 None(스킵).
+def _coords(item: dict) -> tuple[float, float] | None:
+    """TourAPI 항목 좌표 (lat, lng). mapx=경도·mapy=위도로 뒤집어 읽는다(x/y와 lat/lng 반대).
 
-    좌표는 TourAPI 규약대로 mapx=경도, mapy=위도로 뒤집어 읽는다(주의: x/y와 lat/lng 반대).
+    파싱 실패거나 둘 중 하나라도 0/없음이면 None(호출측에서 스킵).
     """
     try:
         lng = float(item.get("mapx") or 0)
@@ -80,6 +81,15 @@ def _to_live(item: dict) -> LivePlace | None:
         return None
     if not lat or not lng:
         return None
+    return lat, lng
+
+
+def _to_live(item: dict) -> LivePlace | None:
+    """TourAPI 응답 항목 1건 → LivePlace. 좌표·테마·contentid 중 하나라도 없으면 None(스킵)."""
+    coords = _coords(item)
+    if coords is None:
+        return None
+    lat, lng = coords
     ct = item.get("contenttypeid")
     themes = tour_category.themes_for(ct, item.get("cat1"), item.get("cat2"), item.get("cat3"))
     if not themes:  # 8개 테마 어디에도 안 걸리는 항목(레포츠 등)은 버린다
@@ -271,13 +281,10 @@ def fetch_hours(refs: list[tuple[str, int | None]]) -> dict[str, Hours]:
 
 def _to_lodging(it: dict) -> Lodging | None:
     """TourAPI 숙박 항목 1건 → Lodging. 좌표 없으면 None(스킵)."""
-    try:
-        lng2 = float(it.get("mapx") or 0)
-        lat2 = float(it.get("mapy") or 0)
-    except (TypeError, ValueError):
+    coords = _coords(it)
+    if coords is None:
         return None
-    if not lat2 or not lng2:
-        return None
+    lat2, lng2 = coords
     return Lodging(
         name=(it.get("title") or "")[:255],
         lodging_type=tour_category.LODGING_TYPE.get(it.get("cat3") or ""),
@@ -373,10 +380,7 @@ def scan_area_profiles(themes: list[Theme]) -> list[AreaScan]:
                 sum(p[0] for p in cluster) / len(cluster),
                 sum(p[1] for p in cluster) / len(cluster),
             )
-            counts: dict[Theme, int] = {}
-            for _, _, themes_t in cluster:
-                for t in themes_t:
-                    counts[t] = counts.get(t, 0) + 1
+            counts = Counter(t for _, _, themes_t in cluster for t in themes_t)
             profiles.append(AreaScan(area, centroid, counts, len(cluster)))
     return profiles
 

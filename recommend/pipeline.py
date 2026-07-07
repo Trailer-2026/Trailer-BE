@@ -14,24 +14,17 @@ _MAX_PER_DAY = 3
 _LABELS = ["A", "B", "C", "D", "E"]
 
 
-def max_working(k: int) -> int:
-    """일수 k일 때 코스 조립에 실제로 쓰이는 상위 후보 수(작업셋 상한).
-
-    recommend_service가 이 수만큼의 상위 후보에 대해서만 운영시간을 조회(detailIntro2)해
-    호출 수를 코스에 배정될 장소들로 제한한다.
-    """
-    return _NUM_COURSES * k * _MAX_PER_DAY
-
-
 def working_set(scored: list[ScoredPlace], themes: list[Theme] | None, k: int) -> list[ScoredPlace]:
     """코스 조립에 실제로 쓰이는 상위 후보 집합(작업셋).
 
+    상한 = _NUM_COURSES × k × _MAX_PER_DAY. recommend_service가 이 수만큼의 상위 후보에만
+    운영시간을 조회(detailIntro2)해 호출 수를 코스에 배정될 장소로 제한한다.
     운영시간 조회(recommend_service._attach_hours)와 코스 생성(build_courses)이 **반드시
     같은 집합**을 쓰도록 하는 단일 진입점. 다중 테마면 테마 쿼터 때문에 원점수 상위 N개와
     달라질 수 있어(차순위가 코스에 섞임), 조회 대상을 이 함수로 통일해야 미조회 후보가 코스에
     들어가는 것을 막는다.
     """
-    return _select_working(scored, set(themes or []), max_working(k))
+    return _select_working(scored, set(themes or []), _NUM_COURSES * k * _MAX_PER_DAY)
 
 
 def build_courses(
@@ -232,9 +225,9 @@ def _to_reco(
         preference_score=round(p.score, 4),
         reason=_reason(p, selected, arrive_hour),
         image_url=p.image_url,
-        open_time=_hhmm(p.open_hour),
-        close_time=_hhmm(p.close_hour),
-        visit_time=_hhmm(arrive_hour),
+        open_time=routing.hhmm(p.open_hour),
+        close_time=routing.hhmm(p.close_hour),
+        visit_time=routing.hhmm(arrive_hour),
     )
 
 
@@ -246,19 +239,9 @@ def _reason(p: ScoredPlace, selected: set[Theme], arrive_hour: float | None = No
         return base
     # 방문 예정 시각을 붙이고, 운영시간이 파악된 곳은 함께 표기(마감 전 방문 안내).
     if p.open_hour is not None or p.close_hour is not None:
-        win = f"{_hhmm(p.open_hour) or '?'}~{_hhmm(p.close_hour) or '?'}"
-        return f"{base} · {_hhmm(arrive_hour)} 방문 (운영 {win})"
-    return f"{base} · {_hhmm(arrive_hour)} 방문"
-
-
-def _hhmm(hour: float | None) -> str | None:
-    """시각(float 시간) → 'HH:MM'. None이면 None. 자정 넘김(≥24)은 다음날 시각으로 표기."""
-    if hour is None:
-        return None
-    total = int(round(hour * 60))
-    hh, mm = divmod(total, 60)
-    hh %= 24  # 24:00·26:00 등은 00:00·02:00로 표기
-    return f"{hh:02d}:{mm:02d}"
+        win = f"{routing.hhmm(p.open_hour) or '?'}~{routing.hhmm(p.close_hour) or '?'}"
+        return f"{base} · {routing.hhmm(arrive_hour)} 방문 (운영 {win})"
+    return f"{base} · {routing.hhmm(arrive_hour)} 방문"
 
 
 def _parse_ymd(s: str | None) -> datetime | None:

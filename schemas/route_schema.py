@@ -2,26 +2,20 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from core.enums import Theme
+from schemas.place_schema import PlaceBase
 
 
-class StopoverPlace(BaseModel):
-    """경유역 인근(역 근처) 추천 관광지 1곳 — 경유 체류시간 동안 둘러볼 곳."""
+class StopoverPlace(PlaceBase):
+    """경유역 인근(역 근처) 추천 관광지 1곳 — 경유 체류시간 동안 둘러볼 곳.
 
-    place_idx: int = Field(..., description="추천지 PK")
-    name: str = Field(..., description="이름")
-    region: str | None = Field(None, description="지역")
-    lat: float = Field(..., description="위도")
-    lng: float = Field(..., description="경도")
-    themes: list[Theme] = Field(..., description="테마 태그")
+    표시 공통 필드는 PlaceBase 상속. 경유 맥락에 맞춰 아래 3개만 기본값·설명을 달리 정의한다.
+    """
+
     preference_score: float = Field(
         0.0,
         description="선택 테마와의 선호도(0~1). 목적지 코스와 같은 점수식(테마 가중 코사인 + 이미지 품질)으로 산정",
     )
     reason: str = Field("경유역 근처 추천지", description="추천 이유 (목적지 코스와 같은 형식)")
-    image_url: str | None = Field(None, description="대표 이미지 URL")
-    open_time: str | None = Field(None, description="운영 시작 시각 (HH:MM). 미상이면 null")
-    close_time: str | None = Field(None, description="운영 종료 시각 (HH:MM). 미상이면 null")
     visit_time: str | None = Field(
         None,
         description="경유 체류시간 내 예상 방문 시각 (HH:MM). 운영시간을 반영해 배정. "

@@ -1,4 +1,5 @@
 import logging
+from collections import Counter
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -6,7 +7,7 @@ from sqlalchemy.orm import Session
 from core.exceptions.custom import BadRequestException, NotFoundException
 from databases.daos import station_dao, train_stop_dao
 from recommend import destination, itinerary, pipeline, scoring
-from recommend.routing import haversine
+from recommend.routing import haversine, hhmm
 from recommend.types import ScoredPlace
 from schemas.recommend_schema import (
     Course,
@@ -216,11 +217,7 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
 
 def _theme_counts(places) -> dict:
     """LivePlace 목록 → 테마별 카운트(themeVector)."""
-    counts: dict = {}
-    for pl in places:
-        for t in pl.themes:
-            counts[t] = counts.get(t, 0) + 1
-    return counts
+    return Counter(t for pl in places for t in pl.themes)
 
 
 def _dedup_by_station(profiles: list) -> list:
@@ -646,10 +643,7 @@ def _assign_lodgings(courses: list[Course], memo: dict | None = None, fallback=N
 
 def _day_end_coords(day) -> tuple[float, float] | None:
     """그 날 동선의 종점(마지막 방문지) 좌표. places는 방문 순서라 뒤에서부터 좌표 있는 곳을 찾는다."""
-    for p in reversed(day.places):
-        if p.lat is not None and p.lng is not None:
-            return (p.lat, p.lng)
-    return None
+    return next(((p.lat, p.lng) for p in reversed(day.places) if p.lat is not None and p.lng is not None), None)
 
 
 def _fetch_routes(db: Session, origin, dest, criteria: SearchCriteria, k: int) -> tuple[list, str | None]:
@@ -781,7 +775,7 @@ def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
                     place_idx=rec["place_idx"], name=rec["name"], region=rec["region"],
                     lat=rec["lat"], lng=rec["lng"], themes=rec["themes"], image_url=rec["image_url"],
                     open_time=rec["open_time"], close_time=rec["close_time"],
-                    visit_time=_hhmm(vt),
+                    visit_time=hhmm(vt),
                     preference_score=rec["preference_score"],
                     reason=_via_reason(rec, criteria.themes, vt),
                 )
@@ -811,7 +805,7 @@ def _stopover_record(p, h, score: float) -> dict:
         "place_idx": p.place_idx, "name": p.name, "region": p.region,
         "lat": p.lat, "lng": p.lng, "themes": p.themes, "image_url": p.image_url,
         "open_hour": oh, "close_hour": ch,
-        "open_time": _hhmm(oh), "close_time": _hhmm(ch),
+        "open_time": hhmm(oh), "close_time": hhmm(ch),
         "preference_score": round(score, 4),
     }
 
@@ -867,16 +861,6 @@ def _stopover_visits(recs: list, start_dt, end_dt) -> list:
         out.append(arrive)
         cursor = arrive + _VIA_STAY_H  # 다음 경유지는 이만큼 뒤(관람+이동 근사)
     return out
-
-
-def _hhmm(hour: float | None) -> str | None:
-    """시각(float 시간) → 'HH:MM'. None이면 None. 자정 넘김(≥24)은 다음날 시각으로 표기."""
-    if hour is None:
-        return None
-    total = int(round(hour * 60))
-    hh, mm = divmod(total, 60)
-    hh %= 24
-    return f"{hh:02d}:{mm:02d}"
 
 
 def _trip_days(go_date: str, back_date: str) -> int:

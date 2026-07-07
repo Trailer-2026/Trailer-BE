@@ -67,11 +67,7 @@ class AreaProfile:
     total: int
     station: object | None = None      # 매핑된 도착역(서비스가 nearest_major로 채움)
     province: str | None = None        # 다양성 키(관리 본부 등)
-    score: float = 0.0
-    theme_fit: float = 0.0
-    age_fit: float = 0.0
-    access_fit: float = 0.0
-    distance_km: float = 0.0
+    score: float = 0.0                 # rank_and_diversify가 채움(theme/age/access는 그 안 지역변수)
 
 
 def rank_and_diversify(
@@ -98,17 +94,14 @@ def rank_and_diversify(
         # 관광지 0곳이거나 역 매핑 실패(station None)면 도착지가 될 수 없어 스킵
         if p.total <= 0 or p.station is None:
             continue
-        p.distance_km = haversine(origin[0], origin[1], p.centroid[0], p.centroid[1])
-        if p.distance_km > limit:  # 너무 멀면(당일치기에 부적합 등) 제외
+        distance_km = haversine(origin[0], origin[1], p.centroid[0], p.centroid[1])
+        if distance_km > limit:  # 너무 멀면(당일치기에 부적합 등) 제외
             continue
         sh = _shares(p.theme_counts, p.total)
-        p.theme_fit = _theme_fit(sh, themes)
-        p.age_fit = _age_fit(sh, party)
-        p.access_fit = _access_fit(p.distance_km, nights)
         p.score = (
-            WEIGHT_THEME * p.theme_fit
-            + w_age * p.age_fit
-            + w_access * p.access_fit
+            WEIGHT_THEME * _theme_fit(sh, themes)
+            + w_age * _age_fit(sh, party)
+            + w_access * _access_fit(distance_km, nights)
             - _group_penalty(sh, party)
         )
         scored.append(p)
