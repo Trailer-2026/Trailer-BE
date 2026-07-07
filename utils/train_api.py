@@ -25,7 +25,7 @@ def fetch_trains(dep_nat: str, arr_nat: str, ymd: str) -> tuple:
     네트워크/파싱 실패 시 예외를 그대로 올린다(서비스에서 502로 변환).
     """
     params = {
-        "serviceKey": Config.read("traininfo", "service_key"),
+        "serviceKey": Config.read("tourapi", "service_key"),
         "pageNo": 1,
         "numOfRows": 500,  # 한 구간 하루 최대 ~수십 편 << 500
         "_type": "json",
