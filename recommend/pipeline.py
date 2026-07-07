@@ -171,9 +171,9 @@ def _assemble(
         # 하루 상한: 기본 _MAX_PER_DAY, 첫날/마지막날만 열차 시각 기반 cap으로 축소.
         cap = _MAX_PER_DAY
         if idx == 0 and first_cap is not None:
-            cap = min(first_cap, _MAX_PER_DAY)
-        if idx == n - 1 and last_cap is not None:  # 당일치기(n==1)면 last_cap이 우선
-            cap = min(last_cap, _MAX_PER_DAY)
+            cap = min(cap, first_cap)
+        if idx == n - 1 and last_cap is not None:  # 당일치기(n==1)면 first_cap과 함께 둘 다 반영
+            cap = min(cap, last_cap)
         window = day_windows[idx] if day_windows and idx < len(day_windows) else None
         # 그 날 요일(휴무 판정용) — go_date가 있어야 계산 가능.
         weekday = (go + timedelta(days=idx)).weekday() if go else None
