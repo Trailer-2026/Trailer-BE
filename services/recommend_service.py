@@ -476,10 +476,13 @@ def _course_for_overnight(db, dest_scored, criteria, k, dest_anchor, route, memo
             fc, lc = _caps_between(arr, dep, seg_k)
             win = _windows_between(arr, dep, seg_k)
         sub = pipeline.build_courses(seg_scored, criteria, seg_k, seg_anchor, fc, lc, win)
-        if sub:
-            days.extend(max(sub, key=lambda c: c.total_preference_score).days)
+        if not sub:  # 세그먼트에 코스가 아예 없으면(경유역 관광지 0 등) 폐기 — max() 빈 시퀀스 방어도 겸함
+            return None
+        days.extend(max(sub, key=lambda c: c.total_preference_score).days)
 
-    if not days:
+    # 장소가 부족하면 build_courses가 seg_k보다 적은 날을 내므로, 총 일수가 k와 정확히 맞을 때만
+    # 채택한다. 어긋나면 날짜가 밀린 짧은 코스가 되니 후보를 폐기한다(직통/일반 경유가 대신 노출됨).
+    if len(days) != k:
         return None
     # 이어붙인 뒤 day_no·날짜를 여행 첫날 기준 1..k로 재부여(구간별 build_courses는 각자 1부터라).
     for i, d in enumerate(days):
