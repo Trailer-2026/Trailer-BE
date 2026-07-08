@@ -217,6 +217,9 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
         try:
             w_origin = station_dao.get_by_idx(wdb, origin_idx)
             st = station_dao.get_by_idx(wdb, st_idx)
+            if w_origin is None or st is None:
+                # 워커 세션 재조회 중 역이 사라진 경우(소프트삭제·경합) 방어 — 기존 서비스 관례대로 404.
+                raise NotFoundException("역을 찾을 수 없습니다.")
             # 경로별로 그 경로의 도착/출발 시각에 맞춘 코스를 엮는다. Phase B 장소를 재사용(추가 조회 없음).
             routes, rnote = _fetch_routes(wdb, w_origin, st, criteria, k)
             itineraries = _itineraries_from(
