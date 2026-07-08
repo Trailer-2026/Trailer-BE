@@ -301,7 +301,7 @@ def _build(route_type, dep, via_label, arr, go_picks, stay, back_segs, note=None
     )
 
 
-def _assemble_stopover(dep, arr, via, leg1, leg2, *, carry, note, return_via, nights=None) -> RouteCandidate:
+def _assemble_stopover(dep, arr, via, leg1, leg2, *, carry, note, return_via, nights=None) -> RouteCandidate | None:
     """경유 앞/뒤 다리(leg1·leg2, dict)로 경유 RouteCandidate를 조립 — 4개 경유 빌더의 공통 꼬리.
 
     return_via=False(가는편 경유): 가는편이 leg1·leg2, 오는편은 carry(호출측 back_segs).
@@ -309,6 +309,11 @@ def _assemble_stopover(dep, arr, via, leg1, leg2, *, carry, note, return_via, ni
     stay=leg1 도착~leg2 출발(분). nights를 주면 숙박 경유로 via_nights를 붙인다.
     go/back에 따라 leg가 어느 쪽으로 가는지가 헷갈리기 쉬워 이 배치를 한 곳에 모은다.
     """
+    # carry(반대 방향 여정)가 비면 왕복이 성립 안 하는 반쪽 경유 → 폐기(호출부는 None을 걸러낸다).
+    # 도착역에서 돌아오는 열차가 없을 때 back_trains=[] 인 채 경유가 만들어져 _overnight_segments가
+    # back[0]에서 IndexError 나던 것을 원천 차단(4개 빌더 공통 꼬리라 여기 한 곳으로 커버).
+    if not carry:
+        return None
     stay = int((leg2["dep_time"] - leg1["arr_time"]).total_seconds() // 60)
     if return_via:
         go_trains, back_segs = carry, [_to_train(leg1), _to_train(leg2)]
