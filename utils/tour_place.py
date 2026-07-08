@@ -274,7 +274,8 @@ def fetch_hours(refs: list[tuple[str, int | None]]) -> dict[str, Hours]:
     """
     if not refs:
         return {}
-    with ThreadPoolExecutor(max_workers=min(8, len(refs))) as ex:
+    # HTTP 대기(I/O bound)라 워커를 CPU 수가 아니라 콜 수에 맞춰 왕복 지연을 최대한 겹친다.
+    with ThreadPoolExecutor(max_workers=min(16, len(refs))) as ex:
         results = ex.map(lambda r: _fetch_hours_one(r[0], r[1]), refs)
     return dict(results)
 
@@ -356,7 +357,8 @@ def scan_area_profiles(themes: list[Theme]) -> list[AreaScan]:
     """
     ctypes = sorted(_ctypes_for(themes))
     jobs = [(area, ct) for area in _AREA_CODES for ct in ctypes]
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    # HTTP 대기(I/O bound)라 CPU 수와 무관 — 전 시도×유형 콜을 한두 웨이브로 겹친다.
+    with ThreadPoolExecutor(max_workers=min(32, len(jobs))) as ex:
         results = list(ex.map(lambda j: _area_items(j[0], j[1]), jobs))
 
     # area별로 (위도, 경도, 테마들) 점을 모은다.
