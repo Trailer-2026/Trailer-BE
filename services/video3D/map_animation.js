@@ -1,6 +1,10 @@
 const MAP_STYLE = "mapbox://styles/mapbox/standard";
-// 지도 테마 (window.MAP_THEME 로 주입). "winter": dusk 조명 + 눈 파티클.
+// 지도 테마 (window.MAP_THEME 로 주입). default/spring/summer/autumn/winter —
+// 정의는 map_themes.js 의 THEMES 참고.
 const MAP_THEME = String(window.MAP_THEME || "").toLowerCase();
+// 시간대 조명 (window.MAP_LIGHT_PRESET 로 주입). dawn/day/dusk/night,
+// 빈 값이면 테마 기본 조명 사용.
+const MAP_LIGHT_PRESET = String(window.MAP_LIGHT_PRESET || "").toLowerCase();
 const TERRAIN_SOURCE_ID = "mapbox-dem";
 const FULL_ROUTE_SOURCE_ID = "route-planned";
 const PROGRESS_ROUTE_SOURCE_ID = "route-progress";
@@ -727,219 +731,29 @@ function addTerrain() {
   }
 }
 
-// 테마별 설정. lightPreset 은 Standard 스타일 조명(dawn/day/dusk/night),
-// snow 는 setSnow(GL JS v3.9+) 파티클 옵션.
-// - winter: 초저녁(dusk) + 흰 눈. Mapbox 기본 프리셋(density 0.85,
-//   intensity 1.0, vignette 0.3)은 화면을 뒤덮어 과함 → 가볍게 낮춤.
-// - spring: 새벽(dawn) 분홍빛 + 눈 파티클을 연분홍으로 물들여 벚꽃잎 연출.
-//   꽃잎은 눈보다 크고(flake-size) 옆으로 흩날리게(direction 방위각) 설정.
-// intensity(낙하 속도)는 wall-clock 기반이라 프레임 캡처 간격(~0.3s)이
-// 재생 간격(1/30s)보다 길어 영상에서 빨라 보임 → 낮게 잡는다.
-const THEME_PRESETS = {
-  winter: {
-    lightPreset: "dusk",
-    snow: {
-      density: 0.15,
-      intensity: 0.2,
-      "center-thinning": 0.15,
-      direction: [0, 50],
-      opacity: 0.8,
-      color: "#ffffff",
-      "flake-size": 0.6,
-      vignette: 0.1,
-      "vignette-color": "#ffffff"
-    }
-  },
-  spring: {
-    // 조명 프리셋 없음 — 기본 주간 조명 위에 벚꽃 파티클만 얹는다.
-    lightPreset: null,
-    snow: {
-      density: 0.15,
-      intensity: 0.15,
-      "center-thinning": 0.1,
-      direction: [40, 65],
-      opacity: 0.9,
-      color: "#ffb7c5",
-      "flake-size": 1.0,
-      vignette: 0.08,
-      "vignette-color": "#ffd7e0"
-    }
-  },
-  summer: {
-    // 일본 여름 애니메이션 톤: 쨍한 한낮 햇빛 + 깊고 새파란 하늘 + 진한 채도.
-    // fog 로 하늘을 청량하게 만들고, colorGrade(LUT)로 색감을 끌어올린다.
-    lightPreset: null,
-    fog: {
-      color: "rgb(235, 246, 255)",
-      "high-color": "rgb(46, 130, 232)",
-      "horizon-blend": 0.14,
-      "space-color": "rgb(28, 108, 214)",
-      "star-intensity": 0
-    },
-    colorGrade: {
-      saturation: 1.5,
-      contrast: 1.12,
-      brightness: 0.02,
-      highlightWarmth: 0.05,
-      shadowCool: 0.06
-    }
-  },
-  autumn: {
-    // 가을: 녹지를 단풍빛(호박색)으로 물들이고, 따뜻하고 옅은 안개 낀 하늘에
-    // 주황갈색 낙엽이 옆으로 흩날린다.
-    lightPreset: null,
-    fog: {
-      color: "rgb(244, 230, 208)",
-      "high-color": "rgb(126, 146, 184)",
-      "horizon-blend": 0.12,
-      "space-color": "rgb(44, 62, 98)",
-      "star-intensity": 0
-    },
-    colorGrade: {
-      saturation: 1.35,
-      contrast: 1.08,
-      brightness: 0,
-      highlightWarmth: 0.12,
-      shadowCool: 0.03,
-      greenToAmber: 0.8
-    },
-    snow: {
-      density: 0.15,
-      intensity: 0.12,
-      "center-thinning": 0.1,
-      direction: [60, 70],
-      opacity: 0.9,
-      color: "#d08a3e",
-      "flake-size": 1.3,
-      vignette: 0.06,
-      "vignette-color": "#e8c49a"
-    }
-  }
-};
+// 테마 정의·적용 로직은 map_themes.js (window.MapThemes) 로 분리 —
+// 빌더 미리보기(builder.html)와 렌더러가 같은 모듈을 공유한다.
+// 테마 목록/파티클/색보정/경로 라인/벚꽃나무 설정도 모두 그쪽에 있다.
 
-// 32³ 색상 LUT 를 1024x32 스트립(타일=B 슬라이스, 타일 내 x=R, y=G)으로
-// canvas 에 구워 base64 PNG 로 반환한다. Photoshop LUT 스트립과 동일한 배치.
-function buildColorGradeLUT(grade) {
-  const size = 32;
-  const canvas = document.createElement("canvas");
-  canvas.width = size * size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  const image = ctx.createImageData(size * size, size);
-  const data = image.data;
-  const clamp01 = (value) => Math.min(1, Math.max(0, value));
-  for (let b = 0; b < size; b += 1) {
-    for (let g = 0; g < size; g += 1) {
-      for (let r = 0; r < size; r += 1) {
-        let rr = r / (size - 1);
-        let gg = g / (size - 1);
-        let bb = b / (size - 1);
-        // 초록 → 호박색 (가을 단풍): 초록 우세 성분만 붉은 쪽으로 민다.
-        if (grade.greenToAmber) {
-          const greenness = Math.max(0, gg - Math.max(rr, bb));
-          rr += greenness * grade.greenToAmber;
-          gg -= greenness * grade.greenToAmber * 0.35;
-        }
-        // 대비 (0.5 기준)
-        rr = 0.5 + (rr - 0.5) * grade.contrast;
-        gg = 0.5 + (gg - 0.5) * grade.contrast;
-        bb = 0.5 + (bb - 0.5) * grade.contrast;
-        // 채도 (luma 기준으로 색 성분만 증폭)
-        const luma = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
-        rr = luma + (rr - luma) * grade.saturation;
-        gg = luma + (gg - luma) * grade.saturation;
-        bb = luma + (bb - luma) * grade.saturation;
-        // 밝기 + 하이라이트는 따뜻하게, 그림자는 푸르게 (애니메이션 색감)
-        rr += grade.brightness + grade.highlightWarmth * luma;
-        gg += grade.brightness + grade.highlightWarmth * luma * 0.55;
-        bb += grade.brightness + grade.shadowCool * (1 - luma);
-        const idx = (g * size * size + (b * size + r)) * 4;
-        data[idx] = Math.round(clamp01(rr) * 255);
-        data[idx + 1] = Math.round(clamp01(gg) * 255);
-        data[idx + 2] = Math.round(clamp01(bb) * 255);
-        data[idx + 3] = 255;
-      }
-    }
-  }
-  ctx.putImageData(image, 0, 0);
-  return canvas.toDataURL("image/png").split(",")[1];
-}
-
-// LUT 색보정을 루트 스타일과 basemap import 양쪽에 적용한다 (Standard 를
-// 직접 로드하면 지도 레이어는 basemap import 밑에 있다).
-function applyColorGrade(grade) {
-  if (typeof map.setColorTheme !== "function") {
-    console.warn("map.setColorTheme unavailable; color grade skipped.");
-    return;
-  }
-  const theme = { data: buildColorGradeLUT(grade) };
-  try {
-    map.setColorTheme(theme);
-  } catch (error) {
-    console.warn(`Color grade (root) failed: ${error.message}`);
-  }
-  if (typeof map.setImportColorTheme === "function") {
-    try {
-      map.setImportColorTheme("basemap", theme);
-    } catch (error) {
-      // Standard 가 import 로 래핑되지 않은 버전이면 루트 적용만으로 충분.
-      console.warn(`Color grade (basemap) skipped: ${error.message}`);
-    }
-  }
-}
-
+// 테마 적용 (조명·안개·색보정·파티클·경로 라인 색·벚꽃나무).
+// 경로 레이어("planned/progress-route-line")가 만들어진 뒤 호출해야
+// 라인 색과 나무 배치까지 함께 적용된다.
 function applyMapTheme() {
-  const preset = THEME_PRESETS[MAP_THEME];
-  if (!preset) {
+  if (!window.MapThemes) {
+    console.warn("map_themes.js not loaded; theme skipped.");
     return;
   }
-  if (preset.lightPreset) {
-    try {
-      map.setConfigProperty("basemap", "lightPreset", preset.lightPreset);
-      console.info(`[theme] ${MAP_THEME}: lightPreset=${preset.lightPreset}`);
-    } catch (error) {
-      console.warn(`Theme lightPreset failed: ${error.message}`);
-    }
-  }
-  if (preset.colorGrade) {
-    applyColorGrade(preset.colorGrade);
-    console.info(`[theme] ${MAP_THEME}: color grade applied`);
-  }
-  if (!preset.snow) {
-    return;
-  }
-  if (typeof map.setSnow !== "function") {
-    console.warn("map.setSnow unavailable (GL JS < 3.9?); particles skipped.");
-    return;
-  }
-  try {
-    map.setSnow(preset.snow);
-    console.info(`[theme] ${MAP_THEME}: particles enabled`);
-  } catch (error) {
-    console.warn(`Theme particles failed: ${error.message}`);
-  }
-}
-
-function addAtmosphere() {
-  // lightPreset 을 바꾸는 테마는 해당 프리셋 자체의 대기/하늘 톤을 살리기
-  // 위해 주간용 커스텀 fog 를 씌우지 않는다. 테마 전용 fog 가 있으면 그걸 쓴다.
-  const preset = THEME_PRESETS[MAP_THEME];
-  if (preset && preset.lightPreset && !preset.fog) {
-    return;
-  }
-  try {
-    map.setFog(
-      (preset && preset.fog) || {
-        color: "rgb(204, 226, 255)",
-        "high-color": "rgb(64, 114, 180)",
-        "horizon-blend": 0.18,
-        "space-color": "rgb(8, 18, 36)",
-        "star-intensity": 0.12
-      }
-    );
-  } catch (error) {
-    console.warn(`Atmosphere setup skipped: ${error.message}`);
-  }
+  window.MapThemes.applyTheme(map, MAP_THEME, {
+    lightPreset: MAP_LIGHT_PRESET,
+    routeCoordinates,
+    routeLayers: {
+      planned: "planned-route-line",
+      progress: "progress-route-line",
+      casing: "progress-route-casing"
+    },
+    // 나무 심볼이 정차 지점 마커/라벨을 덮지 않게 그 아래에 삽입.
+    treesBeforeId: "route-marker-halo"
+  });
 }
 
 function addBuildings() {
@@ -1226,6 +1040,23 @@ function addRouteLayers() {
       "line-color": "#93c5fd",
       "line-width": 4,
       "line-opacity": 0.42
+    }
+  });
+
+  // 진행 라인 밑에 깔리는 케이싱. 기본 테마에서는 폭 0(안 보임)이고,
+  // spring 등 테마가 흰색 굵은 테두리로 스타일링한다 (map_themes.js).
+  map.addLayer({
+    id: "progress-route-casing",
+    type: "line",
+    source: PROGRESS_ROUTE_SOURCE_ID,
+    layout: {
+      "line-cap": "round",
+      "line-join": "round"
+    },
+    paint: {
+      "line-color": "#ffffff",
+      "line-width": 0,
+      "line-opacity": 0
     }
   });
 
@@ -1861,15 +1692,15 @@ window.initializeMap = async function () {
 
   await waitForEvent(map, "load", 45000);
   map.resize();
-  applyMapTheme();
   addTerrain();
-  addAtmosphere();
   addBuildings();
   trainModelActive = await tryAddTrainModel();
   if (!trainModelActive) {
     addTrainIcon();
   }
   addRouteLayers();
+  // 경로 레이어까지 만든 뒤 테마 적용 (fog 기본값도 테마 모듈이 복원한다).
+  applyMapTheme();
   renderReady = true;
   const idleStart = performance.now();
   const initialIdleReady = await waitForMapIdle(20000);
