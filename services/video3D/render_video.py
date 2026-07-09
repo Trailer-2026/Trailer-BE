@@ -271,9 +271,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--travel-data", type=Path, help="trackPoints/mediaPoints JSON 파일")
     parser.add_argument(
         "--theme",
-        choices=["winter", "spring", "summer", "autumn"],
+        choices=["default", "winter", "spring", "sakura", "summer", "autumn"],
         default=None,
-        help="지도 테마 (winter: 눈 / spring: 벚꽃 / summer: 쨍한 색감 / autumn: 단풍+낙엽)",
+        help=(
+            "지도 테마 (spring/sakura: 벚꽃 파스텔 / summer: 쨍한 색감 / "
+            "autumn: 단풍+낙엽 / winter: 눈). 정의는 map_themes.js THEMES 참고"
+        ),
+    )
+    parser.add_argument(
+        "--light-preset",
+        choices=["dawn", "day", "dusk", "night"],
+        default=None,
+        help=(
+            "Standard 스타일 시간대 조명 (dawn: 아침 / day: 정오 / dusk: 일몰 / "
+            "night: 밤). 지정하면 테마 기본 조명보다 우선합니다."
+        ),
     )
     parser.add_argument(
         "--bgm",
@@ -1864,6 +1876,7 @@ def render_timeline_frames(
     headed: bool = False,
     disable_software_rasterizer: bool = False,
     theme: str | None = None,
+    light_preset: str | None = None,
 ) -> tuple[int, bytes]:
     chromium_args = build_chromium_args(gpu_mode, disable_software_rasterizer)
     headless = not headed
@@ -1951,6 +1964,7 @@ def render_timeline_frames(
             f"{json.dumps(token)};"
             f"window.TRAVEL_DATA = {json.dumps(browser_travel_data, ensure_ascii=False)};"
             f"window.MAP_THEME = {json.dumps(theme or '')};"
+            f"window.MAP_LIGHT_PRESET = {json.dumps(light_preset or '')};"
             f"window.RENDER_FPS = {config.fps};"
             f"window.RENDER_MODE = {json.dumps(config.mode_name)};"
             "window.DEBUG_BEARING = true;"
@@ -2405,6 +2419,7 @@ def run() -> int:
             headed=args.headed,
             disable_software_rasterizer=args.disable_software_rasterizer,
             theme=args.theme,
+            light_preset=args.light_preset,
         )
         close_seconds = frame_writer.close()
         perf.add_stage("ffmpeg_encode_and_finalize", close_seconds)
