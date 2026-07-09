@@ -17,7 +17,7 @@ from databases.database import SessionLocal
 from databases.models.station import Station
 
 _BASE = "https://apis.data.go.kr/1613000/TrainInfo/GetStrtpntAlocFndTrainInfo"
-_KEY = Config.read("traininfo", "service_key")
+_KEY = Config.read("tourapi", "service_key")
 YMD = sys.argv[1] if len(sys.argv) > 1 else "20260703"
 
 # 노선 다양성 커버: 경부/호남/전라/중앙/영동/동해/경전/중부내륙/경북
