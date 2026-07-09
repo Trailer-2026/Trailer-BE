@@ -4,8 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>3D 여행 영상 빌더</title>
-  <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet" />
-  <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+  <!-- v3.9+ 필요: 테마 파티클(setSnow) 미리보기 -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css" rel="stylesheet" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js"></script>
+  <script src="/map_themes.js"></script>
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -56,10 +58,41 @@
     #result video { width: 100%; border-radius: 10px; margin-top: 12px; background: #000; }
     .warn { color: #fbbf24; font-size: 12px; }
     a.dl { color: #60a5fa; font-size: 13px; }
+    /* 지도 좌상단 테마 선택 (기존 UI를 가리지 않는 작은 플로팅 컨트롤) */
+    #theme-control {
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: rgba(15, 17, 21, 0.82); border: 1px solid #2b313c;
+      border-radius: 10px; padding: 6px 8px; display: flex; gap: 6px; align-items: center;
+      backdrop-filter: blur(4px);
+    }
+    #theme-control label { font-size: 12px; color: #c7cdd6; }
+    #theme-control select {
+      width: auto; padding: 4px 8px; font-size: 12px;
+      background: #0f1115; color: #e6e8eb; border: 1px solid #2b313c; border-radius: 6px;
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <!-- #map 은 mapboxgl 이 관리하므로 컨트롤은 밖에 두고 지도 좌상단에 띄운다 -->
+  <div id="theme-control">
+    <label for="theme">🎨 테마</label>
+    <select id="theme">
+      <option value="default">기본</option>
+      <option value="spring">봄 · 벚꽃 🌸</option>
+      <option value="summer">여름 · 쨍한 하늘 ☀️</option>
+      <option value="autumn">가을 · 단풍 🍁</option>
+      <option value="winter">겨울 · 눈 ❄️</option>
+    </select>
+    <label for="light">🕐 조명</label>
+    <select id="light">
+      <option value="">자동 (테마 기본)</option>
+      <option value="dawn">아침 🌅</option>
+      <option value="day">정오 ☀️</option>
+      <option value="dusk">일몰 🌇</option>
+      <option value="night">밤 🌙</option>
+    </select>
+  </div>
   <div id="panel">
     <h1>3D 여행 영상 빌더</h1>
     <p class="hint">
@@ -103,6 +136,28 @@
     const MAPBOX_TOKEN = "__MAPBOX_TOKEN__";
     const points = []; // { lat, lng, name, marker, photos: File[] }
     let map = null;
+    let mapStyleReady = false;
+
+    // 빌더 지도의 원래 라인 스타일 — default 테마 복원 시 이 값으로 돌아간다.
+    const BUILDER_ROUTE_DEFAULTS = {
+      progress: { color: "#3b82f6", width: 3, opacity: 1 },
+      casing: { color: "#ffffff", width: 0, opacity: 0 },
+    };
+
+    function themeOpts() {
+      return {
+        lightPreset: document.getElementById("light").value,
+        routeCoordinates: points.map((p) => [p.lng, p.lat]),
+        routeLayers: { progress: "route-line", casing: "route-casing" },
+        defaultRouteLine: BUILDER_ROUTE_DEFAULTS,
+      };
+    }
+
+    // 선택한 테마를 미리보기 지도에 즉시 적용 (새로고침 불필요).
+    function applyBuilderTheme() {
+      if (!map || !mapStyleReady || !window.MapThemes) return;
+      MapThemes.applyTheme(map, document.getElementById("theme").value, themeOpts());
+    }
 
     // ---------- Map ----------
     function initMap() {
@@ -122,10 +177,19 @@
       });
       map.on("load", () => {
         map.addSource("route", { type: "geojson", data: emptyLine() });
+        // 테마용 케이싱 (기본 폭 0 = 안 보임, spring 테마가 흰 테두리로 씀)
+        map.addLayer({
+          id: "route-casing", type: "line", source: "route",
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: { "line-color": "#ffffff", "line-width": 0, "line-opacity": 0 },
+        });
         map.addLayer({
           id: "route-line", type: "line", source: "route",
+          layout: { "line-cap": "round", "line-join": "round" },
           paint: { "line-color": "#3b82f6", "line-width": 3 },
         });
+        mapStyleReady = true;
+        applyBuilderTheme();
       });
       map.on("click", (e) => addPoint(e.lngLat.lat, e.lngLat.lng));
     }
@@ -135,11 +199,13 @@
     }
 
     function refreshMap() {
-      if (!map || !map.getSource("route")) return;
+      if (!map || !mapStyleReady || !map.getSource("route")) return;
       map.getSource("route").setData({
         type: "Feature",
         geometry: { type: "LineString", coordinates: points.map((p) => [p.lng, p.lat]) },
       });
+      // 벚꽃 테마 등에서는 경로가 바뀔 때 나무도 다시 심는다.
+      if (window.MapThemes) MapThemes.refreshTrees(map, themeOpts());
     }
 
     // ---------- Points ----------
@@ -284,6 +350,9 @@
       fd.append("bgm", document.getElementById("bgm").value);
       fd.append("quick", document.getElementById("quick").checked ? "true" : "false");
       fd.append("engine", document.getElementById("engine").value);
+      // 미리보기에서 고른 테마/조명이 그대로 렌더에 반영된다.
+      fd.append("theme", document.getElementById("theme").value);
+      fd.append("light_preset", document.getElementById("light").value);
       const owners = [];
       points.forEach((p, i) => p.photos.forEach((f) => {
         fd.append("photos", f);
@@ -312,6 +381,9 @@
         btn.disabled = false;
       }
     };
+
+    document.getElementById("theme").addEventListener("change", applyBuilderTheme);
+    document.getElementById("light").addEventListener("change", applyBuilderTheme);
 
     initMap();
     loadBgm();

@@ -42,6 +42,10 @@ MODAL_SCRIPT = ROOT / "modal_render.py"
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 RENDER_TIMEOUT_SECONDS = 60 * 30  # 30 min hard cap
+# render_video.py --theme 와 map_themes.js THEMES 에 맞춰 유지.
+ALLOWED_THEMES = {"default", "spring", "summer", "autumn", "winter"}
+# Standard 스타일 시간대 조명 (빈 값 = 테마 기본).
+ALLOWED_LIGHT_PRESETS = {"", "dawn", "day", "dusk", "night"}
 
 load_dotenv(ROOT / ".env")
 
@@ -97,6 +101,15 @@ async def index() -> HTMLResponse:
     return HTMLResponse(html)
 
 
+@app.get("/map_themes.js")
+async def serve_map_themes() -> FileResponse:
+    """빌더 미리보기가 렌더러와 같은 테마 모듈을 공유한다."""
+    path = ROOT / "map_themes.js"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="map_themes.js missing")
+    return FileResponse(path, media_type="application/javascript")
+
+
 @app.get("/api/bgm")
 async def api_bgm() -> JSONResponse:
     return JSONResponse(list_bgm())
@@ -122,6 +135,8 @@ async def api_render(
     bgm: str = Form(""),
     quick: str = Form("false"),
     engine: str = Form("local"),
+    theme: str = Form("default"),
+    light_preset: str = Form(""),
     photo_points: str = Form("[]"),
     photos: list[UploadFile] | None = None,
 ) -> JSONResponse:
@@ -194,6 +209,12 @@ async def api_render(
 
     is_quick = quick.lower() == "true"
     engine = engine.lower().strip()
+    theme = (theme or "default").lower().strip()
+    if theme not in ALLOWED_THEMES:
+        raise HTTPException(status_code=400, detail=f"알 수 없는 테마: {theme}")
+    light_preset = (light_preset or "").lower().strip()
+    if light_preset not in ALLOWED_LIGHT_PRESETS:
+        raise HTTPException(status_code=400, detail=f"알 수 없는 조명: {light_preset}")
 
     # Build the render command for the chosen engine.
     if engine == "modal":
@@ -213,6 +234,10 @@ async def api_render(
             "--travel-data",
             rel_travel_data,
         ]
+        if theme != "default":
+            command += ["--theme", theme]
+        if light_preset:
+            command += ["--light-preset", light_preset]
         output_marker = "modal"
     else:
         command = [
@@ -223,6 +248,10 @@ async def api_render(
         ]
         if is_quick:
             command.append("--quick")
+        if theme != "default":
+            command += ["--theme", theme]
+        if light_preset:
+            command += ["--light-preset", light_preset]
         output_marker = "local"
 
     # Render in a worker thread (subprocess blocks for minutes).
@@ -251,6 +280,8 @@ async def api_render(
         {
             "video_url": f"/output/{output_name}",
             "engine": engine,
+            "theme": theme,
+            "light_preset": light_preset or None,
             "bgm": bgm_path.name if bgm_path else None,
             "elapsed_seconds": elapsed_seconds,
             "log_tail": stdout[-2000:],
