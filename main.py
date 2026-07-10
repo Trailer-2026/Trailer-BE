@@ -28,6 +28,7 @@ from routers.train import router as train_router
 from routers.recommend import router as recommend_router
 from routers.travel import router as travel_router
 from routers.place import router as place_router
+from routers.notification import router as notification_router
 from utils.firebase import init_firebase
 
 
@@ -101,6 +102,7 @@ app.include_router(train_router)
 app.include_router(recommend_router)
 app.include_router(travel_router)
 app.include_router(place_router)
+app.include_router(notification_router)
 
 
 @app.get("/")

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from core.exceptions.custom import BadRequestException, NotFoundException
 from databases.daos import schedule_dao, station_dao, travel_dao
+from services import notification_service
 from schemas.travel_schema import (
     HomeTravelCard,
     TravelDayGroup,
@@ -58,6 +59,9 @@ def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
         )
         seq[seg.day_no] += 1
         count += 1
+
+    # 저장 완료 알림 1건(같은 트랜잭션에서 함께 커밋). 알림 화면 리스트("...일정에 추가되었어요")용.
+    notification_service.notify_travel_added(db, user.user_idx, travel.title)
 
     db.commit()
     return TravelResponse(
