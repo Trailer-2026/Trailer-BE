@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
-"""TRAILER 텍스트 마스크 줌 인트로.
+"""TRAILER 텍스트 마스크 줌 인트로/아웃트로.
 
-렌더가 끝난 본편 MP4 앞에 인트로를 붙인다 (in place, `prepend_intro`).
+렌더가 끝난 본편 MP4 앞뒤에 타이틀 클립을 붙인다 (in place):
+- `prepend_intro`: 검정→TRAILER→'I' 획 속으로 줌인→검정→본편 첫 프레임
+- `append_outro`: 인트로의 정반대 — 본편 마지막 프레임→검정→'I' 획에서
+  줌아웃→TRAILER→검정 (배경 영상은 정방향 유지)
 브라우저/GPU 없이 Pillow + FFmpeg 만 사용하므로 본편 렌더 대비 비용이
-사실상 고정(수 초)이다.
+사실상 고정(클립당 수 초)이다.
 
 구성:
 1. 검정 화면에서 "TRAILER" 페이드인 — 글자 안쪽에만 본편 영상
@@ -176,10 +179,13 @@ def build_zoom_frames(
     width: int,
     height: int,
     fps: int,
+    reverse: bool = False,
 ):
     """텍스트 마스크 줌 시퀀스: 페이드인 → hold → 'I' 획 속으로 줌인 → 페이드아웃.
 
-    배경(글자 안에 비치는 영상)은 항상 정방향으로 재생된다.
+    reverse=True 면 마스크 진행만 거꾸로(획 확대 상태에서 시작해 줌아웃 →
+    hold → 페이드아웃, 아웃트로용). 배경(글자 안에 비치는 영상)은 어느 쪽이든
+    항상 정방향으로 재생된다.
     """
     size_start, size_end = measure_font_sizes(font_path, width)
     zoom_frames = round((HOLD_SECONDS + ZOOM_SECONDS) * fps)
@@ -189,8 +195,10 @@ def build_zoom_frames(
     black = Image.new("RGB", (width, height), (0, 0, 0))
 
     for i in range(zoom_frames):
+        # reverse 는 마스크 크기·페이드 타임라인만 뒤집는다 (j 기준).
+        j = zoom_frames - 1 - i if reverse else i
         # 줌 진행도: hold 구간은 0, 이후 easeInOut. 크기는 지수 보간(등속 체감).
-        zoom_t = max(0.0, (i - hold_frames) / max(1, zoom_frames - 1 - hold_frames))
+        zoom_t = max(0.0, (j - hold_frames) / max(1, zoom_frames - 1 - hold_frames))
         eased = ease_in_out(zoom_t)
         font_size = size_start * (size_end / size_start) ** eased
 
@@ -202,9 +210,9 @@ def build_zoom_frames(
         bg = bg_frames[min(i, len(bg_frames) - 1)] if bg_frames else black
         frame = Image.composite(bg, black, mask)
 
-        if i < fade_in_frames:
-            frame = Image.blend(black, frame, (i + 1) / fade_in_frames)
-        remaining = zoom_frames - 1 - i
+        if j < fade_in_frames:
+            frame = Image.blend(black, frame, (j + 1) / fade_in_frames)
+        remaining = zoom_frames - 1 - j
         if remaining < fade_out_frames:
             frame = Image.blend(black, frame, remaining / fade_out_frames)
 
@@ -229,44 +237,46 @@ def build_intro_frames(
         yield Image.blend(black, main_first_frame, (i + 1) / fade_to_main_frames)
 
 
-def intro_total_frames(fps: int) -> int:
+def build_outro_frames(
+    bg_frames: list[Image.Image],
+    main_last_frame: Image.Image,
+    font_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+):
+    """아웃트로: 본편 마지막 프레임 → 검정 → 'I' 획에서 줌아웃 → TRAILER → 검정."""
+    # 첫 프레임이 본편 마지막 프레임과 동일(알파 0)해 하드컷이 보이지 않는다.
+    black = Image.new("RGB", (width, height), (0, 0, 0))
+    bridge_frames = max(1, round(FADE_TO_MAIN_SECONDS * fps))
+    for i in range(bridge_frames):
+        yield Image.blend(main_last_frame, black, i / bridge_frames)
+
+    yield from build_zoom_frames(bg_frames, font_path, width, height, fps, reverse=True)
+
+
+def title_clip_total_frames(fps: int) -> int:
+    """인트로/아웃트로 공통: 줌 시퀀스 + 본편 브리지(0.6초) 프레임 수."""
     return round((HOLD_SECONDS + ZOOM_SECONDS) * fps) + max(
         1, round(FADE_TO_MAIN_SECONDS * fps)
     )
 
 
-def encode_intro_clip(
+def encode_clip(
     ffmpeg: str,
-    video_path: Path,
-    intro_path: Path,
+    clip_path: Path,
+    frames,
+    clip_seconds: float,
     width: int,
     height: int,
     fps: int,
     preset: str,
     crf: int,
-    duration_seconds: float | None,
     audio_spec: tuple[int, int] | None,
     timescale: int | None,
-    font_path: Path,
+    label: str,
 ) -> None:
-    total_frames = intro_total_frames(fps)
-    zoom_seconds = HOLD_SECONDS + ZOOM_SECONDS
-
-    # 글자 안에 비출 구간: 기본 6초 지점부터, 본편이 짧으면 앞으로 당긴다.
-    bg_start = BG_START_SECONDS
-    if duration_seconds is not None:
-        bg_start = min(BG_START_SECONDS, max(0.0, duration_seconds - zoom_seconds - 0.5))
-    bg_frames = read_raw_frames(
-        ffmpeg, video_path, width, height, fps,
-        start_seconds=bg_start, max_frames=round(zoom_seconds * fps),
-    )
-    first_frames = read_raw_frames(
-        ffmpeg, video_path, width, height, fps, start_seconds=0.0, max_frames=1
-    )
-    if not first_frames:
-        raise RuntimeError("본편 첫 프레임 추출 실패")
-
-    intro_seconds = total_frames / fps
+    """프레임 시퀀스를 본편과 동일 코덱 파라미터의 MP4 클립으로 인코딩한다."""
     cmd = [
         ffmpeg, "-y", "-v", "error",
         "-f", "rawvideo", "-pix_fmt", "rgb24",
@@ -276,7 +286,7 @@ def encode_intro_clip(
         sample_rate, channels = audio_spec
         layout = "stereo" if channels >= 2 else "mono"
         cmd += [
-            "-f", "lavfi", "-t", f"{intro_seconds:.3f}",
+            "-f", "lavfi", "-t", f"{clip_seconds:.3f}",
             "-i", f"anullsrc=r={sample_rate}:cl={layout}",
             "-map", "0:v", "-map", "1:a",
             "-c:a", "aac", "-b:a", "128k", "-ar", str(sample_rate), "-ac", str(channels),
@@ -295,17 +305,94 @@ def encode_intro_clip(
         cmd += ["-video_track_timescale", str(timescale)]
     cmd += [
         "-movflags", "+faststart",
-        str(intro_path),
+        str(clip_path),
     ]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     assert proc.stdin is not None
-    for frame in build_intro_frames(
-        bg_frames, first_frames[0], font_path, width, height, fps
-    ):
+    for frame in frames:
         proc.stdin.write(frame.tobytes())
     proc.stdin.close()
     if proc.wait() != 0:
-        raise RuntimeError("인트로 클립 인코딩 실패")
+        raise RuntimeError(f"{label} 클립 인코딩 실패")
+
+
+def encode_intro_clip(
+    ffmpeg: str,
+    video_path: Path,
+    intro_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+    preset: str,
+    crf: int,
+    duration_seconds: float | None,
+    audio_spec: tuple[int, int] | None,
+    timescale: int | None,
+    font_path: Path,
+) -> None:
+    zoom_seconds = HOLD_SECONDS + ZOOM_SECONDS
+
+    # 글자 안에 비출 구간: 기본 6초 지점부터, 본편이 짧으면 앞으로 당긴다.
+    bg_start = BG_START_SECONDS
+    if duration_seconds is not None:
+        bg_start = min(BG_START_SECONDS, max(0.0, duration_seconds - zoom_seconds - 0.5))
+    bg_frames = read_raw_frames(
+        ffmpeg, video_path, width, height, fps,
+        start_seconds=bg_start, max_frames=round(zoom_seconds * fps),
+    )
+    first_frames = read_raw_frames(
+        ffmpeg, video_path, width, height, fps, start_seconds=0.0, max_frames=1
+    )
+    if not first_frames:
+        raise RuntimeError("본편 첫 프레임 추출 실패")
+
+    encode_clip(
+        ffmpeg, intro_path,
+        build_intro_frames(bg_frames, first_frames[0], font_path, width, height, fps),
+        title_clip_total_frames(fps) / fps,
+        width, height, fps, preset, crf, audio_spec, timescale, "인트로",
+    )
+
+
+def encode_outro_clip(
+    ffmpeg: str,
+    video_path: Path,
+    outro_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+    preset: str,
+    crf: int,
+    duration_seconds: float | None,
+    audio_spec: tuple[int, int] | None,
+    timescale: int | None,
+    font_path: Path,
+) -> None:
+    zoom_seconds = HOLD_SECONDS + ZOOM_SECONDS
+
+    # 글자 안에 비출 구간: 본편 끝쪽. duration 을 모르면 처음부터.
+    bg_start = 0.0
+    if duration_seconds is not None:
+        bg_start = max(0.0, duration_seconds - zoom_seconds - 0.6)
+    bg_frames = read_raw_frames(
+        ffmpeg, video_path, width, height, fps,
+        start_seconds=bg_start, max_frames=round(zoom_seconds * fps),
+    )
+    # 본편 마지막 프레임: 끝 0.5초 구간을 읽어 마지막 것을 쓴다.
+    tail_start = max(0.0, (duration_seconds or 0.5) - 0.5)
+    tail_frames = read_raw_frames(
+        ffmpeg, video_path, width, height, fps,
+        start_seconds=tail_start, max_frames=round(0.5 * fps) + 2,
+    )
+    if not tail_frames:
+        raise RuntimeError("본편 마지막 프레임 추출 실패")
+
+    encode_clip(
+        ffmpeg, outro_path,
+        build_outro_frames(bg_frames, tail_frames[-1], font_path, width, height, fps),
+        title_clip_total_frames(fps) / fps,
+        width, height, fps, preset, crf, audio_spec, timescale, "아웃트로",
+    )
 
 
 def concat_replace(
@@ -368,3 +455,34 @@ def prepend_intro(
         concat_replace(ffmpeg, [intro_path, video_path], video_path, temp_dir, "intro")
     finally:
         intro_path.unlink(missing_ok=True)
+
+
+def append_outro(
+    ffmpeg: str,
+    video_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+    preset: str,
+    crf: int,
+    temp_dir: Path,
+) -> None:
+    """본편 MP4 뒤에 TRAILER 아웃트로를 붙인다 (in place, 본편 재인코딩 없음)."""
+    font_path = find_intro_font()
+    if font_path is None:
+        print("[outro] 사용할 폰트가 없어 아웃트로를 건너뜁니다.")
+        return
+
+    duration_seconds, audio_spec, timescale = probe_video(video_path)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    outro_path = temp_dir / "outro_clip.mp4"
+
+    encode_outro_clip(
+        ffmpeg, video_path, outro_path,
+        width, height, fps, preset, crf,
+        duration_seconds, audio_spec, timescale, font_path,
+    )
+    try:
+        concat_replace(ffmpeg, [video_path, outro_path], video_path, temp_dir, "outro")
+    finally:
+        outro_path.unlink(missing_ok=True)
