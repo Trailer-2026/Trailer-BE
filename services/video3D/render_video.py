@@ -22,6 +22,8 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
+from intro_video import prepend_intro
+
 ROOT = Path(__file__).resolve().parent
 ASSETS_DIR = ROOT / "assets"
 FRAMES_DIR = ROOT / "frames"
@@ -285,6 +287,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Standard 스타일 시간대 조명 (dawn: 아침 / day: 정오 / dusk: 일몰 / "
             "night: 밤). 지정하면 테마 기본 조명보다 우선합니다."
+        ),
+    )
+    parser.add_argument(
+        "--intro",
+        action="store_true",
+        help=(
+            "TRAILER 텍스트 마스크 줌 인트로(~3.6초)를 본편 앞에 붙입니다. "
+            "렌더 후처리라 본편 재인코딩 없이 수 초만 추가됩니다."
         ),
     )
     parser.add_argument(
@@ -2392,6 +2402,7 @@ def run() -> int:
     print_timeline_summary(timeline_segments, config)
     print(f"FFmpeg pipe: yes, preset={args.x264_preset}, crf={args.crf}")
     print(f"BGM: {bgm_path.name if bgm_path else 'none'}")
+    print(f"인트로: {'yes' if args.intro else 'no'}")
     print("Mapbox token loaded: yes")
     print(f"출력 예정 파일: {output_path}")
 
@@ -2428,6 +2439,22 @@ def run() -> int:
             mux_bgm_into_video(ffmpeg, output_path, bgm_path)
             perf.add_stage("bgm_mux", time.perf_counter() - bgm_started)
             print(f"BGM 합성 완료: {bgm_path.name}")
+        # 인트로는 BGM mux 뒤에 붙인다 — 본편 오디오 유무에 맞춰 인트로에
+        # 무음 트랙을 넣어야 stream copy concat 이 유지되기 때문.
+        if args.intro and not args.benchmark_frames:
+            intro_started = time.perf_counter()
+            prepend_intro(
+                ffmpeg=ffmpeg,
+                video_path=output_path,
+                width=config.width,
+                height=config.height,
+                fps=config.fps,
+                preset=args.x264_preset,
+                crf=args.crf,
+                temp_dir=TEMP_DIR,
+            )
+            perf.add_stage("intro_prepend", time.perf_counter() - intro_started)
+            print("인트로 합성 완료: TRAILER 텍스트 마스크 줌")
         cleanup_temp()
         probe = ffprobe_metadata(output_path)
         print_metadata(output_path, output_id, frame_count, config, probe)
