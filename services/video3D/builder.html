@@ -126,6 +126,7 @@
         로컬: 이 PC의 GPU로 렌더. Modal: 클라우드 T4 GPU로 렌더(modal 로그인 필요, 콜드스타트로 처음엔 느릴 수 있음).
       </p>
       <label class="check"><input type="checkbox" id="quick" /> 빠른 테스트 모드 (저화질·빠름)</label>
+      <label class="check"><input type="checkbox" id="intro" checked /> 🎬 TRAILER 인트로 (글자 속 영상 + 줌인, ~3.6초)</label>
       <button class="btn primary" id="render" style="margin-top:12px">영상 만들기</button>
       <div id="status"></div>
       <div id="result"></div>
@@ -350,6 +351,7 @@
       fd.append("bgm", document.getElementById("bgm").value);
       fd.append("quick", document.getElementById("quick").checked ? "true" : "false");
       fd.append("engine", document.getElementById("engine").value);
+      fd.append("intro", document.getElementById("intro").checked ? "true" : "false");
       // 미리보기에서 고른 테마/조명이 그대로 렌더에 반영된다.
       fd.append("theme", document.getElementById("theme").value);
       fd.append("light_preset", document.getElementById("light").value);

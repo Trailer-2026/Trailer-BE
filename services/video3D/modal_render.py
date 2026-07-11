@@ -76,7 +76,13 @@ app = modal.App("trailer-video3d-render", image=image)
     # 로컬 services/video3D/.env 를 그대로 컨테이너 환경변수로 주입 (MAPBOX_ACCESS_TOKEN)
     secrets=[modal.Secret.from_dotenv(HERE)],
 )
-def render(mode: str = "quality", travel_data: str = "", theme: str = "", light_preset: str = ""):
+def render(
+    mode: str = "quality",
+    travel_data: str = "",
+    theme: str = "",
+    light_preset: str = "",
+    intro: bool = False,
+):
     import os
     import subprocess
     import sys
@@ -99,10 +105,14 @@ def render(mode: str = "quality", travel_data: str = "", theme: str = "", light_
     # 시간대 조명 (dawn/day/dusk/night). 빈 값이면 테마 기본.
     if light_preset:
         cmd += ["--light-preset", light_preset]
+    # TRAILER 텍스트 마스크 줌 인트로 (렌더 후처리).
+    if intro:
+        cmd.append("--intro")
 
     print(
         f"=== 렌더 시작 (mode={mode}, travel_data={travel_data or 'default'}, "
-        f"theme={theme or 'default'}, light={light_preset or 'auto'}) ==="
+        f"theme={theme or 'default'}, light={light_preset or 'auto'}, "
+        f"intro={'yes' if intro else 'no'}) ==="
     )
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -134,10 +144,16 @@ def render(mode: str = "quality", travel_data: str = "", theme: str = "", light_
 
 
 @app.local_entrypoint()
-def main(mode: str = "quality", travel_data: str = "", theme: str = "", light_preset: str = ""):
+def main(
+    mode: str = "quality",
+    travel_data: str = "",
+    theme: str = "",
+    light_preset: str = "",
+    intro: bool = False,
+):
     from datetime import datetime
 
-    result = render.remote(mode, travel_data, theme, light_preset)
+    result = render.remote(mode, travel_data, theme, light_preset, intro)
 
     out_dir = HERE / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
