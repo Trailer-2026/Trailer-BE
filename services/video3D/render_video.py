@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
-from intro_video import prepend_intro
+from intro_video import append_outro, prepend_intro
 
 ROOT = Path(__file__).resolve().parent
 ASSETS_DIR = ROOT / "assets"
@@ -295,6 +295,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "TRAILER 텍스트 마스크 줌 인트로(~3.6초)를 본편 앞에 붙입니다. "
             "렌더 후처리라 본편 재인코딩 없이 수 초만 추가됩니다."
+        ),
+    )
+    parser.add_argument(
+        "--outro",
+        action="store_true",
+        help=(
+            "TRAILER 아웃트로(~3.6초, 인트로의 역방향 줌)를 본편 뒤에 붙입니다. "
+            "인트로와 마찬가지로 본편 재인코딩 없는 후처리입니다."
         ),
     )
     parser.add_argument(
@@ -2402,7 +2410,7 @@ def run() -> int:
     print_timeline_summary(timeline_segments, config)
     print(f"FFmpeg pipe: yes, preset={args.x264_preset}, crf={args.crf}")
     print(f"BGM: {bgm_path.name if bgm_path else 'none'}")
-    print(f"인트로: {'yes' if args.intro else 'no'}")
+    print(f"인트로: {'yes' if args.intro else 'no'}, 아웃트로: {'yes' if args.outro else 'no'}")
     print("Mapbox token loaded: yes")
     print(f"출력 예정 파일: {output_path}")
 
@@ -2439,7 +2447,7 @@ def run() -> int:
             mux_bgm_into_video(ffmpeg, output_path, bgm_path)
             perf.add_stage("bgm_mux", time.perf_counter() - bgm_started)
             print(f"BGM 합성 완료: {bgm_path.name}")
-        # 인트로는 BGM mux 뒤에 붙인다 — 본편 오디오 유무에 맞춰 인트로에
+        # 인트로/아웃트로는 BGM mux 뒤에 붙인다 — 본편 오디오 유무에 맞춰
         # 무음 트랙을 넣어야 stream copy concat 이 유지되기 때문.
         if args.intro and not args.benchmark_frames:
             intro_started = time.perf_counter()
@@ -2455,6 +2463,20 @@ def run() -> int:
             )
             perf.add_stage("intro_prepend", time.perf_counter() - intro_started)
             print("인트로 합성 완료: TRAILER 텍스트 마스크 줌")
+        if args.outro and not args.benchmark_frames:
+            outro_started = time.perf_counter()
+            append_outro(
+                ffmpeg=ffmpeg,
+                video_path=output_path,
+                width=config.width,
+                height=config.height,
+                fps=config.fps,
+                preset=args.x264_preset,
+                crf=args.crf,
+                temp_dir=TEMP_DIR,
+            )
+            perf.add_stage("outro_append", time.perf_counter() - outro_started)
+            print("아웃트로 합성 완료: TRAILER 역방향 줌")
         cleanup_temp()
         probe = ffprobe_metadata(output_path)
         print_metadata(output_path, output_id, frame_count, config, probe)
