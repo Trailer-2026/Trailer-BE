@@ -103,11 +103,19 @@ async def index() -> HTMLResponse:
 
 @app.get("/map_themes.js")
 async def serve_map_themes() -> FileResponse:
-    """빌더 미리보기가 렌더러와 같은 테마 모듈을 공유한다."""
+    """빌더 미리보기가 렌더러와 같은 테마 모듈을 공유한다.
+
+    테마 모듈이 갱신됐는데 브라우저가 이전 버전을 캐시하면 미리보기에서
+    테마가 안 바뀌는 것처럼 보이므로 매번 재검증하게 한다.
+    """
     path = ROOT / "map_themes.js"
     if not path.is_file():
         raise HTTPException(status_code=404, detail="map_themes.js missing")
-    return FileResponse(path, media_type="application/javascript")
+    return FileResponse(
+        path,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/api/bgm")
