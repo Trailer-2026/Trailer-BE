@@ -82,6 +82,7 @@ def render(
     theme: str = "",
     light_preset: str = "",
     intro: bool = False,
+    outro: bool = False,
 ):
     import os
     import subprocess
@@ -105,14 +106,16 @@ def render(
     # 시간대 조명 (dawn/day/dusk/night). 빈 값이면 테마 기본.
     if light_preset:
         cmd += ["--light-preset", light_preset]
-    # TRAILER 텍스트 마스크 줌 인트로 (렌더 후처리).
+    # TRAILER 텍스트 마스크 줌 인트로/아웃트로 (렌더 후처리).
     if intro:
         cmd.append("--intro")
+    if outro:
+        cmd.append("--outro")
 
     print(
         f"=== 렌더 시작 (mode={mode}, travel_data={travel_data or 'default'}, "
         f"theme={theme or 'default'}, light={light_preset or 'auto'}, "
-        f"intro={'yes' if intro else 'no'}) ==="
+        f"intro={'yes' if intro else 'no'}, outro={'yes' if outro else 'no'}) ==="
     )
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -150,10 +153,11 @@ def main(
     theme: str = "",
     light_preset: str = "",
     intro: bool = False,
+    outro: bool = False,
 ):
     from datetime import datetime
 
-    result = render.remote(mode, travel_data, theme, light_preset, intro)
+    result = render.remote(mode, travel_data, theme, light_preset, intro, outro)
 
     out_dir = HERE / "output"
     out_dir.mkdir(parents=True, exist_ok=True)

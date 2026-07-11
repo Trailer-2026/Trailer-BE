@@ -138,6 +138,7 @@ async def api_render(
     theme: str = Form("default"),
     light_preset: str = Form(""),
     intro: str = Form("false"),
+    outro: str = Form("false"),
     photo_points: str = Form("[]"),
     photos: list[UploadFile] | None = None,
 ) -> JSONResponse:
@@ -217,6 +218,7 @@ async def api_render(
     if light_preset not in ALLOWED_LIGHT_PRESETS:
         raise HTTPException(status_code=400, detail=f"알 수 없는 조명: {light_preset}")
     use_intro = intro.lower().strip() == "true"
+    use_outro = outro.lower().strip() == "true"
 
     # Build the render command for the chosen engine.
     if engine == "modal":
@@ -242,6 +244,8 @@ async def api_render(
             command += ["--light-preset", light_preset]
         if use_intro:
             command.append("--intro")
+        if use_outro:
+            command.append("--outro")
         output_marker = "modal"
     else:
         command = [
@@ -258,6 +262,8 @@ async def api_render(
             command += ["--light-preset", light_preset]
         if use_intro:
             command.append("--intro")
+        if use_outro:
+            command.append("--outro")
         output_marker = "local"
 
     # Render in a worker thread (subprocess blocks for minutes).
@@ -289,6 +295,7 @@ async def api_render(
             "theme": theme,
             "light_preset": light_preset or None,
             "intro": use_intro,
+            "outro": use_outro,
             "bgm": bgm_path.name if bgm_path else None,
             "elapsed_seconds": elapsed_seconds,
             "log_tail": stdout[-2000:],

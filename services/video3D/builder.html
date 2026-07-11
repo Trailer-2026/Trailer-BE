@@ -127,6 +127,7 @@
       </p>
       <label class="check"><input type="checkbox" id="quick" /> 빠른 테스트 모드 (저화질·빠름)</label>
       <label class="check"><input type="checkbox" id="intro" checked /> 🎬 TRAILER 인트로 (글자 속 영상 + 줌인, ~3.6초)</label>
+      <label class="check"><input type="checkbox" id="outro" checked /> 🎬 TRAILER 아웃트로 (마지막 화면 → 글자 줌아웃, ~3.6초)</label>
       <button class="btn primary" id="render" style="margin-top:12px">영상 만들기</button>
       <div id="status"></div>
       <div id="result"></div>
@@ -349,6 +350,7 @@
       fd.append("quick", document.getElementById("quick").checked ? "true" : "false");
       fd.append("engine", document.getElementById("engine").value);
       fd.append("intro", document.getElementById("intro").checked ? "true" : "false");
+      fd.append("outro", document.getElementById("outro").checked ? "true" : "false");
       // 미리보기에서 고른 테마/조명이 그대로 렌더에 반영된다.
       fd.append("theme", document.getElementById("theme").value);
       fd.append("light_preset", document.getElementById("light").value);
