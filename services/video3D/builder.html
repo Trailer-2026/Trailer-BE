@@ -148,7 +148,6 @@
     function themeOpts() {
       return {
         lightPreset: document.getElementById("light").value,
-        routeCoordinates: points.map((p) => [p.lng, p.lat]),
         routeLayers: { progress: "route-line", casing: "route-casing" },
         defaultRouteLine: BUILDER_ROUTE_DEFAULTS,
       };
@@ -205,8 +204,6 @@
         type: "Feature",
         geometry: { type: "LineString", coordinates: points.map((p) => [p.lng, p.lat]) },
       });
-      // 벚꽃 테마 등에서는 경로가 바뀔 때 나무도 다시 심는다.
-      if (window.MapThemes) MapThemes.refreshTrees(map, themeOpts());
     }
 
     // ---------- Points ----------

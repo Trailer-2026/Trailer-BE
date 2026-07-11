@@ -5,18 +5,13 @@
 //   ("sakura" 는 spring 의 별칭. 빈 문자열/미지정은 default.)
 // - "default" 적용 시 파티클 제거·색보정 해제·기본 안개 복원까지 완전히 되돌린다.
 // - opts:
-//     routeCoordinates: [[lng, lat], ...]  벚꽃나무 배치용 경로 좌표
 //     routeLayers: { planned?, progress, casing? }  색을 바꿀 라인 레이어 id
-//     treesBeforeId: 나무 심볼 레이어를 이 레이어 아래에 삽입 (라벨 위 덮임 방지)
 //
 // 새 테마 추가 방법: 아래 THEMES 에 항목 하나 추가하면 끝.
-//   { lightPreset?, fog?, colorGrade?, snow?, routeLine?, trees? }
+//   { lightPreset?, fog?, colorGrade?, snow?, routeLine? }
 //   빠진 필드는 default 값으로 복원되므로 필요한 것만 적으면 된다.
 (function (global) {
   "use strict";
-
-  const TREE_SOURCE_ID = "theme-trees";
-  const TREE_LAYER_ID = "theme-trees-symbol";
 
   // ---------------------------------------------------------------------- //
   // 기본값 (default 테마 = 원래 모습으로 복원할 때 쓰는 값)
@@ -34,30 +29,6 @@
     progress: { color: "#facc15", width: 8, opacity: 0.95 },
     // 케이싱은 항상 깔려 있고 기본 테마에서는 안 보이게 0 폭.
     casing: { color: "#ffffff", width: 0, opacity: 0 }
-  };
-
-  // ---------------------------------------------------------------------- //
-  // 벚꽃나무 배치 설정 (튜닝 포인트)
-  // ---------------------------------------------------------------------- //
-  const SAKURA_TREES = {
-    icon: "sakura-tree",
-    spacingMeters: [150, 250], // 경로를 따라 나무 간격 (min~max 랜덤)
-    offsetMeters: [15, 45], // 경로에서 좌우로 벗어나는 거리 (min~max 랜덤)
-    bothSides: true, // 간격 지점마다 선로 양옆에 한 그루씩 심는다
-    // 총 나무 수 상한. 경로가 길어 이 수를 넘기면 간격을 자동으로 늘려
-    // 경로 전체에 고르게 분산시킨다 (앞부분에만 몰리지 않게).
-    maxCount: 600,
-    seed: 20260409, // 고정 시드 → 렌더할 때마다 같은 자리에 나무가 심긴다
-    // 원경(저줌)에서는 나무가 겹쳐 띠처럼 보여서 숨긴다. 크루즈 줌(~11.7)
-    // 에서는 작은 꽃점, 정차 클로즈업에서 또렷한 나무로 보이게.
-    minZoom: 10,
-    // 줌별 아이콘 크기 (interpolate stop)
-    iconSizeStops: [
-      [10, 0.12],
-      [12, 0.28],
-      [14, 0.6],
-      [16, 1.0]
-    ]
   };
 
   // ---------------------------------------------------------------------- //
@@ -135,8 +106,7 @@
         planned: { color: "#f9a8c9", width: 4, opacity: 0.5 },
         progress: { color: "#ff7eb3", width: 8, opacity: 0.95 },
         casing: { color: "#ffffff", width: 13, opacity: 0.85 }
-      },
-      trees: SAKURA_TREES
+      }
     },
     summer: {
       // 일본 여름 애니메이션 톤: 쨍한 한낮 햇빛 + 깊고 새파란 하늘 + 진한 채도.
@@ -365,244 +335,6 @@
   }
 
   // ---------------------------------------------------------------------- //
-  // 벚꽃나무 (경로 주변 장식 심볼)
-  // ---------------------------------------------------------------------- //
-
-  // 시드 고정 PRNG — 매 렌더마다 같은 위치에 나무가 심겨 결과가 재현된다.
-  function mulberry32(seed) {
-    let state = seed >>> 0;
-    return function () {
-      state = (state + 0x6d2b79f5) >>> 0;
-      let t = state;
-      t = Math.imul(t ^ (t >>> 15), t | 1);
-      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-
-  function haversineMeters(a, b) {
-    const R = 6371000;
-    const toRad = Math.PI / 180;
-    const dLat = (b[1] - a[1]) * toRad;
-    const dLng = (b[0] - a[0]) * toRad;
-    const lat1 = a[1] * toRad;
-    const lat2 = b[1] * toRad;
-    const h =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-    return 2 * R * Math.asin(Math.sqrt(h));
-  }
-
-  function segmentBearing(a, b) {
-    const toRad = Math.PI / 180;
-    const lat1 = a[1] * toRad;
-    const lat2 = b[1] * toRad;
-    const dLng = (b[0] - a[0]) * toRad;
-    const y = Math.sin(dLng) * Math.cos(lat2);
-    const x =
-      Math.cos(lat1) * Math.sin(lat2) -
-      Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
-    return (Math.atan2(y, x) * 180) / Math.PI;
-  }
-
-  // 좌표에서 bearing(도) 방향으로 meters 만큼 이동한 좌표.
-  function offsetCoord(coord, bearingDeg, meters) {
-    const rad = (bearingDeg * Math.PI) / 180;
-    const dNorth = Math.cos(rad) * meters;
-    const dEast = Math.sin(rad) * meters;
-    const dLat = dNorth / 111320;
-    const dLng = dEast / (111320 * Math.cos((coord[1] * Math.PI) / 180));
-    return [coord[0] + dLng, coord[1] + dLat];
-  }
-
-  // 경로를 따라 spacing 간격마다, 좌우 offset 만큼 벗어난 지점에 나무 포인트 생성.
-  // 예상 나무 수가 maxCount 를 넘으면 간격을 비례로 늘려 경로 전체에 분산한다.
-  function generateTreeFeatures(coords, config) {
-    const random = mulberry32(config.seed || 1);
-    let [minSpacing, maxSpacing] = config.spacingMeters;
-    const [minOffset, maxOffset] = config.offsetMeters;
-    let totalLength = 0;
-    for (let i = 1; i < coords.length; i += 1) {
-      totalLength += haversineMeters(coords[i - 1], coords[i]);
-    }
-    const averageSpacing = (minSpacing + maxSpacing) / 2;
-    const treesPerSpot = config.bothSides ? 2 : 1;
-    const estimatedCount = (totalLength / averageSpacing) * treesPerSpot;
-    if (estimatedCount > config.maxCount) {
-      const scale = estimatedCount / config.maxCount;
-      minSpacing *= scale;
-      maxSpacing *= scale;
-    }
-    const features = [];
-    let nextAt = minSpacing + random() * (maxSpacing - minSpacing);
-    let traveled = 0;
-    for (let i = 1; i < coords.length && features.length < config.maxCount; i += 1) {
-      const start = coords[i - 1];
-      const end = coords[i];
-      const segLength = haversineMeters(start, end);
-      if (segLength <= 0) {
-        continue;
-      }
-      const bearing = segmentBearing(start, end);
-      while (traveled + segLength >= nextAt && features.length < config.maxCount) {
-        const t = (nextAt - traveled) / segLength;
-        const base = [
-          start[0] + (end[0] - start[0]) * t,
-          start[1] + (end[1] - start[1]) * t
-        ];
-        // bothSides 면 선로 양옆에 한 그루씩(벚꽃길), 아니면 한쪽 랜덤.
-        const sides = config.bothSides ? [-90, 90] : [random() < 0.5 ? -90 : 90];
-        for (const side of sides) {
-          if (features.length >= config.maxCount) {
-            break;
-          }
-          const offset = minOffset + random() * (maxOffset - minOffset);
-          const position = offsetCoord(base, bearing + side, offset);
-          features.push({
-            type: "Feature",
-            geometry: { type: "Point", coordinates: position },
-            properties: {}
-          });
-        }
-        nextAt += minSpacing + random() * (maxSpacing - minSpacing);
-      }
-      traveled += segLength;
-    }
-    return features;
-  }
-
-  // 귀여운 플랫 스타일 벚꽃나무 아이콘 (분홍 꽃송이 뭉치 + 갈색 줄기) —
-  // canvas 로 그려 map.addImage 에 등록한다.
-  function createTreeIconImage() {
-    const pixelRatio = 2;
-    const width = 56;
-    const height = 64;
-    const canvas = document.createElement("canvas");
-    canvas.width = width * pixelRatio;
-    canvas.height = height * pixelRatio;
-    const ctx = canvas.getContext("2d");
-    ctx.scale(pixelRatio, pixelRatio);
-
-    // 줄기 (살짝 벌어진 갈색 기둥)
-    ctx.fillStyle = "#8d6248";
-    ctx.beginPath();
-    ctx.moveTo(25, 36);
-    ctx.quadraticCurveTo(26, 50, 23, 62);
-    ctx.lineTo(33, 62);
-    ctx.quadraticCurveTo(30, 50, 31, 36);
-    ctx.closePath();
-    ctx.fill();
-    // 가지 한 줄
-    ctx.strokeStyle = "#8d6248";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(28, 44);
-    ctx.quadraticCurveTo(36, 40, 41, 33);
-    ctx.stroke();
-
-    // 꽃 뭉치 (겹친 원 5개, 진한 → 연한 분홍)
-    const blossoms = [
-      { x: 28, y: 20, r: 15, color: "#f9b8d0" },
-      { x: 15, y: 26, r: 11, color: "#f7a8c6" },
-      { x: 41, y: 26, r: 11, color: "#f7a8c6" },
-      { x: 20, y: 13, r: 10, color: "#ffc9dd" },
-      { x: 37, y: 14, r: 10, color: "#ffc9dd" }
-    ];
-    for (const blossom of blossoms) {
-      ctx.fillStyle = blossom.color;
-      ctx.beginPath();
-      ctx.arc(blossom.x, blossom.y, blossom.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // 하이라이트 점 (밝은 꽃송이)
-    ctx.fillStyle = "#ffe3ef";
-    for (const spot of [
-      { x: 23, y: 16, r: 4 },
-      { x: 34, y: 22, r: 3.5 },
-      { x: 17, y: 24, r: 3 }
-    ]) {
-      ctx.beginPath();
-      ctx.arc(spot.x, spot.y, spot.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    return {
-      image: ctx.getImageData(0, 0, width * pixelRatio, height * pixelRatio),
-      pixelRatio
-    };
-  }
-
-  function ensureTreeIcon(map, iconName) {
-    if (map.hasImage && map.hasImage(iconName)) {
-      return;
-    }
-    const { image, pixelRatio } = createTreeIconImage();
-    map.addImage(iconName, image, { pixelRatio });
-  }
-
-  function removeTrees(map) {
-    try {
-      if (map.getLayer(TREE_LAYER_ID)) {
-        map.removeLayer(TREE_LAYER_ID);
-      }
-      if (map.getSource(TREE_SOURCE_ID)) {
-        map.removeSource(TREE_SOURCE_ID);
-      }
-    } catch (error) {
-      console.warn(`Theme trees cleanup failed: ${error.message}`);
-    }
-  }
-
-  function applyTrees(map, config, opts) {
-    removeTrees(map);
-    if (!config) {
-      return;
-    }
-    const coords = opts.routeCoordinates;
-    if (!Array.isArray(coords) || coords.length < 2) {
-      return;
-    }
-    try {
-      ensureTreeIcon(map, config.icon);
-      const features = generateTreeFeatures(coords, config);
-      if (!features.length) {
-        return;
-      }
-      map.addSource(TREE_SOURCE_ID, {
-        type: "geojson",
-        data: { type: "FeatureCollection", features }
-      });
-      const sizeExpression = ["interpolate", ["linear"], ["zoom"]];
-      for (const [zoom, size] of config.iconSizeStops) {
-        sizeExpression.push(zoom, size);
-      }
-      const beforeId =
-        opts.treesBeforeId && map.getLayer(opts.treesBeforeId)
-          ? opts.treesBeforeId
-          : undefined;
-      map.addLayer(
-        {
-          id: TREE_LAYER_ID,
-          type: "symbol",
-          source: TREE_SOURCE_ID,
-          minzoom: config.minZoom || 0,
-          layout: {
-            "icon-image": config.icon,
-            "icon-size": sizeExpression,
-            "icon-anchor": "bottom",
-            "icon-allow-overlap": true,
-            "icon-ignore-placement": true
-          }
-        },
-        beforeId
-      );
-      console.info(`[theme] trees planted: ${features.length}`);
-    } catch (error) {
-      console.warn(`Theme trees failed: ${error.message}`);
-    }
-  }
-
-  // ---------------------------------------------------------------------- //
   // 진입점
   // ---------------------------------------------------------------------- //
   let activeThemeName = "default";
@@ -626,16 +358,9 @@
     applyColorGrade(map, theme.colorGrade || null);
     applySnow(map, theme.snow || null);
     applyRouteLineStyle(map, theme.routeLine, opts.routeLayers, opts.defaultRouteLine);
-    applyTrees(map, theme.trees || null, opts);
     activeThemeName = name;
     console.info(`[theme] applied: ${name}`);
     return name;
-  }
-
-  // 경로가 바뀌었을 때(빌더에서 지점 추가/삭제) 활성 테마의 나무만 다시 심는다.
-  function refreshTrees(map, opts = {}) {
-    const theme = THEMES[activeThemeName];
-    applyTrees(map, theme.trees || null, opts);
   }
 
   global.MapThemes = {
@@ -643,7 +368,6 @@
     DEFAULT_FOG,
     DEFAULT_ROUTE_LINE,
     applyTheme,
-    refreshTrees,
     normalizeThemeName,
     getActiveTheme: () => activeThemeName
   };

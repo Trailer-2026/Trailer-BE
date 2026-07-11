@@ -733,11 +733,11 @@ function addTerrain() {
 
 // 테마 정의·적용 로직은 map_themes.js (window.MapThemes) 로 분리 —
 // 빌더 미리보기(builder.html)와 렌더러가 같은 모듈을 공유한다.
-// 테마 목록/파티클/색보정/경로 라인/벚꽃나무 설정도 모두 그쪽에 있다.
+// 테마 목록/파티클/색보정/경로 라인 설정도 모두 그쪽에 있다.
 
-// 테마 적용 (조명·안개·색보정·파티클·경로 라인 색·벚꽃나무).
+// 테마 적용 (조명·안개·색보정·파티클·경로 라인 색).
 // 경로 레이어("planned/progress-route-line")가 만들어진 뒤 호출해야
-// 라인 색과 나무 배치까지 함께 적용된다.
+// 라인 색까지 함께 적용된다.
 function applyMapTheme() {
   if (!window.MapThemes) {
     console.warn("map_themes.js not loaded; theme skipped.");
@@ -745,14 +745,11 @@ function applyMapTheme() {
   }
   window.MapThemes.applyTheme(map, MAP_THEME, {
     lightPreset: MAP_LIGHT_PRESET,
-    routeCoordinates,
     routeLayers: {
       planned: "planned-route-line",
       progress: "progress-route-line",
       casing: "progress-route-casing"
-    },
-    // 나무 심볼이 정차 지점 마커/라벨을 덮지 않게 그 아래에 삽입.
-    treesBeforeId: "route-marker-halo"
+    }
   });
 }
 
