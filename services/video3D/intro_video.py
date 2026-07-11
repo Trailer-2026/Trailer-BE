@@ -170,20 +170,22 @@ def read_raw_frames(
     return frames
 
 
-def build_intro_frames(
+def build_zoom_frames(
     bg_frames: list[Image.Image],
-    main_first_frame: Image.Image,
     font_path: Path,
     width: int,
     height: int,
     fps: int,
 ):
+    """텍스트 마스크 줌 시퀀스: 페이드인 → hold → 'I' 획 속으로 줌인 → 페이드아웃.
+
+    배경(글자 안에 비치는 영상)은 항상 정방향으로 재생된다.
+    """
     size_start, size_end = measure_font_sizes(font_path, width)
     zoom_frames = round((HOLD_SECONDS + ZOOM_SECONDS) * fps)
     hold_frames = round(HOLD_SECONDS * fps)
     fade_in_frames = max(1, round(FADE_IN_SECONDS * fps))
     fade_out_frames = max(1, round(FADE_OUT_SECONDS * fps))
-    fade_to_main_frames = max(1, round(FADE_TO_MAIN_SECONDS * fps))
     black = Image.new("RGB", (width, height), (0, 0, 0))
 
     for i in range(zoom_frames):
@@ -208,8 +210,21 @@ def build_intro_frames(
 
         yield frame
 
+
+def build_intro_frames(
+    bg_frames: list[Image.Image],
+    main_first_frame: Image.Image,
+    font_path: Path,
+    width: int,
+    height: int,
+    fps: int,
+):
+    yield from build_zoom_frames(bg_frames, font_path, width, height, fps)
+
     # 검정 → 본편 첫 프레임. 마지막 프레임이 본편 첫 프레임과 동일해
     # stream copy 하드컷이 보이지 않는다.
+    black = Image.new("RGB", (width, height), (0, 0, 0))
+    fade_to_main_frames = max(1, round(FADE_TO_MAIN_SECONDS * fps))
     for i in range(fade_to_main_frames):
         yield Image.blend(black, main_first_frame, (i + 1) / fade_to_main_frames)
 
@@ -293,6 +308,37 @@ def encode_intro_clip(
         raise RuntimeError("인트로 클립 인코딩 실패")
 
 
+def concat_replace(
+    ffmpeg: str,
+    part_paths: list[Path],
+    video_path: Path,
+    temp_dir: Path,
+    label: str,
+) -> None:
+    """part_paths 순서대로 stream copy concat 해 video_path 를 교체한다."""
+    list_path = temp_dir / f"{label}_concat.txt"
+    joined_path = temp_dir / f"{label}_joined.mp4"
+    list_path.write_text(
+        "".join(f"file '{path.as_posix()}'\n" for path in part_paths),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            ffmpeg, "-y", "-v", "error",
+            "-f", "concat", "-safe", "0", "-i", str(list_path),
+            "-c", "copy", "-movflags", "+faststart",
+            str(joined_path),
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    list_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        joined_path.unlink(missing_ok=True)
+        stderr = result.stderr[-3000:] if result.stderr else ""
+        raise RuntimeError(f"{label} concat 실패:\n{stderr}")
+    joined_path.replace(video_path)
+
+
 def prepend_intro(
     ffmpeg: str,
     video_path: Path,
@@ -312,32 +358,13 @@ def prepend_intro(
     duration_seconds, audio_spec, timescale = probe_video(video_path)
     temp_dir.mkdir(parents=True, exist_ok=True)
     intro_path = temp_dir / "intro_clip.mp4"
-    list_path = temp_dir / "intro_concat.txt"
-    joined_path = temp_dir / "intro_joined.mp4"
 
     encode_intro_clip(
         ffmpeg, video_path, intro_path,
         width, height, fps, preset, crf,
         duration_seconds, audio_spec, timescale, font_path,
     )
-
-    list_path.write_text(
-        f"file '{intro_path.as_posix()}'\nfile '{video_path.as_posix()}'\n",
-        encoding="utf-8",
-    )
-    result = subprocess.run(
-        [
-            ffmpeg, "-y", "-v", "error",
-            "-f", "concat", "-safe", "0", "-i", str(list_path),
-            "-c", "copy", "-movflags", "+faststart",
-            str(joined_path),
-        ],
-        capture_output=True, text=True, check=False,
-    )
-    intro_path.unlink(missing_ok=True)
-    list_path.unlink(missing_ok=True)
-    if result.returncode != 0:
-        joined_path.unlink(missing_ok=True)
-        stderr = result.stderr[-3000:] if result.stderr else ""
-        raise RuntimeError(f"인트로 concat 실패:\n{stderr}")
-    joined_path.replace(video_path)
+    try:
+        concat_replace(ffmpeg, [intro_path, video_path], video_path, temp_dir, "intro")
+    finally:
+        intro_path.unlink(missing_ok=True)
