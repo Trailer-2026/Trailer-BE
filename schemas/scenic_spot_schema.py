@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, Field
 
@@ -10,5 +11,10 @@ class ScenicSpotResponse(BaseModel):
 
 
 class ScenicSpotNearbyResponse(BaseModel):
+    based_at: datetime = Field(
+        ...,
+        description="조회 기준 시각(KST, ISO-8601). 예: 2026-07-11T09:00:00+09:00. "
+                    "'오전 9:00 기준' 같은 표시 문구는 프론트가 이 값으로 포맷팅",
+    )
     feature_count: int = Field(..., description="조회된 관광지 수")
     items: List[ScenicSpotResponse] = Field(..., description="구간에서 보이는 관광지 목록")
