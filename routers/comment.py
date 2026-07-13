@@ -45,7 +45,7 @@ def list_comments(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = comment_service.list_comments(db, reels_idx)
+    result = comment_service.list_comments(db, current_user, reels_idx)
     return CommonResponse.success_response("댓글 목록 조회 성공", data=result)
 
 

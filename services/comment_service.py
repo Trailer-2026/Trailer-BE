@@ -6,7 +6,7 @@
 from sqlalchemy.orm import Session
 
 from core.exceptions.custom import BadRequestException, NotFoundException
-from databases.daos import comment_dao, reels_dao
+from databases.daos import comment_dao, like_dao, reels_dao
 from schemas.comment_schema import CommentResponse
 
 
@@ -33,16 +33,27 @@ def create_comment(
     return _to_response(comment, user.nickname)
 
 
-def list_comments(db: Session, reels_idx: int) -> list[CommentResponse]:
-    """릴스의 댓글 목록 — 최상위 댓글 작성순, 각 댓글의 replies에 답글 작성순."""
+def list_comments(db: Session, user, reels_idx: int) -> list[CommentResponse]:
+    """릴스의 댓글 목록 — 최상위 댓글 작성순, 각 댓글의 replies에 답글 작성순.
+
+    좋아요 수·내 좋아요 여부는 댓글 PK 전체를 IN 절로 한 번씩만 조회해 붙인다(N+1 회피).
+    """
     if reels_dao.get_by_idx(db, reels_idx) is None:
         raise NotFoundException("릴스를 찾을 수 없습니다.")
 
     rows = comment_dao.list_by_reels(db, reels_idx)
+    idxs = [c.comment_idx for c, _ in rows]
+    counts = like_dao.counts_by_comments(db, idxs)
+    liked = like_dao.liked_comment_idxs(db, user.user_idx, idxs)
+
     tops: list[CommentResponse] = []
     by_idx: dict[int, CommentResponse] = {}
     for comment, nickname in rows:  # comment_idx 오름차순 = 부모가 답글보다 항상 먼저 나온다
-        item = _to_response(comment, nickname)
+        item = _to_response(
+            comment, nickname,
+            like_count=counts.get(comment.comment_idx, 0),
+            liked=comment.comment_idx in liked,
+        )
         by_idx[comment.comment_idx] = item
         parent = by_idx.get(comment.parent_idx) if comment.parent_idx else None
         if parent is None:
@@ -57,7 +68,11 @@ def update_comment(db: Session, user, comment_idx: int, content: str) -> Comment
     comment = _own_comment(db, user, comment_idx)
     comment_dao.update_content(db, comment, content)
     db.commit()
-    return _to_response(comment, user.nickname)
+    return _to_response(
+        comment, user.nickname,
+        like_count=like_dao.count_by_comment(db, comment_idx),
+        liked=like_dao.get(db, user.user_idx, comment_idx=comment_idx) is not None,
+    )
 
 
 def delete_comment(db: Session, user, comment_idx: int) -> None:
@@ -75,7 +90,9 @@ def _own_comment(db: Session, user, comment_idx: int):
     return comment
 
 
-def _to_response(comment, nickname: str | None) -> CommentResponse:
+def _to_response(
+    comment, nickname: str | None, like_count: int = 0, liked: bool = False
+) -> CommentResponse:
     return CommentResponse(
         comment_idx=comment.comment_idx,
         reels_idx=comment.reels_idx,
@@ -84,4 +101,6 @@ def _to_response(comment, nickname: str | None) -> CommentResponse:
         content=comment.content,
         parent_idx=comment.parent_idx,
         created_at=comment.created_at,
+        like_count=like_count,
+        liked=liked,
     )

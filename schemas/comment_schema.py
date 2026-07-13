@@ -28,4 +28,6 @@ class CommentResponse(BaseModel):
     content: str = Field(..., description="댓글 내용")
     parent_idx: int | None = Field(None, description="부모 댓글 PK (답글이면 세팅)")
     created_at: datetime | None = Field(None, description="작성일")
+    like_count: int = Field(0, description="이 댓글의 좋아요 수")
+    liked: bool = Field(False, description="로그인한 사용자가 이 댓글에 좋아요를 눌렀는지")
     replies: list["CommentResponse"] = Field(default_factory=list, description="답글 목록")
