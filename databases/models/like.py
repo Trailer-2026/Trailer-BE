@@ -23,7 +23,7 @@ class Like(BaseModel):
         {"comment": "좋아요 (릴스/댓글)"},
     )
 
-    like_idx = Column(Integer, primary_key=True, autoincrement=True, comment="PK")
+    likes_idx = Column(Integer, primary_key=True, autoincrement=True, comment="PK")
     user_idx = Column(
         Integer, ForeignKey("user.user_idx"), nullable=False, index=True, comment="FK 사용자"
     )
