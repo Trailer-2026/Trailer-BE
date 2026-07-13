@@ -27,6 +27,7 @@ from routers.station import router as station_router
 from routers.recommend import router as recommend_router
 from routers.travel import router as travel_router
 from routers.place import router as place_router
+from routers.comment import router as comment_router
 from utils.firebase import init_firebase
 
 
@@ -99,6 +100,7 @@ app.include_router(station_router)
 app.include_router(recommend_router)
 app.include_router(travel_router)
 app.include_router(place_router)
+app.include_router(comment_router)
 
 
 @app.get("/")
