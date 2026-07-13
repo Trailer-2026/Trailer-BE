@@ -6,7 +6,7 @@
 from sqlalchemy.orm import Session
 
 from core.exceptions.custom import BadRequestException, NotFoundException
-from databases.daos import comment_dao, like_dao, reels_dao
+from databases.daos import ban_dao, comment_dao, like_dao, reels_dao
 from schemas.comment_schema import CommentResponse
 
 
@@ -37,11 +37,14 @@ def list_comments(db: Session, user, reels_idx: int) -> list[CommentResponse]:
     """릴스의 댓글 목록 — 최상위 댓글 작성순, 각 댓글의 replies에 답글 작성순.
 
     좋아요 수·내 좋아요 여부는 댓글 PK 전체를 IN 절로 한 번씩만 조회해 붙인다(N+1 회피).
+    내가 차단한 사용자의 댓글은 쿼리 단계에서 빠진다.
     """
     if reels_dao.get_by_idx(db, reels_idx) is None:
         raise NotFoundException("릴스를 찾을 수 없습니다.")
 
-    rows = comment_dao.list_by_reels(db, reels_idx)
+    rows = comment_dao.list_by_reels(
+        db, reels_idx, exclude_user_idxs=ban_dao.blocked_user_idxs(db, user.user_idx)
+    )
     idxs = [c.comment_idx for c, _ in rows]
     counts = like_dao.counts_by_comments(db, idxs)
     liked = like_dao.liked_comment_idxs(db, user.user_idx, idxs)
@@ -55,11 +58,13 @@ def list_comments(db: Session, user, reels_idx: int) -> list[CommentResponse]:
             liked=comment.comment_idx in liked,
         )
         by_idx[comment.comment_idx] = item
-        parent = by_idx.get(comment.parent_idx) if comment.parent_idx else None
-        if parent is None:
+        if comment.parent_idx is None:
             tops.append(item)
-        else:
+            continue
+        parent = by_idx.get(comment.parent_idx)
+        if parent is not None:
             parent.replies.append(item)
+        # 부모가 차단으로 걸러졌으면 답글도 같이 숨긴다 — 최상위로 튀어나오면 맥락 없는 댓글이 된다.
     return tops
 
 

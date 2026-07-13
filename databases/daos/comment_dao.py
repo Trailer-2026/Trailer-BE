@@ -25,19 +25,23 @@ def get_by_idx(db: Session, comment_idx: int) -> Comment | None:
     ).first()
 
 
-def list_by_reels(db: Session, reels_idx: int) -> list[tuple[Comment, str | None]]:
+def list_by_reels(
+    db: Session, reels_idx: int, exclude_user_idxs: list[int] | None = None
+) -> list[tuple[Comment, str | None]]:
     """릴스의 댓글 전체를 작성순으로 (댓글, 작성자 닉네임) 튜플로 조회 (soft-delete 제외).
 
     답글 포함 전량을 닉네임까지 한 방 조인으로 읽고(N+1 회피) 트리 구성은 서비스가 한다 —
     릴스당 댓글은 많아야 수백 건이라 페이징 없이 단일 쿼리가 가장 싸다.
+    exclude_user_idxs(차단한 사용자)의 댓글은 쿼리에서 제외한다.
     """
-    return (
+    q = (
         db.query(Comment, User.nickname)
         .join(User, User.user_idx == Comment.user_idx)
         .filter(Comment.reels_idx == reels_idx, Comment.deleted_at.is_(None))
-        .order_by(Comment.comment_idx.asc())
-        .all()
     )
+    if exclude_user_idxs:
+        q = q.filter(Comment.user_idx.notin_(exclude_user_idxs))
+    return q.order_by(Comment.comment_idx.asc()).all()
 
 
 def update_content(db: Session, comment: Comment, content: str) -> Comment:
