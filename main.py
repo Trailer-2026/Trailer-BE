@@ -106,7 +106,6 @@ app.include_router(comment_router)
 app.include_router(like_router)
 app.include_router(ban_router)
 
-
 @app.get("/")
 async def root():
     return {"message": "Hello, World!"}

@@ -15,7 +15,8 @@ router = APIRouter(prefix="/api/scenic-spots", tags=["관광지 수집"])
     description=(
         "출발역→도착역 구간에서 현재 위치 기준 1500m 이내 + 진행 방향(도착역 방위) ±100°(이미 지나간 뒤편 제외) "
         "관광지를 거리순 top3로 반환합니다. 창밖 좌/우(side: left|right)는 진행 방향 기준이며, "
-        "to_station은 다음 정차역 권장. 보이는 관광지가 없으면 items는 빈 배열입니다."
+        "to_station은 다음 정차역 권장. 보이는 관광지가 없으면 items는 빈 배열입니다. "
+        "based_at은 서버가 조회한 시각(KST)이며, '오전 9:00 기준' 같은 표시 문구는 프론트가 이 값으로 포맷팅합니다."
     ),
     response_model=CommonResponse[ScenicSpotNearbyResponse]
 )
