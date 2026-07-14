@@ -1,6 +1,6 @@
 from datetime import date, time
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 DateType = date  # 'date' 필드명과 타입명이 겹칠 때 쓰는 별칭
 
@@ -41,20 +41,36 @@ class HomeTravelCard(BaseModel):
 class TravelScheduleItem(BaseModel):
     """일정표 타임라인의 한 항목 (기차/방문지/숙소 공통, schedule 1행)."""
 
-    schedule_idx: int = Field(..., description="일정 항목 PK")
-    sequence: int = Field(..., description="그날의 n번째 일정 (0부터, 타임라인 정렬 순서)")
-    kind: str = Field(..., description="항목 종류 (train | visit | lodging)")
-    title: str = Field(..., description="장소명/일정명 (기차는 'KTX 101 서울→부산' 형태 표시용 폴백)")
-    train_no: str | None = Field(None, description="열차번호 (kind=train만, 아니면 null)")
-    train_grade: str | None = Field(None, description="열차 등급 (kind=train만, 예: KTX)")
-    dep_station: str | None = Field(None, description="출발역명 (kind=train만, 접미사 '역' 없음 — 프론트가 '역 승차' 조합)")
-    arr_station: str | None = Field(None, description="도착역명 (kind=train만, 접미사 '역' 없음 — 프론트가 '역 하차' 조합)")
-    start_time: time = Field(..., description="시작 시각 (HH:MM:SS)")
-    end_time: time = Field(..., description="종료 시각 (HH:MM:SS)")
-    latitude: float = Field(..., description="위도 (방문지·숙소는 자기 좌표, 기차는 출발역 좌표)")
-    longitude: float = Field(..., description="경도")
-    image_url: str | None = Field(None, description="대표 이미지 URL. 기차 등 없으면 null")
-    memo: str | None = Field(None, description="메모. 없으면 null")
+    model_config = ConfigDict(from_attributes=True)  # schedule ORM 객체에서 바로 매핑
+
+    schedule_idx: int = Field(..., description="일정 항목 PK", examples=[1])
+    sequence: int = Field(..., description="그날의 n번째 일정 (0부터, 타임라인 정렬 순서)", examples=[0])
+    kind: str = Field(..., description="항목 종류 (train | visit | lodging)", examples=["train"])
+    title: str = Field(
+        ..., description="장소명/일정명 (기차는 'KTX 101 서울→부산' 형태 표시용 폴백)",
+        examples=["KTX 101 서울→부산"],
+    )
+    train_no: str | None = Field(None, description="열차번호 (kind=train만, 아니면 null)", examples=["101"])
+    train_grade: str | None = Field(None, description="열차 등급 (kind=train만, 예: KTX)", examples=["KTX"])
+    dep_station: str | None = Field(
+        None, description="출발역명 (kind=train만, 접미사 '역' 없음 — 프론트가 '역 승차' 조합)",
+        examples=["서울"],
+    )
+    arr_station: str | None = Field(
+        None, description="도착역명 (kind=train만, 접미사 '역' 없음 — 프론트가 '역 하차' 조합)",
+        examples=["부산"],
+    )
+    start_time: time = Field(..., description="시작 시각 (HH:MM:SS)", examples=["09:33:00"])
+    end_time: time = Field(..., description="종료 시각 (HH:MM:SS)", examples=["12:53:00"])
+    latitude: float = Field(
+        ..., description="위도 (방문지·숙소는 자기 좌표, 기차는 출발역 좌표)", examples=[37.557863],
+    )
+    longitude: float = Field(..., description="경도", examples=[126.969468])
+    image_url: str | None = Field(
+        None, description="대표 이미지 URL. 기차 등 없으면 null",
+        examples=["http://tong.visitkorea.or.kr/cms/resource/87/2754987_image2_1.jpg"],
+    )
+    memo: str | None = Field(None, description="메모. 없으면 null", examples=[None])
 
 
 class TravelDayGroup(BaseModel):

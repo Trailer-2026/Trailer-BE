@@ -5,7 +5,7 @@
 station 테이블에서 채운다. 추천 관광지/숙소 대표 이미지는 schedule.image_url에 저장한다.
 숙소는 시각이 없어 'ⓐ 그날 마지막 방문 종료~다음날 첫 일정 시작'으로 잡는다.
 """
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -19,11 +19,11 @@ from schemas.travel_schema import (
     TravelScheduleItem,
 )
 from utils import plan_cache
+from utils.timezone import now_kst
 
 _LODGING_CHECKIN = time(21, 0)   # 마지막 방문 종료를 못 구할 때 체크인 기본값
 _LODGING_CHECKOUT = time(9, 0)   # 다음날 첫 일정 시작을 못 구할 때 체크아웃 기본값
 _DEFAULT_TIME = time(9, 0)       # 방문/기차 시각이 비어 있을 때 안전 기본값
-_KST = timezone(timedelta(hours=9))  # 여행 진행 여부는 KST 오늘 기준으로 판단
 
 
 def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
@@ -74,7 +74,7 @@ def current_travel(db: Session, user) -> HomeTravelCard | None:
     KST 오늘과 여행 기간으로 계산한다(스케줄러 불필요).
     """
     travels = travel_dao.list_by_user(db, user.user_idx)
-    today = datetime.now(_KST).date()
+    today = now_kst().date()
     ongoing = [t for t in travels if t.start_date <= today <= t.end_date]
     upcoming = sorted((t for t in travels if t.start_date > today), key=lambda t: t.start_date)
     chosen = ongoing[0] if ongoing else (upcoming[0] if upcoming else None)
@@ -105,18 +105,9 @@ def travel_detail(db: Session, user, travel_idx: int) -> TravelDetailResponse:
                 items=[],
             )
             groups[s.day_no] = group
-        group.items.append(
-            TravelScheduleItem(
-                schedule_idx=s.schedule_idx, sequence=s.sequence, kind=s.kind, title=s.title,
-                train_no=s.train_no, train_grade=s.train_grade,
-                dep_station=s.dep_station, arr_station=s.arr_station,
-                start_time=s.start_time, end_time=s.end_time,
-                latitude=s.latitude, longitude=s.longitude,
-                image_url=s.image_url, memo=s.memo,
-            )
-        )
+        group.items.append(TravelScheduleItem.model_validate(s))
 
-    today = datetime.now(_KST).date()
+    today = now_kst().date()
     return TravelDetailResponse(
         travel_idx=travel.travel_idx, title=travel.title,
         start_date=travel.start_date, end_date=travel.end_date, region=travel.region,
