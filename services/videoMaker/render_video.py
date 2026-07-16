@@ -99,7 +99,6 @@ class RenderConfig:
     height: int
     fps: int
     map_seconds: float
-    move_seconds_per_km: float
     max_video_seconds: float
     photo_seconds: float
     fade_seconds: float
@@ -118,7 +117,6 @@ DEFAULT_CONFIG = RenderConfig(
     height=1920,
     fps=30,
     map_seconds=18.0,
-    move_seconds_per_km=0.05,
     max_video_seconds=60.0,
     photo_seconds=1.8,
     fade_seconds=0.6,
@@ -137,7 +135,6 @@ QUALITY_FAST_CONFIG = RenderConfig(
     height=1920,
     fps=30,
     map_seconds=18.0,
-    move_seconds_per_km=0.05,
     max_video_seconds=60.0,
     photo_seconds=1.8,
     fade_seconds=0.6,
@@ -156,7 +153,6 @@ QUICK_CONFIG = RenderConfig(
     height=960,
     fps=15,
     map_seconds=9.0,
-    move_seconds_per_km=0.05,
     max_video_seconds=60.0,
     photo_seconds=1.0,
     fade_seconds=0.4,
@@ -259,11 +255,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, help="출력 높이")
     parser.add_argument("--fps", type=int, help="출력 FPS")
     parser.add_argument("--map-seconds", type=float, help="3D 지도 구간 길이(폴백/레거시 경로용)")
-    parser.add_argument(
-        "--move-seconds-per-km",
-        type=float,
-        help="이동 속도(거리 비례). km당 초. 기본 0.05 (작을수록 빠름)",
-    )
     parser.add_argument(
         "--max-video-seconds",
         type=float,
@@ -406,11 +397,6 @@ def build_config(args: argparse.Namespace) -> RenderConfig:
         height=args.height or base.height,
         fps=args.fps or base.fps,
         map_seconds=args.map_seconds or base.map_seconds,
-        move_seconds_per_km=(
-            args.move_seconds_per_km
-            if args.move_seconds_per_km is not None
-            else base.move_seconds_per_km
-        ),
         max_video_seconds=(
             args.max_video_seconds
             if args.max_video_seconds is not None
@@ -803,24 +789,18 @@ def path_distance_km(
     )
 
 
-def allocate_move_durations(distances_km: list[float], total_seconds: float) -> list[float]:
-    if not distances_km:
-        return []
+# 구간별 이동 시간 — 거리에 따라 짧으면 짧게, 길면 더 길게. 선형 비례는 시내
+# 몇 km 구간을 0.5초 미만으로 뭉개고 장거리를 과하게 늘리므로, 로그 스케일에
+# 하한/상한을 두어 완만하게 늘어나게 한다.
+#   0.5km→1.6s, 2km→2.3s, 10km→3.5s, 50km→5.0s, 150km→6.0s, 400km→7s(상한)
+MOVE_SECONDS_MIN = 1.2
+MOVE_SECONDS_MAX = 7.0
+MOVE_SECONDS_LOG_COEF = 2.2
 
-    segment_count = len(distances_km)
-    total_seconds = max(0.1 * segment_count, total_seconds)
-    min_seconds = min(0.45, total_seconds / segment_count)
-    floor_total = min_seconds * segment_count
-    variable_seconds = max(0.0, total_seconds - floor_total)
-    total_distance = sum(max(0.0, distance) for distance in distances_km)
 
-    if total_distance <= 0:
-        return [total_seconds / segment_count for _ in distances_km]
-
-    return [
-        min_seconds + variable_seconds * (max(0.0, distance) / total_distance)
-        for distance in distances_km
-    ]
+def move_seconds_for_km(distance_km: float) -> float:
+    seconds = MOVE_SECONDS_MIN + MOVE_SECONDS_LOG_COEF * math.log10(1 + max(0.0, distance_km))
+    return min(MOVE_SECONDS_MAX, seconds)
 
 
 def stops_and_photos_seconds(
@@ -877,17 +857,18 @@ def build_timeline_segments(
 
     distances = [distance for _, _, distance in move_specs]
 
-    # Distance-based pacing: each move takes `move_seconds_per_km` per km, so the
-    # camera keeps a consistent speed no matter how long the route is.
-    desired_move_total = sum(distances) * config.move_seconds_per_km
+    # Distance-based pacing: 구간마다 거리에 맞는 시간을 직접 배정한다
+    # (짧은 구간은 짧게, 긴 구간은 로그 스케일로 더 길게 — move_seconds_for_km).
+    move_durations = [move_seconds_for_km(distance) for distance in distances]
+    desired_move_total = sum(move_durations)
 
     # Holds + photos are fixed by the points/photos the user added.
     non_move_seconds = stops_and_photos_seconds(stop_points, config)
 
     # Cap the whole video to max_video_seconds by compressing ONLY the moves
-    # (speeding them up like before), leaving holds/photos intact.
-    move_total = desired_move_total
-    if config.max_video_seconds > 0:
+    # (speeding them up like before), leaving holds/photos intact. 비율은 유지되므로
+    # 압축돼도 긴 구간이 더 오래 가는 느낌은 그대로다.
+    if config.max_video_seconds > 0 and desired_move_total > 0:
         if desired_move_total + non_move_seconds > config.max_video_seconds:
             move_total = max(0.0, config.max_video_seconds - non_move_seconds)
             print(
@@ -895,8 +876,8 @@ def build_timeline_segments(
                 f"{config.max_video_seconds:.0f}s 상한 → 이동 구간을 "
                 f"{desired_move_total:.1f}s에서 {move_total:.1f}s로 압축"
             )
-
-    move_durations = allocate_move_durations(distances, move_total)
+            scale = move_total / desired_move_total
+            move_durations = [duration * scale for duration in move_durations]
     move_duration_iter = iter(move_durations)
     segments: list[TimelineSegment] = []
     previous_index = 0
