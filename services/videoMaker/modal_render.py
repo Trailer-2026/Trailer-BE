@@ -5,8 +5,8 @@ render_video.py 를 컨테이너 안에서 실행한다. 렌더 시간과 산출
 생성된 mp4 를 로컬 output/ 으로 다운로드한다.
 
 사전 준비:
-  - services/videoMaker/.env 에 MAPBOX_ACCESS_TOKEN=pk... 가 있어야 한다 (로컬 .env 를
-    Modal Secret 으로 그대로 주입하므로 별도 secret 생성 불필요).
+  - config/properties_dev.ini 의 [mapbox] access_token 에 Mapbox 토큰이 있어야
+    한다 (Modal Secret 으로 주입되므로 별도 secret 생성 불필요).
 
 실행 (로컬, trailer3d 환경):
     modal run modal_render.py                 # 최고 품질(무손실 PNG)
@@ -16,11 +16,34 @@ render_video.py 를 컨테이너 안에서 실행한다. 렌더 시간과 산출
       렌더 시간/크기/renderer 가 터미널에 출력된다.
 """
 
+import os
+import sys
 from pathlib import Path
 
 import modal
 
 HERE = Path(__file__).parent
+
+
+def _mapbox_token() -> str:
+    """백엔드 공통 설정([mapbox] access_token)에서 토큰을 읽는다.
+
+    렌더러 나머지(render_video.load_token)와 동일한 1순위 소스. 설정이 없으면
+    환경변수 MAPBOX_ACCESS_TOKEN 폴백.
+    """
+    backend_root = HERE.resolve().parent.parent
+    if (backend_root / "config" / "__init__.py").exists():
+        if str(backend_root) not in sys.path:
+            sys.path.insert(0, str(backend_root))
+        try:
+            from config import Config
+
+            token = Config.read("mapbox", "access_token")
+            if token and token.strip():
+                return token.strip()
+        except Exception:
+            pass
+    return os.environ.get("MAPBOX_ACCESS_TOKEN", "").strip()
 
 # --- 검증된 GPU 컨테이너 이미지 -------------------------------------------------
 image = (
@@ -72,8 +95,8 @@ app = modal.App("trailer-videomaker-render", image=image)
 @app.function(
     gpu="T4",
     timeout=3600,
-    # 로컬 services/videoMaker/.env 를 그대로 컨테이너 환경변수로 주입 (MAPBOX_ACCESS_TOKEN)
-    secrets=[modal.Secret.from_dotenv(HERE)],
+    # 공통 설정의 Mapbox 토큰을 컨테이너 환경변수로 주입 (MAPBOX_ACCESS_TOKEN)
+    secrets=[modal.Secret.from_dict({"MAPBOX_ACCESS_TOKEN": _mapbox_token()})],
 )
 def render(
     mode: str = "quality",

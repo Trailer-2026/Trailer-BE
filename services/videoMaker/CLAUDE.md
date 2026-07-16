@@ -12,7 +12,7 @@ Two languages, one pipeline:
 
 ## Setup & commands
 
-A Mapbox **public** access token is required. Primary source is the backend-wide config `config/properties_dev.ini` (`[mapbox] access_token`); fallback is `.env` in this directory (`MAPBOX_ACCESS_TOKEN=pk...`) — the fallback is what the Modal container uses (`Secret.from_dotenv`), so keep `.env` around. Without a token the program prints a message and exits with code 1. Neither file is committed. FFmpeg (and optionally `ffprobe`) must be on `PATH`.
+A Mapbox **public** access token is required. Source is the backend-wide config `config/properties_dev.ini` (`[mapbox] access_token`) — `render_video.py`, the builder, and `modal_render.py` (injected into the container via `Secret.from_dict`) all read it from there; the `MAPBOX_ACCESS_TOKEN` env var (or a local `.env`) works as a fallback. Without a token the program prints a message and exits with code 1. FFmpeg (and optionally `ffprobe`) must be on `PATH`.
 
 All work happens in the `trailer3d` conda env:
 ```bash
