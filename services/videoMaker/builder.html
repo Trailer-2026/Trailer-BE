@@ -412,10 +412,10 @@
             <input type="number" id="cut-end" min="0" step="0.1" placeholder="끝 초" />
             <button class="btn tiny danger" id="cut-btn">✂ 삭제</button>
           </div>
-          <label class="field" style="margin-top:10px">이미지 삽입 — 해당 구간(초)에 이미지를 띄웁니다</label>
+          <label class="field" style="margin-top:10px">이미지 삽입 — 시점(초)에 사진을 끼워 넣고 이어서 재생합니다</label>
           <div class="bgm-row">
-            <input type="number" id="ov-start" min="0" step="0.1" placeholder="시작 초" />
-            <input type="number" id="ov-end" min="0" step="0.1" placeholder="끝 초" />
+            <input type="number" id="ov-at" min="0" step="0.1" placeholder="삽입 시점 초" />
+            <input type="number" id="ov-dur" min="0.3" max="10" step="0.1" value="1.5" placeholder="표시 초" />
           </div>
           <div class="bgm-row" style="margin-top:6px">
             <input type="file" id="ov-file" accept="image/*" />
@@ -461,18 +461,18 @@
     }
 
     function editOverlay() {
-      const s = parseFloat(document.getElementById("ov-start").value);
-      const e = parseFloat(document.getElementById("ov-end").value);
+      const at = parseFloat(document.getElementById("ov-at").value);
+      const dur = parseFloat(document.getElementById("ov-dur").value);
       const file = document.getElementById("ov-file").files[0];
       const es = document.getElementById("edit-status");
-      if (!Number.isFinite(s) || !Number.isFinite(e)) { es.textContent = "⚠ 시작/끝 초를 입력하세요."; return; }
+      if (!Number.isFinite(at)) { es.textContent = "⚠ 삽입 시점(초)을 입력하세요."; return; }
       if (!file) { es.textContent = "⚠ 삽입할 이미지를 선택하세요."; return; }
       const fd = new FormData();
       fd.append("name", currentVideoName);
-      fd.append("start_seconds", s);
-      fd.append("end_seconds", e);
+      fd.append("at_seconds", at);
+      fd.append("photo_seconds", Number.isFinite(dur) ? dur : 1.5);
       fd.append("image", file);
-      callEdit("/api/videos/edit/overlay", fd, document.getElementById("ov-btn"));
+      callEdit("/api/videos/edit/insert", fd, document.getElementById("ov-btn"));
     }
 
     document.getElementById("theme").addEventListener("change", applyBuilderTheme);

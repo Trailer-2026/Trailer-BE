@@ -274,14 +274,15 @@ _EDIT_VIDEO_ARGS = [
 
 
 def _ffprobe_video(path: Path) -> dict[str, object]:
-    """영상 메타데이터 조회: {duration, has_audio, width, height}."""
+    """영상 메타데이터 조회: duration/has_audio/width/height/fps/sample_rate."""
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
         raise ExternalServiceException("ffprobe를 찾을 수 없습니다 (PATH 확인).")
     result = subprocess.run(
         [
             ffprobe, "-v", "error",
-            "-show_entries", "format=duration:stream=codec_type,width,height",
+            "-show_entries",
+            "format=duration:stream=codec_type,width,height,r_frame_rate,sample_rate",
             "-of", "json", str(path),
         ],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
@@ -291,11 +292,14 @@ def _ffprobe_video(path: Path) -> dict[str, object]:
     info = json.loads(result.stdout or "{}")
     streams = info.get("streams", [])
     video_stream = next((s for s in streams if s.get("codec_type") == "video"), {})
+    audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
     return {
         "duration": float(info.get("format", {}).get("duration", 0) or 0),
-        "has_audio": any(s.get("codec_type") == "audio" for s in streams),
+        "has_audio": audio_stream is not None,
         "width": int(video_stream.get("width", 0) or 0),
         "height": int(video_stream.get("height", 0) or 0),
+        "fps": video_stream.get("r_frame_rate", "30/1") or "30/1",
+        "sample_rate": int((audio_stream or {}).get("sample_rate", 44100) or 44100),
     }
 
 
@@ -386,23 +390,29 @@ def cut_video(name: str, start_seconds: float, end_seconds: float) -> dict[str, 
     return _edit_result(started, target)
 
 
-def overlay_image(
+def insert_image(
     name: str,
-    start_seconds: float,
-    end_seconds: float,
+    at_seconds: float,
     image_filename: str,
     image_bytes: bytes,
+    photo_seconds: float = 1.5,
 ) -> dict[str, object]:
-    """완성 영상의 [start, end) 구간에 이미지를 중앙 오버레이한 새 영상을 만든다."""
+    """완성 영상의 at 시점에 이미지를 전체 화면으로 끼워 넣은 새 영상을 만든다.
+
+    본편 [0, at) 재생 → 사진 photo_seconds 초 → 본편 [at, 끝) 재생.
+    렌더러의 사진 구간처럼 본편이 멈추고 사진이 나온 뒤 이어지는 삽입 방식이라
+    영상 길이가 photo_seconds 만큼 늘어난다. 사진은 화면을 꽉 채우도록
+    비율 유지 확대 후 중앙 크롭한다.
+    """
     source = get_output_path(name)
     info = _ffprobe_video(source)
     duration = float(info["duration"])
-    start, end = float(start_seconds), float(end_seconds)
-    if start < 0 or end <= start:
-        raise BadRequestException("삽입 구간이 올바르지 않습니다 (0 ≤ 시작 < 끝).")
-    if start >= duration:
-        raise BadRequestException(f"시작 시각이 영상 길이({duration:.1f}초)를 넘습니다.")
-    end = min(end, duration)
+    at = float(at_seconds)
+    photo = float(photo_seconds)
+    if at < 0 or at > duration:
+        raise BadRequestException(f"삽입 시점은 0 ~ 영상 길이({duration:.1f}초) 사이여야 합니다.")
+    if not 0.3 <= photo <= 10:
+        raise BadRequestException("사진 표시 시간은 0.3 ~ 10초 사이여야 합니다.")
 
     suffix = Path(image_filename or "").suffix.lower()
     if suffix not in IMAGE_EXTENSIONS:
@@ -410,26 +420,73 @@ def overlay_image(
     if not image_bytes:
         raise BadRequestException("이미지 파일이 비어 있습니다.")
 
-    # 영상 프레임의 86% 박스 안에 비율 유지로 맞춰 중앙에 얹는다.
-    box_w = max(2, int(int(info["width"]) * 0.86)) if info["width"] else -1
-    box_h = max(2, int(int(info["height"]) * 0.86)) if info["height"] else -1
+    width, height = int(info["width"]), int(info["height"])
+    fps = str(info["fps"])
+    sample_rate = int(info["sample_rate"])
     temp_dir = VIDEO_MAKER_DIR / "temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    image_path = temp_dir / f"overlay_{uuid.uuid4().hex[:8]}{suffix}"
+    image_path = temp_dir / f"insert_{uuid.uuid4().hex[:8]}{suffix}"
     image_path.write_bytes(image_bytes)
+
+    # 본편을 at 기준으로 나누고(경계에 붙으면 한쪽만) 사이에 사진 클립을 끼운다.
+    eps = 0.05
+    head = at > eps
+    tail = at < duration - eps
+
+    # 사진 클립: 화면을 꽉 채우게 확대 후 중앙 크롭, 본편과 같은 fps/SAR 로 정규화.
+    filters = [
+        f"[1:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},setsar=1,fps={fps},"
+        f"trim=duration={photo:.3f},setpts=PTS-STARTPTS[vp]"
+    ]
+    video_labels: list[str] = []
+    audio_labels: list[str] = []
+    has_audio = bool(info["has_audio"])
+    # concat 은 세그먼트 포맷이 같아야 하므로 오디오는 전부 동일 포맷으로 정규화.
+    aformat = f"aformat=sample_fmts=fltp:sample_rates={sample_rate}:channel_layouts=stereo"
+
+    if head:
+        filters.append(f"[0:v]trim=end={at:.3f},setpts=PTS-STARTPTS[v0]")
+        video_labels.append("[v0]")
+        if has_audio:
+            filters.append(f"[0:a]atrim=end={at:.3f},asetpts=PTS-STARTPTS,{aformat}[a0]")
+            audio_labels.append("[a0]")
+    video_labels.append("[vp]")
+    if has_audio:
+        # 사진 구간은 무음 (anullsrc 입력 [2]).
+        filters.append(f"[2:a]atrim=duration={photo:.3f},{aformat}[ap]")
+        audio_labels.append("[ap]")
+    if tail:
+        filters.append(f"[0:v]trim=start={at:.3f},setpts=PTS-STARTPTS[v1]")
+        video_labels.append("[v1]")
+        if has_audio:
+            filters.append(f"[0:a]atrim=start={at:.3f},asetpts=PTS-STARTPTS,{aformat}[a1]")
+            audio_labels.append("[a1]")
+
+    segment_count = len(video_labels)
+    inputs = [
+        "-i", str(source),
+        "-loop", "1", "-t", f"{photo + 0.5:.3f}", "-i", str(image_path),
+    ]
+    maps = ["-map", "[v]"]
+    audio_args: list[str] = []
+    if has_audio:
+        inputs += ["-f", "lavfi", "-t", f"{photo:.3f}", "-i",
+                   f"anullsrc=r={sample_rate}:cl=stereo"]
+        interleaved = "".join(v + a for v, a in zip(video_labels, audio_labels))
+        filters.append(f"{interleaved}concat=n={segment_count}:v=1:a=1[v][a]")
+        maps += ["-map", "[a]"]
+        audio_args = ["-c:a", "aac", "-b:a", "192k"]
+    else:
+        filters.append(f"{''.join(video_labels)}concat=n={segment_count}:v=1:a=0[v]")
 
     target = _edited_output_path(source, "img")
     started = time.perf_counter()
-    filter_complex = (
-        f"[1:v]scale={box_w}:{box_h}:force_original_aspect_ratio=decrease[img];"
-        f"[0:v][img]overlay=(W-w)/2:(H-h)/2:enable='between(t,{start:.3f},{end:.3f})'[v]"
-    )
-    audio_args = ["-map", "0:a", "-c:a", "copy"] if info["has_audio"] else []
     try:
         _run_ffmpeg([
-            "-i", str(source), "-i", str(image_path),
-            "-filter_complex", filter_complex,
-            "-map", "[v]", *audio_args, *_EDIT_VIDEO_ARGS,
+            *inputs,
+            "-filter_complex", ";".join(filters),
+            *maps, *_EDIT_VIDEO_ARGS, *audio_args,
             str(target),
         ])
     finally:
