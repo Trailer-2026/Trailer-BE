@@ -9,6 +9,8 @@ logs/
 venv/
 .venv/
 .DS_Store
+# 로컬 개발용 sqlite DB ([app] db.url 을 sqlite 로 뒀을 때 생성됨)
+/local_dev.db
 
 *.mp4
 
