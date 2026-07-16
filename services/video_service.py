@@ -42,7 +42,8 @@ OUTPUT_DIR = VIDEO_MAKER_DIR / "output"
 BUILDER_HTML = VIDEO_MAKER_DIR / "builder.html"
 MAP_THEMES_JS = VIDEO_MAKER_DIR / "map_themes.js"
 RENDER_SCRIPT = VIDEO_MAKER_DIR / "render_video.py"
-MODAL_SCRIPT = VIDEO_MAKER_DIR / "modal_render.py"
+# 배포된 Modal 함수를 호출하는 러너 (사전 1회: modal deploy modal_render.py)
+MODAL_CALL_SCRIPT = VIDEO_MAKER_DIR / "modal_call.py"
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
@@ -120,22 +121,6 @@ def get_bgm_path(filename: str) -> Path:
 def _render_python() -> str:
     """로컬 엔진(render_video.py)을 실행할 파이썬 경로."""
     return Config.read("videomaker", "python", default=sys.executable) or sys.executable
-
-
-def _modal_executable() -> str:
-    """Modal CLI 경로: 설정 → PATH → 렌더 파이썬 옆 Scripts 순으로 찾는다."""
-    configured = Config.read("videomaker", "modal")
-    if configured and Path(configured).is_file():
-        return configured
-    found = shutil.which("modal")
-    if found:
-        return found
-    sibling = Path(_render_python()).parent / "Scripts" / "modal.exe"
-    if sibling.is_file():
-        return str(sibling)
-    raise ExternalServiceException(
-        "modal CLI를 찾을 수 없습니다. [videomaker] modal 설정 또는 trailer3d 환경 설치가 필요합니다."
-    )
 
 
 def _build_travel_data(
@@ -218,15 +203,15 @@ def _build_command(
 ) -> tuple[list[str], str]:
     """엔진별 렌더 명령을 만든다. 반환: (command, 출력 파일명 파싱용 marker)"""
     if engine == "modal":
+        # 배포된 함수 원격 호출 (사전 1회: modal deploy modal_render.py).
         command = [
-            _modal_executable(),
-            "run",
-            str(MODAL_SCRIPT),
-            "--mode",
-            "quality-fast" if quick else "quality",
+            _render_python(),
+            str(MODAL_CALL_SCRIPT),
             "--travel-data",
             travel_data_path.relative_to(VIDEO_MAKER_DIR).as_posix(),
         ]
+        if quick:
+            command += ["--mode", "quality-fast"]
     else:
         command = [
             _render_python(),

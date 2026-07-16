@@ -1,19 +1,19 @@
-"""Modal T4 GPU 에서 실제 3D 여행 영상(mp4)을 렌더링하고 로컬로 받아오는 워커.
+"""Modal T4 GPU 렌더 워커 (배포형).
 
-검증된 T4 GPU 컨테이너 레시피를 그대로 적용해, 기존
-render_video.py 를 컨테이너 안에서 실행한다. 렌더 시간과 산출물 크기를 출력하고,
-생성된 mp4 를 로컬 output/ 으로 다운로드한다.
+`modal deploy modal_render.py` 로 한 번 배포해 두면, 이미지(playwright/ffmpeg)와
+정적 자산(기차 GLB·bgm·지도 소스)이 미리 구워져서 렌더 호출마다 다시 올리지
+않는다. 서버(video_service)는 modal_call.py 를 통해 배포된 render 함수를 원격
+호출하며, 매 호출에는 travel_data JSON 과 업로드 사진 바이트만 전달된다.
+→ `modal run` 방식 대비 호출당 준비 시간이 수 분 → 컨테이너 부팅 수십 초로 준다.
 
 사전 준비:
-  - config/properties_dev.ini 의 [mapbox] access_token 에 Mapbox 토큰이 있어야
-    한다 (Modal Secret 으로 주입되므로 별도 secret 생성 불필요).
+  - config/properties_dev.ini 의 [mapbox] access_token 에 Mapbox 토큰
+    (배포 시 Modal Secret 으로 구워진다 — 토큰 변경 시 재배포 필요).
+  - 배포/재배포 (trailer3d 환경, 이 디렉터리에서):
+        modal deploy modal_render.py
 
-실행 (로컬, trailer3d 환경):
-    modal run modal_render.py                 # 최고 품질(무손실 PNG)
-    modal run modal_render.py --mode quality-fast   # JPEG q95, 더 빠름/저렴
-
-결과: services/videoMaker/output/modal_travel_3d_N.mp4 로 저장되고,
-      렌더 시간/크기/renderer 가 터미널에 출력된다.
+수동 테스트 (배포 없이 1회 실행):
+    modal run modal_render.py --travel-data assets/travel_data.json
 """
 
 import os
@@ -23,6 +23,11 @@ from pathlib import Path
 import modal
 
 HERE = Path(__file__).parent
+
+APP_NAME = "trailer-videomaker-render"
+# 렌더 호출 기본 모드 — quality-fast(JPEG q95, raf 대기)가 기본.
+# 무손실 PNG 가 꼭 필요할 때만 mode="quality" 로 호출한다.
+DEFAULT_MODE = "quality-fast"
 
 
 def _mapbox_token() -> str:
@@ -73,7 +78,8 @@ image = (
         "__EGL_VENDOR_LIBRARY_FILENAMES": "/usr/share/glvnd/egl_vendor.d/10_nvidia.json",
         "LD_LIBRARY_PATH": "/usr/lib/x86_64-linux-gnu",
     })
-    # 렌더러 소스 + 자산을 /app 에 복사 (작업 디렉터리/산출물은 제외)
+    # 렌더러 소스 + 정적 자산을 /app 에 복사 — 배포 시 1회.
+    # 업로드 사진(assets/uploads)은 렌더 호출 때 바이트로 받는다.
     .add_local_dir(
         str(HERE),
         remote_path="/app",
@@ -81,6 +87,7 @@ image = (
             "output/**", "frames/**", "temp/**", "debug/**",
             "*.mp4", "**/*.mp4", ".env", "__pycache__/**",
             "modal_*.py", "*.md",
+            "assets/uploads/**",
             # 3D 기차 디자인 소스(~80MB)는 로컬 변환용 — 렌더는 train_color.glb 만 읽음
             "assets/Little train/**", "assets/lokomotiv/**",
             # 구버전 원본 GLB(11MB, 법선 깨짐) — train_fixed.glb 가 폴백으로 충분
@@ -89,7 +96,7 @@ image = (
     )
 )
 
-app = modal.App("trailer-videomaker-render", image=image)
+app = modal.App(APP_NAME, image=image)
 
 
 @app.function(
@@ -99,29 +106,51 @@ app = modal.App("trailer-videomaker-render", image=image)
     secrets=[modal.Secret.from_dict({"MAPBOX_ACCESS_TOKEN": _mapbox_token()})],
 )
 def render(
-    mode: str = "quality",
-    travel_data: str = "",
+    travel_data_json: str = "",
+    files: dict | None = None,
+    mode: str = DEFAULT_MODE,
     theme: str = "",
     light_preset: str = "",
     intro: bool = False,
     outro: bool = False,
 ):
+    """travel_data JSON + 사진 바이트({상대경로: bytes})를 받아 렌더링한다.
+
+    제너레이터: 진행 로그를 {"log": line} 으로 실시간 yield 하고 (호출측이
+    진행률 파싱에 사용), 마지막에 {"result": {filename, bytes, ...}} 를 yield 한다.
+    Modal 의 로그 스트리밍은 파이프 환경에서 실시간성이 보장되지 않아
+    제너레이터로 직접 흘려보낸다.
+
+    files 의 경로는 /app 기준 상대경로(예: assets/uploads/<job>/photo_0.jpg)로,
+    travel_data 의 photos 항목과 일치해야 한다.
+    """
     import os
     import subprocess
     import sys
     import time
+    from pathlib import Path as ContainerPath
 
     # NVIDIA 그래픽 lib 은 컨테이너 시작 시 주입되므로 링커 캐시 갱신
     subprocess.run("ldconfig", shell=True)
     os.chdir("/app")
+    app_root = ContainerPath("/app").resolve()
+
+    # 호출자가 보낸 파일(업로드 사진 등)을 /app 아래에 기록 (경로 탈출 방지)
+    for rel_path, content in (files or {}).items():
+        target = (app_root / rel_path).resolve()
+        if not str(target).startswith(str(app_root)):
+            raise ValueError(f"허용되지 않는 파일 경로: {rel_path}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
 
     cmd = [sys.executable, "render_video.py"]
     if mode == "quality-fast":
         cmd.append("--quality-fast")
     # mode == "quality": 플래그 없음 = 최고 품질(무손실 cdp-png, map-render 대기)
-    # travel_data 가 주어지면 빌더가 만든 동적 경로/사진/BGM(json 의 bgm 필드) 사용.
-    if travel_data:
-        cmd += ["--travel-data", travel_data]
+    if travel_data_json:
+        travel_path = app_root / "travel_data_job.json"
+        travel_path.write_text(travel_data_json, encoding="utf-8")
+        cmd += ["--travel-data", str(travel_path)]
     # 지도 테마 (spring/summer/autumn/winter). 빈 값이면 기본 스타일.
     if theme and theme != "default":
         cmd += ["--theme", theme]
@@ -135,24 +164,35 @@ def render(
         cmd.append("--outro")
 
     print(
-        f"=== 렌더 시작 (mode={mode}, travel_data={travel_data or 'default'}, "
+        f"=== 렌더 시작 (mode={mode}, files={len(files or {})}, "
         f"theme={theme or 'default'}, light={light_preset or 'auto'}, "
         f"intro={'yes' if intro else 'no'}, outro={'yes' if outro else 'no'}) ==="
     )
     t0 = time.time()
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    # 렌더 로그([perf:frame] 등)를 실시간으로 yield — capture 후 일괄 출력하면
+    # 호출측(서버) 진행률 표시가 완료 순간까지 0% 로 멈춰 보인다.
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    proc = subprocess.Popen(
+        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    # 진행률 파싱에 쓰이는 라인만 yield (전 라인 yield 는 네트워크 왕복 낭비).
+    progress_markers = (
+        "[perf:frame]", "렌더링 완료", "합성 완료", "출력 예정 파일", "[timeline]", "[webgl]",
+    )
+    for line in proc.stdout:
+        line = line.rstrip("\n")
+        print(line, flush=True)  # Modal 로그(대시보드)용
+        if any(marker in line for marker in progress_markers):
+            yield {"log": line}
+    returncode = proc.wait()
     elapsed = time.time() - t0
 
-    # render_video.py 의 로그(렌더러/perf/ffprobe)를 그대로 흘려보냄
-    print(proc.stdout)
-    if proc.returncode != 0:
-        print("=== STDERR ===")
-        print(proc.stderr)
-        raise RuntimeError(f"render_video.py 실패 (exit {proc.returncode})")
+    if returncode != 0:
+        raise RuntimeError(f"render_video.py 실패 (exit {returncode})")
 
     # 가장 최근 생성된 mp4 회수
     outputs = sorted(
-        Path("/app/output").glob("travel_3d_*.mp4"),
+        ContainerPath("/app/output").glob("travel_3d_*.mp4"),
         key=lambda p: p.stat().st_mtime,
     )
     if not outputs:
@@ -160,38 +200,61 @@ def render(
     mp4 = outputs[-1]
     data = mp4.read_bytes()
     print(f"=== 렌더 완료: {mp4.name}, {elapsed:.1f}s, {len(data)/1e6:.1f} MB ===")
-    return {
-        "filename": mp4.name,
-        "bytes": data,
-        "elapsed": elapsed,
-        "size": len(data),
+    yield {
+        "result": {
+            "filename": mp4.name,
+            "bytes": data,
+            "elapsed": elapsed,
+            "size": len(data),
+        }
     }
 
 
 @app.local_entrypoint()
 def main(
-    mode: str = "quality",
+    mode: str = DEFAULT_MODE,
     travel_data: str = "",
     theme: str = "",
     light_preset: str = "",
     intro: bool = False,
     outro: bool = False,
 ):
+    """수동 테스트용 (modal run). 서버 경유는 modal_call.py 를 쓴다."""
     from datetime import datetime
 
-    result = render.remote(mode, travel_data, theme, light_preset, intro, outro)
+    from modal_call import collect_job_files, load_travel_data_json
+
+    travel_data_json, files = "", {}
+    if travel_data:
+        travel_data_json = load_travel_data_json(HERE / travel_data)
+        files = collect_job_files(HERE, travel_data_json)
+
+    result = None
+    for event in render.remote_gen(
+        travel_data_json=travel_data_json,
+        files=files,
+        mode=mode,
+        theme=theme,
+        light_preset=light_preset,
+        intro=intro,
+        outro=outro,
+    ):
+        if isinstance(event, dict) and "log" in event:
+            print(event["log"], flush=True)
+        elif isinstance(event, dict) and "result" in event:
+            result = event["result"]
+    if result is None:
+        raise RuntimeError("렌더 결과를 받지 못했습니다.")
 
     out_dir = HERE / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
-    # 매 실행마다 고유 파일명(모드+타임스탬프)으로 저장해 이전 결과를 덮지 않는다.
-    # (컨테이너 내부 output ID 는 매번 1 로 리셋되므로 로컬에서 고유화한다.)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = out_dir / f"travel_3d_{mode}_{stamp}.mp4"
     out_path.write_bytes(result["bytes"])
 
     print("\n" + "=" * 60)
     print(f"✅ 생성 완료 (mode={mode})")
-    print(f"📁 저장 위치: {out_path}")
+    print(f"저장 위치: {out_path}")
     print(f"⏱  렌더 시간: {result['elapsed']:.1f}초")
     print(f"📦 파일 크기: {result['size'] / 1e6:.1f} MB")
     print("=" * 60)
