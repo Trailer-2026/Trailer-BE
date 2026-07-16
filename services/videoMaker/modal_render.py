@@ -1,6 +1,6 @@
 """Modal T4 GPU 에서 실제 3D 여행 영상(mp4)을 렌더링하고 로컬로 받아오는 워커.
 
-검증된 GPU 레시피(modal_gpu_probe.py 로 확인)를 그대로 적용해, 기존
+검증된 T4 GPU 컨테이너 레시피를 그대로 적용해, 기존
 render_video.py 를 컨테이너 안에서 실행한다. 렌더 시간과 산출물 크기를 출력하고,
 생성된 mp4 를 로컬 output/ 으로 다운로드한다.
 
@@ -22,7 +22,7 @@ import modal
 
 HERE = Path(__file__).parent
 
-# --- 검증된 GPU 컨테이너 이미지 (modal_gpu_probe.py 와 동일 레시피) -------------
+# --- 검증된 GPU 컨테이너 이미지 -------------------------------------------------
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install("playwright==1.49.0", "python-dotenv", "Pillow")
@@ -62,7 +62,6 @@ image = (
             "assets/Little train/**", "assets/lokomotiv/**",
             # 구버전 원본 GLB(11MB, 법선 깨짐) — train_fixed.glb 가 폴백으로 충분
             "assets/train.glb",
-            "convert_train_model.py", "benchmark_train_model.py",
         ],
     )
 )
