@@ -193,11 +193,10 @@ db.url = mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset=utf8
 access_token = pk.your_public_token_here
 
 [videomaker]
-; 영상 로컬 렌더 엔진(POST /api/videos/render, engine=local)이 쓸 trailer3d 환경 파이썬
-; (생략 시 서버 프로세스의 파이썬 사용 — playwright 등이 설치돼 있어야 함)
+; 영상 렌더 엔진(POST /api/videos/render)이 쓸 trailer3d 환경 파이썬
+; (생략 시 서버 프로세스의 파이썬 사용 — playwright, modal 등이 설치돼 있어야 함)
+; engine=modal 은 배포된 Modal 앱을 호출하므로 사전 1회 `modal deploy modal_render.py` 필요.
 python = C:\path\to\anaconda3\envs\trailer3d\python.exe
-; Modal CLI 경로 (생략 시 PATH -> python 옆 Scripts 순으로 탐색)
-modal = C:\path\to\anaconda3\envs\trailer3d\Scripts\modal.exe
 ```
 
 ---
