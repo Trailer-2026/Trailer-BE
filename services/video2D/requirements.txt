@@ -1,6 +1,0 @@
-numpy
-Pillow
-requests
-imageio
-imageio-ffmpeg
-filelock>=3.13,<4
