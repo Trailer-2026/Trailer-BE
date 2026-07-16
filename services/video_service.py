@@ -386,6 +386,57 @@ def cut_video(name: str, start_seconds: float, end_seconds: float) -> dict[str, 
     return _edit_result(started, target)
 
 
+def overlay_image(
+    name: str,
+    start_seconds: float,
+    end_seconds: float,
+    image_filename: str,
+    image_bytes: bytes,
+) -> dict[str, object]:
+    """완성 영상의 [start, end) 구간에 이미지를 중앙 오버레이한 새 영상을 만든다."""
+    source = get_output_path(name)
+    info = _ffprobe_video(source)
+    duration = float(info["duration"])
+    start, end = float(start_seconds), float(end_seconds)
+    if start < 0 or end <= start:
+        raise BadRequestException("삽입 구간이 올바르지 않습니다 (0 ≤ 시작 < 끝).")
+    if start >= duration:
+        raise BadRequestException(f"시작 시각이 영상 길이({duration:.1f}초)를 넘습니다.")
+    end = min(end, duration)
+
+    suffix = Path(image_filename or "").suffix.lower()
+    if suffix not in IMAGE_EXTENSIONS:
+        raise BadRequestException("이미지 파일이 아닙니다 (jpg/png/webp 등).")
+    if not image_bytes:
+        raise BadRequestException("이미지 파일이 비어 있습니다.")
+
+    # 영상 프레임의 86% 박스 안에 비율 유지로 맞춰 중앙에 얹는다.
+    box_w = max(2, int(int(info["width"]) * 0.86)) if info["width"] else -1
+    box_h = max(2, int(int(info["height"]) * 0.86)) if info["height"] else -1
+    temp_dir = VIDEO_MAKER_DIR / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    image_path = temp_dir / f"overlay_{uuid.uuid4().hex[:8]}{suffix}"
+    image_path.write_bytes(image_bytes)
+
+    target = _edited_output_path(source, "img")
+    started = time.perf_counter()
+    filter_complex = (
+        f"[1:v]scale={box_w}:{box_h}:force_original_aspect_ratio=decrease[img];"
+        f"[0:v][img]overlay=(W-w)/2:(H-h)/2:enable='between(t,{start:.3f},{end:.3f})'[v]"
+    )
+    audio_args = ["-map", "0:a", "-c:a", "copy"] if info["has_audio"] else []
+    try:
+        _run_ffmpeg([
+            "-i", str(source), "-i", str(image_path),
+            "-filter_complex", filter_complex,
+            "-map", "[v]", *audio_args, *_EDIT_VIDEO_ARGS,
+            str(target),
+        ])
+    finally:
+        image_path.unlink(missing_ok=True)
+    return _edit_result(started, target)
+
+
 # --------------------------------------------------------------------------- #
 # 렌더 작업(job) 관리 — 진행률 조회를 위해 비동기로 돌린다.
 #

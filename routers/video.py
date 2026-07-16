@@ -129,6 +129,27 @@ def cut_video_section(
     return CommonResponse.success_response("구간 삭제 성공", data=result)
 
 
+@router.post(
+    "/edit/overlay",
+    summary="영상 이미지 삽입",
+    description="완성 영상의 [시작, 끝) 구간에 업로드한 이미지를 화면 중앙에 오버레이한 새 "
+                "영상을 만듭니다(비율 유지, 프레임의 86% 박스에 맞춤). 원본은 보존됩니다. "
+                "구간·이미지가 잘못되면 400, 영상이 없으면 404, ffmpeg 처리 실패 시 502를 "
+                "반환합니다.",
+    response_model=CommonResponse[VideoEditResponse],
+)
+def insert_image_overlay(
+    name: str = Form(..., description="편집할 완성 영상 파일명 (video_url 마지막 경로 요소)"),
+    start_seconds: float = Form(..., description="이미지 표시 시작(초)"),
+    end_seconds: float = Form(..., description="이미지 표시 끝(초)"),
+    image: UploadFile = File(..., description="삽입할 이미지 파일 (jpg/png/webp 등)"),
+):
+    result = video_service.overlay_image(
+        name, start_seconds, end_seconds, image.filename or "", image.file.read()
+    )
+    return CommonResponse.success_response("이미지 삽입 성공", data=result)
+
+
 @router.get(
     "/render/{job_id}",
     summary="영상 렌더링 진행률 조회",
