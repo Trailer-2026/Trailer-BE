@@ -7,7 +7,7 @@
   <!-- v3.9+ 필요: 테마 파티클(setSnow) 미리보기 -->
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css" rel="stylesheet" />
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js"></script>
-  <script src="/map_themes.js"></script>
+  <script src="/api/videos/assets/map_themes.js"></script>
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -288,8 +288,8 @@
     async function loadBgm() {
       const sel = document.getElementById("bgm");
       try {
-        const res = await fetch("/api/bgm");
-        const list = await res.json();
+        const res = await fetch("/api/videos/bgm");
+        const list = (await res.json()).data || [];
         for (const t of list) {
           const opt = document.createElement("option");
           opt.value = t.file;
@@ -306,7 +306,7 @@
       if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
       if (!file) return;
       if (!audio.paused && audio.dataset.file === file) { audio.pause(); return; }
-      audio.src = "/api/bgm/preview?file=" + encodeURIComponent(file);
+      audio.src = "/api/videos/bgm/preview?file=" + encodeURIComponent(file);
       audio.dataset.file = file;
       audio.currentTime = 0;
       audio.play();
@@ -362,11 +362,12 @@
       fd.append("photo_points", JSON.stringify(owners));
 
       try {
-        const res = await fetch("/api/render", { method: "POST", body: fd });
-        const data = await res.json();
+        const res = await fetch("/api/videos/render", { method: "POST", body: fd });
+        const body = await res.json();
         if (!res.ok) {
-          status.textContent = "❌ 실패: " + (data.detail || res.statusText);
+          status.textContent = "❌ 실패: " + (body.message || body.detail || res.statusText);
         } else {
+          const data = body.data || {};
           const took = (data.elapsed_seconds != null)
             ? ` ⏱ ${data.elapsed_seconds}초` : "";
           status.textContent = "✅ 완료! [" + (data.engine || "local") + "]" + took +

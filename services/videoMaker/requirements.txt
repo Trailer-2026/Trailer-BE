@@ -1,8 +1,5 @@
+# 렌더러(render_video.py) 전용 의존성 — 설치 후 `playwright install chromium` 필요.
+# 빌더는 메인 앱(routers/video.py)으로 통합됨: 루트 requirements.txt 를 사용.
 playwright>=1.50,<2
 python-dotenv>=1.0,<2
 Pillow>=10,<13
-
-# Builder server (server.py + builder.html)
-fastapi>=0.110,<1
-uvicorn>=0.29,<1
-python-multipart>=0.0.9
