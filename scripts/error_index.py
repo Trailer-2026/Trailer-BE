@@ -39,6 +39,7 @@ EXC_CODE = {
     "BadRequestException": "400",
     "DuplicateException": "409",
     "UnauthorizedException": "401",
+    "ExternalServiceException": "502",
 }
 HTTP_DECOS = {"get", "post", "put", "patch", "delete"}
 
