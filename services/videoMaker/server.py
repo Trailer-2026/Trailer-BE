@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Builder server for the video3D travel-route renderer.
+Builder server for the videoMaker travel-route renderer.
 
 Serves an HTML page where you can:
   - click a Mapbox map (or type coordinates) to add as many GPS points as you want,
@@ -49,7 +49,7 @@ ALLOWED_LIGHT_PRESETS = {"", "dawn", "day", "dusk", "night"}
 
 load_dotenv(ROOT / ".env")
 
-app = FastAPI(title="video3D builder")
+app = FastAPI(title="videoMaker builder")
 
 
 # --------------------------------------------------------------------------- #

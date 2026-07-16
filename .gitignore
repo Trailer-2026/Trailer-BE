@@ -10,5 +10,5 @@ venv/
 
 
 *.mp4
-/services/video3D/temp/
-/services/video3D/debug/
+/services/videoMaker/temp/
+/services/videoMaker/debug/

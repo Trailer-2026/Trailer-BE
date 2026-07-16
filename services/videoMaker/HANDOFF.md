@@ -2,7 +2,7 @@
 
 > 이 문서는 **이 코드를 백엔드 레포로 복사한 뒤, 그 폴더에서 새로 작업을 이어갈 AI/개발자**를 위한 인수인계 문서다.
 > 원본은 CLI 단발 실행 도구였고, 목표는 이걸 **Python 백엔드(FastAPI/Django)의 서비스로 통합**하는 것이다.
-> 현재 위치: `Trailer-BE/services/video3D/` — Trailer 백엔드의 한 서비스 모듈로 들어와 있다.
+> 현재 위치: `Trailer-BE/services/videoMaker/` — Trailer 백엔드의 한 서비스 모듈로 들어와 있다.
 
 ---
 

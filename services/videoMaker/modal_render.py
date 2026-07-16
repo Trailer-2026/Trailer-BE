@@ -5,14 +5,14 @@ render_video.py 를 컨테이너 안에서 실행한다. 렌더 시간과 산출
 생성된 mp4 를 로컬 output/ 으로 다운로드한다.
 
 사전 준비:
-  - services/video3D/.env 에 MAPBOX_ACCESS_TOKEN=pk... 가 있어야 한다 (로컬 .env 를
+  - services/videoMaker/.env 에 MAPBOX_ACCESS_TOKEN=pk... 가 있어야 한다 (로컬 .env 를
     Modal Secret 으로 그대로 주입하므로 별도 secret 생성 불필요).
 
 실행 (로컬, trailer3d 환경):
     modal run modal_render.py                 # 최고 품질(무손실 PNG)
     modal run modal_render.py --mode quality-fast   # JPEG q95, 더 빠름/저렴
 
-결과: services/video3D/output/modal_travel_3d_N.mp4 로 저장되고,
+결과: services/videoMaker/output/modal_travel_3d_N.mp4 로 저장되고,
       렌더 시간/크기/renderer 가 터미널에 출력된다.
 """
 
@@ -67,13 +67,13 @@ image = (
     )
 )
 
-app = modal.App("trailer-video3d-render", image=image)
+app = modal.App("trailer-videomaker-render", image=image)
 
 
 @app.function(
     gpu="T4",
     timeout=3600,
-    # 로컬 services/video3D/.env 를 그대로 컨테이너 환경변수로 주입 (MAPBOX_ACCESS_TOKEN)
+    # 로컬 services/videoMaker/.env 를 그대로 컨테이너 환경변수로 주입 (MAPBOX_ACCESS_TOKEN)
     secrets=[modal.Secret.from_dotenv(HERE)],
 )
 def render(

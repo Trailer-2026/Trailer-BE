@@ -25,10 +25,10 @@ import numpy as np
 import trimesh
 from trimesh.visual.material import PBRMaterial
 
-SRC_DIR = Path(r"C:\Users\Gamzadole\Desktop\Trailer-BE\services\video3D\assets\Little train")
+SRC_DIR = Path(r"C:\Users\Gamzadole\Desktop\Trailer-BE\services\videoMaker\assets\Little train")
 WORK_DIR = Path(__file__).parent / "temp" / "littletrain_work"
 RAW_GLB = WORK_DIR / "train_raw.glb"
-OUT_PATH = Path(r"C:\Users\Gamzadole\Desktop\Trailer-BE\services\video3D\assets\train_color.glb")
+OUT_PATH = Path(r"C:\Users\Gamzadole\Desktop\Trailer-BE\services\videoMaker\assets\train_color.glb")
 TARGET_LENGTH = 1.899  # 기존 train_fixed.glb 와 동일
 FLIP_NOSE = "--flip" in sys.argv
 SCHEME = "palette" if "--palette" in sys.argv else ("original" if "--original" in sys.argv else "classic")
