@@ -201,17 +201,20 @@ def _build_command(
     intro: bool,
     outro: bool,
 ) -> tuple[list[str], str]:
-    """엔진별 렌더 명령을 만든다. 반환: (command, 출력 파일명 파싱용 marker)"""
+    """엔진별 렌더 명령을 만든다. 반환: (command, 출력 파일명 파싱용 marker)
+
+    화질 기본값은 quality-fast(JPEG q95, 풀해상도) — 무손실 PNG(quality) 대비
+    최종 mp4 화질 차이가 사실상 없고 렌더가 크게 빠르다. local 의 quick 만
+    저해상도 테스트 모드로 남긴다.
+    """
     if engine == "modal":
-        # 배포된 함수 원격 호출 (사전 1회: modal deploy modal_render.py).
+        # 배포된 함수 원격 호출 (quick 여부와 무관하게 풀해상도 quality-fast).
         command = [
             _render_python(),
             str(MODAL_CALL_SCRIPT),
             "--travel-data",
             travel_data_path.relative_to(VIDEO_MAKER_DIR).as_posix(),
         ]
-        if quick:
-            command += ["--mode", "quality-fast"]
     else:
         command = [
             _render_python(),
@@ -219,8 +222,7 @@ def _build_command(
             "--travel-data",
             str(travel_data_path),
         ]
-        if quick:
-            command.append("--quick")
+        command.append("--quick" if quick else "--quality-fast")
     if theme != "default":
         command += ["--theme", theme]
     if light_preset:
