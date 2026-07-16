@@ -1,5 +1,5 @@
-# -*- coding: utf-8 -*-
-from fastapi import APIRouter, Form, Query, UploadFile
+﻿# -*- coding: utf-8 -*-
+from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
 from core.response import CommonResponse
@@ -86,7 +86,9 @@ def render_video(
     intro: str = Form("false", description='"true"면 TRAILER 인트로 클립을 앞에 붙임'),
     outro: str = Form("false", description='"true"면 TRAILER 아웃트로 클립을 뒤에 붙임'),
     photo_points: str = Form("[]", description="photos 각 파일이 속한 지점 인덱스 JSON 배열 (photos와 개수 일치)"),
-    photos: list[UploadFile] | None = None,
+    # fastapi 0.110 에서는 `list[UploadFile] | None = None` 이 422 를 내므로
+    # File([]) 기본값으로 선언해야 파일 없이도 빈 리스트로 들어온다.
+    photos: list[UploadFile] = File([], description="지점별 첨부 사진 파일들 (없으면 생략)"),
 ):
     photo_payloads = [
         (upload.filename or "", upload.file.read()) for upload in (photos or [])
