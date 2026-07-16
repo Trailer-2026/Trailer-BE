@@ -360,24 +360,26 @@ def cut_video(name: str, start_seconds: float, end_seconds: float) -> dict[str, 
     if not keep:
         raise BadRequestException("영상 전체를 삭제할 수는 없습니다.")
 
+    # concat 필터 입력은 세그먼트 단위로 [v0][a0][v1][a1]... 처럼 끼워 넣어야 한다.
     filters: list[str] = []
-    video_labels = audio_labels = ""
+    segment_labels: list[str] = []
     for i, (seg_start, seg_end) in enumerate(keep):
         rng = f"start={seg_start:.3f}" + (f":end={seg_end:.3f}" if seg_end is not None else "")
         filters.append(f"[0:v]trim={rng},setpts=PTS-STARTPTS[v{i}]")
-        video_labels += f"[v{i}]"
+        labels = f"[v{i}]"
         if info["has_audio"]:
             filters.append(f"[0:a]atrim={rng},asetpts=PTS-STARTPTS[a{i}]")
-            audio_labels += f"[a{i}]"
+            labels += f"[a{i}]"
+        segment_labels.append(labels)
 
     maps = ["-map", "[v]"]
     audio_args: list[str] = []
     if info["has_audio"]:
-        filters.append(f"{video_labels}{audio_labels}concat=n={len(keep)}:v=1:a=1[v][a]")
+        filters.append(f"{''.join(segment_labels)}concat=n={len(keep)}:v=1:a=1[v][a]")
         maps += ["-map", "[a]"]
         audio_args = ["-c:a", "aac", "-b:a", "192k"]
     else:
-        filters.append(f"{video_labels}concat=n={len(keep)}:v=1:a=0[v]")
+        filters.append(f"{''.join(segment_labels)}concat=n={len(keep)}:v=1:a=0[v]")
 
     target = _edited_output_path(source, "cut")
     started = time.perf_counter()

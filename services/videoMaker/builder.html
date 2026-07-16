@@ -435,7 +435,9 @@
         const res = await fetch(url, { method: "POST", body: fd });
         const body = await res.json();
         if (!res.ok) {
-          es.textContent = "❌ " + ((body.message || res.statusText) + "").split("\n")[0];
+          // ffmpeg 상세 원인이 뒷줄에 있으므로 줄바꿈만 접어 앞 220자를 보여준다.
+          es.textContent = "❌ " + ((body.message || res.statusText) + "")
+            .replace(/\s+/g, " ").slice(0, 220);
           return;
         }
         // 편집본이 새 현재 영상이 된다 (이어서 또 편집 가능).
