@@ -128,34 +128,23 @@
       }
     },
     autumn: {
-      // 가을: 녹지를 단풍빛(호박색)으로 물들이고, 따뜻하고 옅은 안개 낀 하늘에
-      // 주황갈색 낙엽이 옆으로 흩날린다.
-      lightPreset: null,
+      // 가을 낙조: 초저녁(dusk) 조명 위에 노을빛 안개를 얹고, 녹지를
+      // 단풍빛(호박색)으로 물들인다. 파티클 없음.
+      lightPreset: "dusk",
       fog: {
-        color: "rgb(244, 230, 208)",
-        "high-color": "rgb(126, 146, 184)",
-        "horizon-blend": 0.12,
-        "space-color": "rgb(44, 62, 98)",
-        "star-intensity": 0
+        color: "rgb(255, 178, 122)",       // 지평선의 주황 노을빛
+        "high-color": "rgb(146, 98, 156)", // 위로 갈수록 보랏빛 하늘
+        "horizon-blend": 0.18,
+        "space-color": "rgb(36, 28, 62)",
+        "star-intensity": 0.06
       },
       colorGrade: {
-        saturation: 1.35,
-        contrast: 1.08,
-        brightness: 0,
-        highlightWarmth: 0.12,
-        shadowCool: 0.03,
+        saturation: 1.3,
+        contrast: 1.06,
+        brightness: 0.01,
+        highlightWarmth: 0.22, // 하이라이트에 노을 기운
+        shadowCool: 0.05,
         greenToAmber: 0.8
-      },
-      snow: {
-        density: 0.15,
-        intensity: 0.12,
-        "center-thinning": 0.1,
-        direction: [60, 70],
-        opacity: 0.9,
-        color: "#d08a3e",
-        "flake-size": 1.3,
-        vignette: 0.06,
-        "vignette-color": "#e8c49a"
       }
     }
   };
