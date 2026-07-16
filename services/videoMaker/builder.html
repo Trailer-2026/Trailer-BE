@@ -33,7 +33,7 @@
       display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex: 0 0 auto;
     }
     .point .coord { font-size: 11px; color: #8b93a1; }
-    input[type="text"], select {
+    input[type="text"], input[type="number"], select {
       width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #2b313c;
       background: #0f1115; color: #e6e8eb; font-size: 13px;
     }
@@ -378,11 +378,8 @@
               `⏳ ${engineName} — ${st.phase} ${Math.round(st.percent)}%${frames}` +
               ` · ${Math.round(st.elapsed_seconds)}초 경과${eta}`;
           } else if (st.status === "done") {
-            status.textContent = `✅ 완료! [${st.engine}] ⏱ ${st.elapsed_seconds}초` +
-              (st.bgm ? ` (BGM: ${st.bgm})` : "");
-            result.innerHTML =
-              `<video src="${st.video_url}" controls autoplay loop></video>` +
-              `<a class="dl" href="${st.video_url}" download>⬇ 영상 다운로드</a>`;
+            showResult(st.video_url, `✅ 완료! [${st.engine}] ⏱ ${st.elapsed_seconds}초` +
+              (st.bgm ? ` (BGM: ${st.bgm})` : ""));
             break;
           } else {
             status.textContent = "❌ 실패: " + (st.error || "원인 불명").split("\n")[0];
@@ -395,6 +392,88 @@
         btn.disabled = false;
       }
     };
+
+    // ---------- 완성 영상 표시 + 편집 (구간 삭제 / 이미지 삽입) ----------
+    let currentVideoName = null;
+
+    function showResult(videoUrl, message) {
+      const status = document.getElementById("status");
+      const result = document.getElementById("result");
+      currentVideoName = videoUrl.split("/").pop();
+      if (message) status.textContent = message;
+      result.innerHTML = `
+        <video src="${videoUrl}" controls autoplay loop></video>
+        <a class="dl" href="${videoUrl}" download>⬇ 영상 다운로드</a>
+        <div class="section" style="margin-top:14px">
+          <h2>영상 편집</h2>
+          <label class="field">구간 삭제 — 해당 구간(초)을 잘라냅니다</label>
+          <div class="bgm-row">
+            <input type="number" id="cut-start" min="0" step="0.1" placeholder="시작 초" />
+            <input type="number" id="cut-end" min="0" step="0.1" placeholder="끝 초" />
+            <button class="btn tiny danger" id="cut-btn">✂ 삭제</button>
+          </div>
+          <label class="field" style="margin-top:10px">이미지 삽입 — 해당 구간(초)에 이미지를 띄웁니다</label>
+          <div class="bgm-row">
+            <input type="number" id="ov-start" min="0" step="0.1" placeholder="시작 초" />
+            <input type="number" id="ov-end" min="0" step="0.1" placeholder="끝 초" />
+          </div>
+          <div class="bgm-row" style="margin-top:6px">
+            <input type="file" id="ov-file" accept="image/*" />
+            <button class="btn tiny" id="ov-btn">🖼 삽입</button>
+          </div>
+          <div id="edit-status" class="hint" style="margin:8px 0 0"></div>
+        </div>`;
+      document.getElementById("cut-btn").onclick = editCut;
+      document.getElementById("ov-btn").onclick = editOverlay;
+    }
+
+    async function callEdit(url, fd, btn) {
+      const es = document.getElementById("edit-status");
+      btn.disabled = true;
+      es.textContent = "⏳ 편집 중...";
+      try {
+        const res = await fetch(url, { method: "POST", body: fd });
+        const body = await res.json();
+        if (!res.ok) {
+          es.textContent = "❌ " + ((body.message || res.statusText) + "").split("\n")[0];
+          return;
+        }
+        // 편집본이 새 현재 영상이 된다 (이어서 또 편집 가능).
+        showResult(body.data.video_url,
+          `✅ 편집 완료 — ${body.data.duration_seconds}초 영상 (처리 ${body.data.elapsed_seconds}초)`);
+      } catch (e) {
+        es.textContent = "❌ " + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function editCut() {
+      const s = parseFloat(document.getElementById("cut-start").value);
+      const e = parseFloat(document.getElementById("cut-end").value);
+      const es = document.getElementById("edit-status");
+      if (!Number.isFinite(s) || !Number.isFinite(e)) { es.textContent = "⚠ 시작/끝 초를 입력하세요."; return; }
+      const fd = new FormData();
+      fd.append("name", currentVideoName);
+      fd.append("start_seconds", s);
+      fd.append("end_seconds", e);
+      callEdit("/api/videos/edit/cut", fd, document.getElementById("cut-btn"));
+    }
+
+    function editOverlay() {
+      const s = parseFloat(document.getElementById("ov-start").value);
+      const e = parseFloat(document.getElementById("ov-end").value);
+      const file = document.getElementById("ov-file").files[0];
+      const es = document.getElementById("edit-status");
+      if (!Number.isFinite(s) || !Number.isFinite(e)) { es.textContent = "⚠ 시작/끝 초를 입력하세요."; return; }
+      if (!file) { es.textContent = "⚠ 삽입할 이미지를 선택하세요."; return; }
+      const fd = new FormData();
+      fd.append("name", currentVideoName);
+      fd.append("start_seconds", s);
+      fd.append("end_seconds", e);
+      fd.append("image", file);
+      callEdit("/api/videos/edit/overlay", fd, document.getElementById("ov-btn"));
+    }
 
     document.getElementById("theme").addEventListener("change", applyBuilderTheme);
     document.getElementById("light").addEventListener("change", applyBuilderTheme);
