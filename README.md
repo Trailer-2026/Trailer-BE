@@ -186,6 +186,11 @@ See also: #456, #789
 ```ini
 [app]
 db.url = mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4
+
+[mapbox]
+; services/videoMaker 렌더러/빌더용 Mapbox 공개 토큰
+; (없으면 services/videoMaker/.env 의 MAPBOX_ACCESS_TOKEN 폴백 — Modal 등 단독 실행용)
+access_token = pk.your_public_token_here
 ```
 
 ---

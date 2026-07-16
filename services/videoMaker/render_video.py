@@ -451,8 +451,27 @@ def ensure_directories() -> None:
 
 
 def load_token() -> str | None:
-    load_dotenv(ROOT / ".env")
-    token = os.getenv("MAPBOX_ACCESS_TOKEN")
+    """Mapbox 토큰 로드.
+
+    1순위: 백엔드 공통 설정 config/properties_dev.ini 의 [mapbox] access_token
+           (다른 API 키들과 동일한 Config.read 구조).
+    폴백: 이 디렉터리의 .env (MAPBOX_ACCESS_TOKEN) — Modal 컨테이너처럼
+          백엔드 루트 없이 단독 실행되는 환경용.
+    """
+    token = None
+    backend_root = ROOT.parent.parent
+    if (backend_root / "config" / "__init__.py").exists():
+        if str(backend_root) not in sys.path:
+            sys.path.insert(0, str(backend_root))
+        try:
+            from config import Config
+
+            token = Config.read("mapbox", "access_token")
+        except Exception:
+            token = None
+    if not token:
+        load_dotenv(ROOT / ".env")
+        token = os.getenv("MAPBOX_ACCESS_TOKEN")
     if not token or token.strip() == "":
         return None
     return token.strip()

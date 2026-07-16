@@ -47,7 +47,29 @@ ALLOWED_THEMES = {"default", "spring", "summer", "autumn", "winter"}
 # Standard 스타일 시간대 조명 (빈 값 = 테마 기본).
 ALLOWED_LIGHT_PRESETS = {"", "dawn", "day", "dusk", "night"}
 
-load_dotenv(ROOT / ".env")
+def _load_mapbox_token() -> str:
+    """Mapbox 토큰 로드 — render_video.load_token 과 동일 규칙.
+
+    1순위: 백엔드 공통 설정 config/properties_dev.ini 의 [mapbox] access_token,
+    폴백: 이 디렉터리의 .env (단독 실행 환경용).
+    """
+    backend_root = ROOT.parent.parent
+    if (backend_root / "config" / "__init__.py").exists():
+        if str(backend_root) not in sys.path:
+            sys.path.insert(0, str(backend_root))
+        try:
+            from config import Config
+
+            token = Config.read("mapbox", "access_token")
+            if token and token.strip():
+                return token.strip()
+        except Exception:
+            pass
+    load_dotenv(ROOT / ".env")
+    return os.environ.get("MAPBOX_ACCESS_TOKEN", "").strip()
+
+
+MAPBOX_TOKEN = _load_mapbox_token()
 
 app = FastAPI(title="videoMaker builder")
 
@@ -96,8 +118,7 @@ async def index() -> HTMLResponse:
     if not BUILDER_HTML.exists():
         raise HTTPException(status_code=500, detail="builder.html missing")
     html = BUILDER_HTML.read_text(encoding="utf-8")
-    token = os.environ.get("MAPBOX_ACCESS_TOKEN", "")
-    html = html.replace("__MAPBOX_TOKEN__", token)
+    html = html.replace("__MAPBOX_TOKEN__", MAPBOX_TOKEN)
     return HTMLResponse(html)
 
 
