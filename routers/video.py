@@ -1,9 +1,9 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
 from core.response import CommonResponse
-from schemas.video_schema import BgmTrackResponse, VideoRenderResponse
+from schemas.video_schema import BgmTrackResponse, VideoRenderStatusResponse
 from services import video_service
 
 router = APIRouter(prefix="/api/videos", tags=["Video"])
@@ -68,13 +68,13 @@ def get_output_video(name: str) -> FileResponse:
 
 @router.post(
     "/render",
-    summary="여행 경로 영상 렌더링",
+    summary="여행 경로 영상 렌더링 시작",
     description="GPS 지점 목록(points)과 지점별 사진, BGM/테마/조명/인트로·아웃트로 옵션을 "
-                "받아 세로형(1080x1920) 3D 지도 여행 영상을 렌더링합니다. multipart/form-data "
-                "요청이며, 완료까지 수 분간 블로킹됩니다(최대 30분). engine=local 은 서버 GPU, "
-                "engine=modal 은 Modal T4 클라우드에서 렌더링합니다. 렌더 실패/시간 초과 시 "
-                "502(ExternalServiceException)를 반환합니다.",
-    response_model=CommonResponse[VideoRenderResponse],
+                "받아 세로형(1080x1920) 3D 지도 여행 영상 렌더링을 시작하고 job_id 를 즉시 "
+                "반환합니다(multipart/form-data). 진행률·완료 여부는 "
+                "GET /api/videos/render/{job_id} 로 폴링하세요. engine=local 은 서버 GPU, "
+                "engine=modal 은 Modal T4 클라우드에서 렌더링합니다.",
+    response_model=CommonResponse[VideoRenderStatusResponse],
 )
 def render_video(
     points: str = Form(..., description='GPS 지점 JSON 배열 문자열: [{"latitude","longitude","name"}, ...] (최소 2개)'),
@@ -93,7 +93,7 @@ def render_video(
     photo_payloads = [
         (upload.filename or "", upload.file.read()) for upload in (photos or [])
     ]
-    result = video_service.render(
+    job = video_service.start_render(
         points_json=points,
         photo_points_json=photo_points,
         photos=photo_payloads,
@@ -105,4 +105,18 @@ def render_video(
         intro=intro.lower().strip() == "true",
         outro=outro.lower().strip() == "true",
     )
-    return CommonResponse.success_response("영상 렌더링 성공", data=result)
+    return CommonResponse.success_response("영상 렌더링 시작", data=job)
+
+
+@router.get(
+    "/render/{job_id}",
+    summary="영상 렌더링 진행률 조회",
+    description="렌더 작업의 진행률(percent), 현재 단계, 경과/예상 남은 시간을 반환합니다. "
+                "status 가 done 이면 video_url 로 영상을 받을 수 있고, failed 면 error 에 "
+                "사유가 담깁니다. 존재하지 않는 job_id 면 404를 반환합니다. "
+                "작업 목록은 서버 메모리에만 유지되므로 서버 재시작 시 사라집니다.",
+    response_model=CommonResponse[VideoRenderStatusResponse],
+)
+def get_render_status(job_id: str):
+    status = video_service.get_render_job(job_id)
+    return CommonResponse.success_response("렌더링 상태 조회 성공", data=status)

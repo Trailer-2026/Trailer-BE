@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -260,7 +261,28 @@ def _parse_output_name(stdout: str, marker: str) -> str | None:
     return None
 
 
-def render(
+# --------------------------------------------------------------------------- #
+# 렌더 작업(job) 관리 — 진행률 조회를 위해 비동기로 돌린다.
+#
+# POST /render 는 job_id 를 즉시 반환하고, 렌더 서브프로세스는 데몬 스레드에서
+# stdout 을 한 줄씩 읽으며 진행률을 갱신한다. 클라이언트는 GET /render/{job_id}
+# 로 폴링한다. 레지스트리는 인메모리라 서버 재시작(--reload 포함) 시 사라진다.
+# --------------------------------------------------------------------------- #
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+# render_video.py 가 15프레임마다 찍는 "[perf:frame] 000060/000127 ..." 라인.
+_FRAME_PROGRESS_RE = re.compile(r"\[perf:frame\]\s*(\d+)/(\d+)")
+# 프레임 이후 후처리 마커 → 해당 시점의 percent.
+_POSTPROCESS_MARKS = [
+    ("렌더링 완료", 92.0, "영상 인코딩 마무리"),
+    ("BGM 합성 완료", 95.0, "후처리(BGM)"),
+    ("인트로 합성 완료", 97.0, "후처리(인트로)"),
+    ("아웃트로 합성 완료", 98.0, "후처리(아웃트로)"),
+]
+
+
+def start_render(
     points_json: str,
     photo_points_json: str,
     photos: list[tuple[str, bytes]],
@@ -272,7 +294,7 @@ def render(
     intro: bool = False,
     outro: bool = False,
 ) -> dict[str, object]:
-    """영상을 렌더링하고 결과 메타데이터(dict)를 반환한다. 완료까지 블로킹."""
+    """입력을 검증하고 렌더 작업을 시작한 뒤 job 상태(dict)를 즉시 반환한다."""
     engine = (engine or "local").lower().strip()
     if engine not in {"local", "modal"}:
         raise BadRequestException(f"알 수 없는 엔진: {engine}")
@@ -283,48 +305,162 @@ def render(
     if light_preset not in ALLOWED_LIGHT_PRESETS:
         raise BadRequestException(f"알 수 없는 조명: {light_preset}")
 
+    # 검증 오류(400)는 여기서 동기적으로 발생시키고, 스레드는 그 뒤에 띄운다.
     travel_data_path, bgm_path = _build_travel_data(points_json, photo_points_json, photos, bgm)
     command, marker = _build_command(
         travel_data_path, engine, quick, theme, light_preset, intro, outro
     )
 
-    render_started = time.perf_counter()
-    # Windows 파이프 기본 인코딩(cp949)과 어긋나지 않게 자식 stdout 을 utf-8 로 고정
-    # ("출력 예정 파일:" 등 한국어 마커 파싱이 깨지지 않도록).
-    child_env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-    try:
-        result = subprocess.run(
-            command,
-            cwd=str(VIDEO_MAKER_DIR),
-            env=child_env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=RENDER_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise ExternalServiceException("렌더링이 제한 시간(30분)을 초과했습니다.") from error
-    elapsed_seconds = round(time.perf_counter() - render_started, 1)
-
-    stdout = result.stdout or ""
-    stderr = result.stderr or ""
-    if result.returncode != 0:
-        tail = (stdout + "\n" + stderr)[-2000:]
-        raise ExternalServiceException(f"렌더링 실패:\n{tail}")
-
-    output_name = _parse_output_name(stdout, marker)
-    if output_name is None:
-        raise ExternalServiceException("출력 파일 경로를 확인할 수 없습니다.")
-
-    return {
-        "video_url": f"/api/videos/output/{output_name}",
+    job = {
+        "job_id": uuid.uuid4().hex[:12],
+        "status": "running",
+        "phase": "렌더 준비 중",
+        "percent": 0.0,
+        "frame": 0,
+        "total_frames": None,
+        "started_at": time.time(),
+        "elapsed_seconds": 0.0,
+        "eta_seconds": None,
         "engine": engine,
         "theme": theme,
         "light_preset": light_preset or None,
         "intro": intro,
         "outro": outro,
         "bgm": bgm_path.name if bgm_path else None,
-        "elapsed_seconds": elapsed_seconds,
-        "log_tail": stdout[-2000:],
+        "video_url": None,
+        "error": None,
+        "log_tail": "",
     }
+    with _jobs_lock:
+        _jobs[job["job_id"]] = job
+    threading.Thread(
+        target=_run_render_job, args=(job, command, marker), daemon=True
+    ).start()
+    return _job_snapshot(job)
+
+
+def get_render_job(job_id: str) -> dict[str, object]:
+    """렌더 작업의 현재 상태를 반환한다 (진행률·경과·예상 남은 시간 포함)."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise NotFoundException("렌더 작업을 찾을 수 없습니다.")
+    return _job_snapshot(job)
+
+
+def _job_snapshot(job: dict) -> dict[str, object]:
+    with _jobs_lock:
+        snapshot = dict(job)
+    if snapshot["status"] == "running":
+        snapshot["elapsed_seconds"] = round(time.time() - snapshot["started_at"], 1)
+        # 초반(5% 미만)은 표본이 적어 ETA 가 크게 튀므로 생략.
+        if snapshot["percent"] >= 5:
+            remaining = snapshot["elapsed_seconds"] * (100 - snapshot["percent"]) / snapshot["percent"]
+            snapshot["eta_seconds"] = round(remaining, 1)
+    snapshot.pop("started_at", None)
+    return snapshot
+
+
+def _run_render_job(job: dict, command: list[str], marker: str) -> None:
+    """렌더 서브프로세스를 돌리며 stdout 마커로 job 진행률을 갱신한다 (스레드)."""
+
+    def update(**fields) -> None:
+        with _jobs_lock:
+            job.update(fields)
+
+    # PYTHONIOENCODING: Windows 파이프 기본 cp949 로 한국어 마커가 깨지지 않게.
+    # PYTHONUNBUFFERED: 자식 print 가 파이프에서 버퍼링되지 않고 실시간 스트리밍되게.
+    child_env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(VIDEO_MAKER_DIR),
+            env=child_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as error:
+        update(status="failed", error=f"렌더 프로세스 시작 실패: {error}")
+        return
+
+    # 30분 하드 캡 — 넘으면 프로세스를 죽인다 (아래 read 루프가 EOF 로 끝남).
+    timeout_fired = threading.Event()
+
+    def _kill_on_timeout() -> None:
+        timeout_fired.set()
+        process.kill()
+
+    watchdog = threading.Timer(RENDER_TIMEOUT_SECONDS, _kill_on_timeout)
+    watchdog.daemon = True
+    watchdog.start()
+
+    lines: list[str] = []
+    try:
+        for line in process.stdout:
+            line = line.rstrip("\n")
+            lines.append(line)
+            if len(lines) > 5000:
+                del lines[:1000]
+
+            match = _FRAME_PROGRESS_RE.search(line)
+            if match:
+                frame, total = int(match.group(1)), int(match.group(2))
+                # 프레임 렌더 구간을 5% → 90% 에 매핑 (앞뒤는 준비/후처리).
+                percent = 5 + (frame / total) * 85 if total else 5
+                update(
+                    frame=frame,
+                    total_frames=total,
+                    percent=round(percent, 1),
+                    phase="프레임 렌더링",
+                )
+                continue
+            for mark, percent, phase in _POSTPROCESS_MARKS:
+                if mark in line:
+                    update(percent=percent, phase=phase)
+                    break
+        returncode = process.wait()
+    finally:
+        watchdog.cancel()
+
+    stdout = "\n".join(lines)
+    elapsed = round(time.time() - job["started_at"], 1)
+
+    if timeout_fired.is_set():
+        update(
+            status="failed",
+            error="렌더링이 제한 시간(30분)을 초과했습니다.",
+            elapsed_seconds=elapsed,
+            log_tail=stdout[-2000:],
+        )
+        return
+    if returncode != 0:
+        update(
+            status="failed",
+            error=f"렌더링 실패:\n{stdout[-2000:]}",
+            elapsed_seconds=elapsed,
+            log_tail=stdout[-2000:],
+        )
+        return
+
+    output_name = _parse_output_name(stdout, marker)
+    if output_name is None:
+        update(
+            status="failed",
+            error="출력 파일 경로를 확인할 수 없습니다.",
+            elapsed_seconds=elapsed,
+            log_tail=stdout[-2000:],
+        )
+        return
+
+    update(
+        status="done",
+        phase="완료",
+        percent=100.0,
+        video_url=f"/api/videos/output/{output_name}",
+        elapsed_seconds=elapsed,
+        eta_seconds=0.0,
+        log_tail=stdout[-2000:],
+    )

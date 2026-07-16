@@ -334,13 +334,7 @@
       btn.disabled = true;
       const engineName = document.getElementById("engine").value === "modal"
         ? "Modal T4 (클라우드)" : "내 GPU (로컬)";
-      const startMs = Date.now();
-      const tick = () => {
-        const s = ((Date.now() - startMs) / 1000).toFixed(0);
-        status.textContent = `⏳ 렌더링 중 — ${engineName}... ${s}초 경과`;
-      };
-      tick();
-      const timer = setInterval(tick, 1000);
+      status.textContent = `⏳ 렌더링 시작 중 — ${engineName}...`;
 
       const fd = new FormData();
       fd.append("points", JSON.stringify(points.map((p) => ({
@@ -362,24 +356,42 @@
       fd.append("photo_points", JSON.stringify(owners));
 
       try {
+        // 렌더링 시작 → job_id 를 받고, 완료까지 1.5초 간격으로 진행률 폴링.
         const res = await fetch("/api/videos/render", { method: "POST", body: fd });
         const body = await res.json();
         if (!res.ok) {
           status.textContent = "❌ 실패: " + (body.message || body.detail || res.statusText);
-        } else {
-          const data = body.data || {};
-          const took = (data.elapsed_seconds != null)
-            ? ` ⏱ ${data.elapsed_seconds}초` : "";
-          status.textContent = "✅ 완료! [" + (data.engine || "local") + "]" + took +
-            (data.bgm ? " (BGM: " + data.bgm + ")" : "");
-          result.innerHTML =
-            `<video src="${data.video_url}" controls autoplay loop></video>` +
-            `<a class="dl" href="${data.video_url}" download>⬇ 영상 다운로드</a>`;
+          return;
+        }
+        const jobId = body.data.job_id;
+        while (true) {
+          await new Promise((r) => setTimeout(r, 1500));
+          let st;
+          try {
+            st = (await (await fetch(`/api/videos/render/${jobId}`)).json()).data;
+          } catch (e) { continue; } // 일시적 폴링 실패는 무시하고 재시도
+          if (!st) continue;
+          if (st.status === "running") {
+            const frames = st.total_frames ? ` (${st.frame}/${st.total_frames} 프레임)` : "";
+            const eta = st.eta_seconds != null ? ` · 남은 예상 ${Math.round(st.eta_seconds)}초` : "";
+            status.textContent =
+              `⏳ ${engineName} — ${st.phase} ${Math.round(st.percent)}%${frames}` +
+              ` · ${Math.round(st.elapsed_seconds)}초 경과${eta}`;
+          } else if (st.status === "done") {
+            status.textContent = `✅ 완료! [${st.engine}] ⏱ ${st.elapsed_seconds}초` +
+              (st.bgm ? ` (BGM: ${st.bgm})` : "");
+            result.innerHTML =
+              `<video src="${st.video_url}" controls autoplay loop></video>` +
+              `<a class="dl" href="${st.video_url}" download>⬇ 영상 다운로드</a>`;
+            break;
+          } else {
+            status.textContent = "❌ 실패: " + (st.error || "원인 불명").split("\n")[0];
+            break;
+          }
         }
       } catch (e) {
         status.textContent = "❌ 요청 실패: " + e.message;
       } finally {
-        clearInterval(timer);
         btn.disabled = false;
       }
     };
