@@ -72,7 +72,7 @@ def get_output_video(name: str) -> FileResponse:
 
 @router.post(
     "/render",
-    summary="여행 경로 영상 렌더링 시작",
+    summary="좌표 직접 입력으로 영상 렌더링 시작",
     description="GPS 지점 목록(points)과 지점별 사진, BGM/테마/조명/인트로·아웃트로 옵션을 "
                 "받아 세로형(1080x1920) 3D 지도 여행 영상 렌더링을 시작하고 job_id 를 즉시 "
                 "반환합니다(multipart/form-data). 진행률·완료 여부는 "
@@ -108,6 +108,51 @@ def render_video(
         light_preset=light_preset,
         intro=intro.lower().strip() == "true",
         outro=outro.lower().strip() == "true",
+    )
+    return CommonResponse.success_response("영상 렌더링 시작", data=job)
+
+
+@router.post(
+    "/render/photos-only",
+    summary="사진만으로 영상 렌더링 시작 (여행 ID 없이)",
+    description="여행 ID나 좌표 입력 없이, 업로드한 사진들의 EXIF 메타데이터에서 GPS 좌표와 "
+                "촬영 시각을 추출해 촬영 시각 순서대로 지점을 이동하며 각 지점에서 해당 사진을 "
+                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률 폴링은 "
+                "POST /render 와 동일). "
+                "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
+                "GPS 없는 사진은 자동 제외되고 같은 장소(150m 이내) 연속 사진은 한 지점으로 "
+                "묶입니다. start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 "
+                "삼아 첫 사진 지점으로 이동하며 시작합니다. 조건을 못 채우면 400을 반환합니다.",
+    response_model=CommonResponse[VideoRenderStatusResponse],
+)
+def render_video_photos_only(
+    start_name: str = Form("", description="출발지 라벨 (예: 서울역, 기본 '출발')"),
+    start_latitude: float | None = Form(None, description="출발지 위도 (경도와 함께 지정, 생략 시 첫 사진 위치에서 시작)"),
+    start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
+    bgm: str = Form("", description="BGM 파일명 (GET /api/videos/bgm 의 file 값, 빈 값이면 무음)"),
+    quick: str = Form("false", description='"true"면 저해상도 빠른 렌더'),
+    engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
+    theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
+    light_preset: str = Form("", description="시간대 조명: dawn|day|dusk|night (빈 값 = 테마 기본)"),
+    intro: str = Form("false", description='"true"면 TRAILER 인트로 클립을 앞에 붙임'),
+    outro: str = Form("false", description='"true"면 TRAILER 아웃트로 클립을 뒤에 붙임'),
+    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장)"),
+):
+    photo_payloads = [
+        (upload.filename or "", upload.file.read()) for upload in photos
+    ]
+    job = video_service.start_render_photos_only(
+        photos=photo_payloads,
+        bgm=bgm,
+        quick=quick.lower().strip() == "true",
+        engine=engine,
+        theme=theme,
+        light_preset=light_preset,
+        intro=intro.lower().strip() == "true",
+        outro=outro.lower().strip() == "true",
+        start_name=start_name,
+        start_latitude=start_latitude,
+        start_longitude=start_longitude,
     )
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
 
