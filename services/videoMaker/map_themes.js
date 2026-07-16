@@ -128,23 +128,26 @@
       }
     },
     autumn: {
-      // 가을 낙조: 초저녁(dusk) 조명 위에 노을빛 안개를 얹고, 녹지를
-      // 단풍빛(호박색)으로 물들인다. 파티클 없음.
+      // 가을 낙조: dusk 조명으로 해질녘의 어스름을 살리되, 전역 금빛 틴트
+      // (amberTint)와 밝기 보정으로 저녁처럼 어둡지 않게 노랗게 물들인다.
+      // 화면 밝기는 lightPreset 이 지배한다 — dawn 은 너무 환하고 dusk 가 노을.
+      // 파티클 없음.
       lightPreset: "dusk",
       fog: {
-        color: "rgb(255, 178, 122)",       // 지평선의 주황 노을빛
-        "high-color": "rgb(146, 98, 156)", // 위로 갈수록 보랏빛 하늘
-        "horizon-blend": 0.18,
-        "space-color": "rgb(36, 28, 62)",
-        "star-intensity": 0.06
+        color: "rgb(255, 150, 74)",         // 지평선의 주황 노을(해질녘 태양빛)
+        "high-color": "rgb(196, 106, 116)", // 위로 갈수록 붉은 살구빛 하늘
+        "horizon-blend": 0.17,
+        "space-color": "rgb(48, 34, 72)",
+        "star-intensity": 0.04
       },
       colorGrade: {
-        saturation: 1.3,
-        contrast: 1.06,
-        brightness: 0.01,
-        highlightWarmth: 0.22, // 하이라이트에 노을 기운
-        shadowCool: 0.05,
-        greenToAmber: 0.8
+        saturation: 1.25,
+        contrast: 1.03,
+        brightness: 0.07,     // dusk 의 어둠을 한 단계만 걷어냄
+        highlightWarmth: 0.2,
+        shadowCool: 0.02,
+        greenToAmber: 0.8,
+        amberTint: 0.12       // 화면 전체에 얹는 노을빛 (아래 LUT 참고)
       }
     }
   };
@@ -197,6 +200,14 @@
             rr += greenness * grade.greenToPink;
             bb += greenness * grade.greenToPink * 0.55;
             gg -= greenness * grade.greenToPink * 0.12;
+          }
+          // 화면 전체에 은은한 금빛 틴트 (밝은 영역일수록 강하게 → 노을빛 도시).
+          // 어두운 dusk 장면에서도 노란 기운이 돌게 luma 기반 warmth 를 보완한다.
+          if (grade.amberTint) {
+            const lightness = (rr + gg + bb) / 3;
+            rr += grade.amberTint * (0.4 + 0.6 * lightness);
+            gg += grade.amberTint * 0.72 * (0.4 + 0.6 * lightness);
+            bb -= grade.amberTint * 0.35;
           }
           // 화면 전체에 은은한 분홍 틴트 (밝은 영역일수록 강하게 → 벚꽃빛 도시).
           if (grade.pinkTint) {
