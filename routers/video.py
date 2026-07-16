@@ -3,7 +3,11 @@ from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
 from core.response import CommonResponse
-from schemas.video_schema import BgmTrackResponse, VideoRenderStatusResponse
+from schemas.video_schema import (
+    BgmTrackResponse,
+    VideoEditResponse,
+    VideoRenderStatusResponse,
+)
 from services import video_service
 
 router = APIRouter(prefix="/api/videos", tags=["Video"])
@@ -106,6 +110,23 @@ def render_video(
         outro=outro.lower().strip() == "true",
     )
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
+
+
+@router.post(
+    "/edit/cut",
+    summary="영상 구간 삭제",
+    description="완성 영상에서 [시작, 끝) 구간을 잘라낸 새 영상을 만듭니다. 원본은 보존되며 "
+                "편집본은 새 파일명으로 저장됩니다. 구간이 잘못됐거나 영상 전체를 지우려 하면 "
+                "400, 영상이 없으면 404, ffmpeg 처리 실패 시 502를 반환합니다.",
+    response_model=CommonResponse[VideoEditResponse],
+)
+def cut_video_section(
+    name: str = Form(..., description="편집할 완성 영상 파일명 (video_url 마지막 경로 요소)"),
+    start_seconds: float = Form(..., description="삭제 구간 시작(초)"),
+    end_seconds: float = Form(..., description="삭제 구간 끝(초)"),
+):
+    result = video_service.cut_video(name, start_seconds, end_seconds)
+    return CommonResponse.success_response("구간 삭제 성공", data=result)
 
 
 @router.get(

@@ -11,6 +11,14 @@ class BgmTrackResponse(BaseModel):
     source: str = Field(..., description="음원 출처 (예: Pixabay, 없으면 빈 문자열)")
 
 
+class VideoEditResponse(BaseModel):
+    """완성 영상 편집(구간 삭제 / 이미지 삽입) 결과."""
+
+    video_url: str = Field(..., description="편집된 새 영상 경로 (GET /api/videos/output/{name}) — 원본은 보존")
+    duration_seconds: float = Field(..., description="편집 후 영상 길이(초)")
+    elapsed_seconds: float = Field(..., description="편집 처리 시간(초)")
+
+
 class VideoRenderStatusResponse(BaseModel):
     """여행 경로 3D 영상 렌더 작업 상태 (시작 응답·진행률 폴링 공용).
 

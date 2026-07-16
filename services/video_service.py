@@ -262,6 +262,131 @@ def _parse_output_name(stdout: str, marker: str) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
+# 완성 영상 편집 (ffmpeg 후처리) — 구간 삭제 / 이미지 오버레이
+# --------------------------------------------------------------------------- #
+EDIT_TIMEOUT_SECONDS = 60 * 5
+# 렌더러와 같은 계열의 인코딩 (정확한 컷을 위해 재인코딩 필수 — 스트림 카피는
+# 키프레임 단위로만 잘려 구간이 밀린다).
+_EDIT_VIDEO_ARGS = [
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+    "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+]
+
+
+def _ffprobe_video(path: Path) -> dict[str, object]:
+    """영상 메타데이터 조회: {duration, has_audio, width, height}."""
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        raise ExternalServiceException("ffprobe를 찾을 수 없습니다 (PATH 확인).")
+    result = subprocess.run(
+        [
+            ffprobe, "-v", "error",
+            "-show_entries", "format=duration:stream=codec_type,width,height",
+            "-of", "json", str(path),
+        ],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+    if result.returncode != 0:
+        raise ExternalServiceException(f"영상 정보를 읽지 못했습니다:\n{(result.stderr or '')[-500:]}")
+    info = json.loads(result.stdout or "{}")
+    streams = info.get("streams", [])
+    video_stream = next((s for s in streams if s.get("codec_type") == "video"), {})
+    return {
+        "duration": float(info.get("format", {}).get("duration", 0) or 0),
+        "has_audio": any(s.get("codec_type") == "audio" for s in streams),
+        "width": int(video_stream.get("width", 0) or 0),
+        "height": int(video_stream.get("height", 0) or 0),
+    }
+
+
+def _edited_output_path(source: Path, tag: str) -> Path:
+    """원본 이름 뒤에 _<tag>N 을 붙인, 아직 없는 출력 경로를 반환한다."""
+    index = 1
+    while True:
+        candidate = OUTPUT_DIR / f"{source.stem}_{tag}{index}.mp4"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def _run_ffmpeg(args: list[str]) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise ExternalServiceException("ffmpeg를 찾을 수 없습니다 (PATH 확인).")
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", *args],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=EDIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ExternalServiceException("영상 편집이 제한 시간(5분)을 초과했습니다.") from error
+    if result.returncode != 0:
+        raise ExternalServiceException(f"영상 편집 실패:\n{(result.stderr or '')[-1500:]}")
+
+
+def _edit_result(source_started: float, target: Path) -> dict[str, object]:
+    info = _ffprobe_video(target)
+    return {
+        "video_url": f"/api/videos/output/{target.name}",
+        "duration_seconds": round(float(info["duration"]), 2),
+        "elapsed_seconds": round(time.perf_counter() - source_started, 1),
+    }
+
+
+def cut_video(name: str, start_seconds: float, end_seconds: float) -> dict[str, object]:
+    """완성 영상에서 [start, end) 구간을 잘라낸 새 영상을 만든다."""
+    source = get_output_path(name)
+    info = _ffprobe_video(source)
+    duration = float(info["duration"])
+    start, end = float(start_seconds), float(end_seconds)
+    if start < 0 or end <= start:
+        raise BadRequestException("삭제 구간이 올바르지 않습니다 (0 ≤ 시작 < 끝).")
+    if start >= duration:
+        raise BadRequestException(f"시작 시각이 영상 길이({duration:.1f}초)를 넘습니다.")
+    end = min(end, duration)
+
+    # 남길 구간 목록: (시작, 끝|None=영상 끝까지). 경계에 붙은 삭제면 한 구간만 남는다.
+    eps = 0.05
+    keep: list[tuple[float, float | None]] = []
+    if start > eps:
+        keep.append((0.0, start))
+    if end < duration - eps:
+        keep.append((end, None))
+    if not keep:
+        raise BadRequestException("영상 전체를 삭제할 수는 없습니다.")
+
+    filters: list[str] = []
+    video_labels = audio_labels = ""
+    for i, (seg_start, seg_end) in enumerate(keep):
+        rng = f"start={seg_start:.3f}" + (f":end={seg_end:.3f}" if seg_end is not None else "")
+        filters.append(f"[0:v]trim={rng},setpts=PTS-STARTPTS[v{i}]")
+        video_labels += f"[v{i}]"
+        if info["has_audio"]:
+            filters.append(f"[0:a]atrim={rng},asetpts=PTS-STARTPTS[a{i}]")
+            audio_labels += f"[a{i}]"
+
+    maps = ["-map", "[v]"]
+    audio_args: list[str] = []
+    if info["has_audio"]:
+        filters.append(f"{video_labels}{audio_labels}concat=n={len(keep)}:v=1:a=1[v][a]")
+        maps += ["-map", "[a]"]
+        audio_args = ["-c:a", "aac", "-b:a", "192k"]
+    else:
+        filters.append(f"{video_labels}concat=n={len(keep)}:v=1:a=0[v]")
+
+    target = _edited_output_path(source, "cut")
+    started = time.perf_counter()
+    _run_ffmpeg([
+        "-i", str(source),
+        "-filter_complex", ";".join(filters),
+        *maps, *_EDIT_VIDEO_ARGS, *audio_args,
+        str(target),
+    ])
+    return _edit_result(started, target)
+
+
+# --------------------------------------------------------------------------- #
 # 렌더 작업(job) 관리 — 진행률 조회를 위해 비동기로 돌린다.
 #
 # POST /render 는 job_id 를 즉시 반환하고, 렌더 서브프로세스는 데몬 스레드에서
