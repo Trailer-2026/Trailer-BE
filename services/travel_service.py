@@ -13,10 +13,12 @@ from core.exceptions.custom import BadRequestException, NotFoundException
 from databases.daos import schedule_dao, station_dao, travel_dao
 from schemas.travel_schema import (
     HomeTravelCard,
+    TrainTicketResponse,
     TravelDayGroup,
     TravelDetailResponse,
     TravelResponse,
     TravelScheduleItem,
+    TravelTicketsResponse,
 )
 from utils import plan_cache
 from utils.timezone import now_kst
@@ -114,6 +116,35 @@ def travel_detail(db: Session, user, travel_idx: int) -> TravelDetailResponse:
         status=_effective_status(travel.start_date, travel.end_date, today),
         days=[groups[k] for k in sorted(groups)],
     )
+
+
+def travel_tickets(db: Session, user, travel_idx: int) -> TravelTicketsResponse:
+    """여행 1건의 승차권 목록 — AI 추천 일정을 승인(저장)한 여행에서만 조회할 수 있다.
+
+    travel 행은 추천 플랜 승인 시에만 생기므로, 본인 여행 존재 확인이 곧 승인 여부 검증이다.
+    미승인(저장 안 됨)·타인 여행은 404. 승차권은 kind=train 일정에서 만들며, 좌석·호차·타는곳
+    등 예매 정보는 보유하지 않아 응답에 포함하지 않는다.
+    """
+    travel = travel_dao.get_by_idx(db, travel_idx)
+    if travel is None or travel.user_idx != user.user_idx:
+        raise NotFoundException("승인된 여행 일정을 찾을 수 없습니다.")
+
+    trains = schedule_dao.list_trains_by_travel(db, travel_idx)
+    tickets = [
+        TrainTicketResponse(
+            schedule_idx=s.schedule_idx,
+            day_no=s.day_no,
+            date=travel.start_date + timedelta(days=s.day_no - 1),
+            train_grade=s.train_grade or "",
+            train_no=s.train_no or "",
+            dep_station=s.dep_station or "",
+            arr_station=s.arr_station or "",
+            dep_time=s.start_time,
+            arr_time=s.end_time,
+        )
+        for s in trains
+    ]
+    return TravelTicketsResponse(travel_idx=travel.travel_idx, tickets=tickets)
 
 
 def _travel_title(region: str | None, start: date, end: date, fallback: str | None) -> str:
