@@ -73,6 +73,33 @@ class TravelScheduleItem(BaseModel):
     memo: str | None = Field(None, description="메모. 없으면 null", examples=[None])
 
 
+class TrainTicketResponse(BaseModel):
+    """승차권 1매 — 승인(저장)된 여행의 기차 일정(schedule kind=train) 1건.
+
+    승차권 화면에 실제로 그릴 수 있는 정보만 담는다. 타는곳 번호·호차·좌석번호·운임 등
+    예매 정보는 서버가 보유하지 않아 제공하지 않는다.
+    """
+
+    schedule_idx: int = Field(..., description="일정 항목 PK", examples=[3])
+    day_no: int = Field(..., description="여행 일자 (day1=1) — 'DAY 01' 표기용", examples=[1])
+    date: DateType = Field(..., description="승차 일자 (여행 시작일 + day_no-1)", examples=["2026-07-03"])
+    train_grade: str = Field(..., description="열차 등급", examples=["KTX"])
+    train_no: str = Field(..., description="열차번호 (앞자리 0 제거)", examples=["111"])
+    dep_station: str = Field(..., description="출발역명 (접미사 '역' 없음)", examples=["서울"])
+    arr_station: str = Field(..., description="도착역명 (접미사 '역' 없음)", examples=["부산"])
+    dep_time: time = Field(..., description="출발 시각 (HH:MM:SS)", examples=["08:00:00"])
+    arr_time: time = Field(..., description="도착 시각 (HH:MM:SS)", examples=["14:00:00"])
+
+
+class TravelTicketsResponse(BaseModel):
+    """여행 1건의 승차권 목록 — 승인(저장)된 AI 추천 일정에서만 조회 가능."""
+
+    travel_idx: int = Field(..., description="여행 PK")
+    tickets: list[TrainTicketResponse] = Field(
+        ..., description="승차권 목록 (day_no·sequence 오름차순). 기차 일정이 없으면 빈 배열",
+    )
+
+
 class TravelDayGroup(BaseModel):
     """여행 하루치 일정 묶음 — DAY 카드 하나."""
 

@@ -10,6 +10,7 @@ from schemas.travel_schema import (
     TravelCreateRequest,
     TravelDetailResponse,
     TravelResponse,
+    TravelTicketsResponse,
 )
 from services import travel_service
 
@@ -72,3 +73,24 @@ def get_travel_detail(
 ):
     result = travel_service.travel_detail(db, current_user, travel_idx)
     return CommonResponse.success_response("여행 일정표 조회 성공", data=result)
+
+
+@router.get(
+    "/{travel_idx}/tickets",
+    summary="승차권 조회",
+    description="여행의 승차권 목록을 반환합니다(승차권 화면용). "
+                "AI 추천 일정을 승인(추천 코스 저장)한 여행에서만 조회할 수 있습니다 — "
+                "승인 시 발급받은 `travel_idx`를 파라미터로 이용합니다. "
+                "승차권 1매 = 기차 일정 1건이며, 승차 일자·출발/도착역·출발/도착 시각·열차 등급/번호를 담습니다. "
+                "좌석·호차·타는곳 번호 등 예매 정보는 제공하지 않습니다. 기차 일정이 없으면 빈 배열입니다.\n\n"
+                "- 404: 승인(저장)된 일정이 아니거나 본인 여행이 아님\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[TravelTicketsResponse],
+)
+def get_travel_tickets(
+    travel_idx: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = travel_service.travel_tickets(db, current_user, travel_idx)
+    return CommonResponse.success_response("승차권 조회 성공", data=result)
