@@ -10,9 +10,11 @@ from datetime import date, datetime, time, timedelta
 from sqlalchemy.orm import Session
 
 from core.exceptions.custom import BadRequestException, NotFoundException
-from databases.daos import schedule_dao, station_dao, travel_dao
+from databases.daos import schedule_dao, station_dao, travel_dao, travel_like_dao
 from schemas.travel_schema import (
     HomeTravelCard,
+    PastTravelCard,
+    PastTravelListResponse,
     TrainTicketResponse,
     TravelDayGroup,
     TravelDetailResponse,
@@ -88,6 +90,31 @@ def current_travel(db: Session, user) -> HomeTravelCard | None:
         status=_effective_status(chosen.start_date, chosen.end_date, today),
         cover_image_url=schedule_dao.cover_image(db, chosen.travel_idx),
     )
+
+
+def past_travels(db: Session, user) -> PastTravelListResponse:
+    """여행기록 화면의 '지난 여행' 목록 — 이미 종료된 여행만 최신순으로.
+
+    종료 여부는 _effective_status의 COMPLETED 정의(오늘 > end_date)와 같이 날짜로 판정한다.
+    썸네일·좋아요 여부는 여행 수와 무관하게 각 1쿼리로 일괄 조회한다(N+1 회피).
+    """
+    today = now_kst().date()
+    travels = travel_dao.list_completed_by_user(db, user.user_idx, today)
+    idxs = [t.travel_idx for t in travels]
+    covers = schedule_dao.cover_images(db, idxs)
+    liked = travel_like_dao.liked_travel_idxs(db, user.user_idx, idxs)
+
+    cards = [
+        PastTravelCard(
+            travel_idx=t.travel_idx, title=t.title,
+            start_date=t.start_date, end_date=t.end_date,
+            status="COMPLETED",
+            cover_image_url=covers.get(t.travel_idx),
+            liked=t.travel_idx in liked,
+        )
+        for t in travels
+    ]
+    return PastTravelListResponse(travels=cards, total=len(cards))
 
 
 def travel_detail(db: Session, user, travel_idx: int) -> TravelDetailResponse:

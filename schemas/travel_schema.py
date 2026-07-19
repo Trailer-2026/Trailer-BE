@@ -38,6 +38,39 @@ class HomeTravelCard(BaseModel):
     cover_image_url: str | None = Field(None, description="카드 썸네일 — 여행 첫 일정 대표 이미지. 없으면 null")
 
 
+class PastTravelCard(BaseModel):
+    """여행기록 화면 '지난 여행' 목록의 카드 하나 — 이미 종료된 여행."""
+
+    travel_idx: int = Field(..., description="여행 PK (카드 탭 시 상세 이동용)", examples=[12])
+    title: str = Field(..., description="여행 제목", examples=["고성 여행"])
+    start_date: date = Field(..., description="여행 시작일", examples=["2026-06-28"])
+    end_date: date = Field(..., description="여행 종료일 (카드에 표시되는 날짜)", examples=["2026-06-30"])
+    status: str = Field(
+        ..., description="항상 COMPLETED (종료된 여행만 목록에 담긴다)", examples=["COMPLETED"],
+    )
+    cover_image_url: str | None = Field(
+        None, description="카드 썸네일 — 여행 첫 일정 대표 이미지. 없으면 null",
+        examples=["http://tong.visitkorea.or.kr/cms/resource/87/2754987_image2_1.jpg"],
+    )
+    liked: bool = Field(..., description="내가 좋아요(하트)를 누른 여행인지 여부", examples=[False])
+
+
+class PastTravelListResponse(BaseModel):
+    """지난 여행 목록 — 종료일 내림차순(최근 여행 먼저)."""
+
+    travels: list[PastTravelCard] = Field(
+        ..., description="지난 여행 카드 목록 (종료일 내림차순). 지난 여행이 없으면 빈 배열",
+    )
+    total: int = Field(..., description="지난 여행 총 건수", examples=[3])
+
+
+class TravelLikeResponse(BaseModel):
+    """여행 좋아요 결과 — 요청 후 그 여행의 좋아요 상태."""
+
+    travel_idx: int = Field(..., description="여행 PK", examples=[12])
+    liked: bool = Field(..., description="좋아요 상태 (POST 후 true, DELETE 후 false)", examples=[True])
+
+
 class TravelScheduleItem(BaseModel):
     """일정표 타임라인의 한 항목 (기차/방문지/숙소 공통, schedule 1행)."""
 
