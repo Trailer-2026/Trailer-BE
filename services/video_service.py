@@ -42,7 +42,6 @@ VIDEO_MAKER_DIR = Path(__file__).resolve().parent / "videoMaker"
 BGM_DIR = VIDEO_MAKER_DIR / "bgm"
 UPLOADS_DIR = VIDEO_MAKER_DIR / "assets" / "uploads"
 OUTPUT_DIR = VIDEO_MAKER_DIR / "output"
-BUILDER_HTML = VIDEO_MAKER_DIR / "builder.html"
 MAP_THEMES_JS = VIDEO_MAKER_DIR / "map_themes.js"
 RENDER_SCRIPT = VIDEO_MAKER_DIR / "render_video.py"
 # 배포된 Modal 함수를 호출하는 러너 (사전 1회: modal deploy modal_render.py)
@@ -58,16 +57,8 @@ ALLOWED_LIGHT_PRESETS = {"", "dawn", "day", "dusk", "night"}
 
 
 # --------------------------------------------------------------------------- #
-# 빌더 페이지 / 정적 자원
+# 정적 자원
 # --------------------------------------------------------------------------- #
-def get_builder_html() -> str:
-    """builder.html 에 Mapbox 토큰을 주입해 반환한다."""
-    if not BUILDER_HTML.exists():
-        raise NotFoundException("builder.html이 없습니다.")
-    token = Config.read("mapbox", "access_token", default="") or ""
-    return BUILDER_HTML.read_text(encoding="utf-8").replace("__MAPBOX_TOKEN__", token.strip())
-
-
 def get_map_themes_path() -> Path:
     """빌더 미리보기가 렌더러와 공유하는 테마 모듈 경로."""
     if not MAP_THEMES_JS.is_file():
@@ -86,25 +77,6 @@ def get_output_path(name: str) -> Path:
 # --------------------------------------------------------------------------- #
 # BGM
 # --------------------------------------------------------------------------- #
-def _bgm_display_name(filename: str) -> dict[str, str]:
-    """`곡명 - 아티스트.mp3` 형식 파일명을 곡명/아티스트로 정리한다 (bgm/CREDITS.md 참고)."""
-    stem = Path(filename).stem
-    if " - " in stem:
-        title, artist = stem.rsplit(" - ", 1)
-        return {"title": title.strip(), "artist": artist.strip(), "source": "Pixabay"}
-    return {"title": stem, "artist": "", "source": ""}
-
-
-def list_bgm() -> list[dict[str, str]]:
-    if not BGM_DIR.exists():
-        return []
-    tracks: list[dict[str, str]] = []
-    for path in sorted(BGM_DIR.iterdir()):
-        if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
-            tracks.append({"file": path.name, **_bgm_display_name(path.name)})
-    return tracks
-
-
 def get_bgm_path(filename: str) -> Path:
     """BGM 파일명을 bgm/ 밖으로 못 나가게 검증해 경로로 반환한다."""
     candidate = (BGM_DIR / filename).resolve()

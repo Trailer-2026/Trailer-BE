@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from core.response import CommonResponse
 from databases.database import get_db
 from schemas.video_schema import (
-    BgmTrackResponse,
     ReelsRecommendResponse,
     VideoEditResponse,
     VideoRenderStatusResponse,
@@ -14,18 +13,6 @@ from schemas.video_schema import (
 from services import video_service
 
 router = APIRouter(prefix="/api/videos", tags=["Video"])
-
-
-@router.get(
-    "/builder",
-    summary="영상 빌더 페이지",
-    description="여행 경로 3D 영상 빌더 HTML 페이지를 반환합니다. 지도를 클릭해 GPS 지점을 "
-                "추가하고 사진/BGM/테마를 골라 POST /api/videos/render 로 렌더링을 요청하는 "
-                "개발용 UI입니다. Mapbox 토큰은 서버가 주입합니다.",
-    response_class=HTMLResponse,
-)
-def get_builder_page() -> HTMLResponse:
-    return HTMLResponse(video_service.get_builder_html())
 
 
 @router.get("/assets/map_themes.js", include_in_schema=False)
@@ -37,29 +24,6 @@ def get_map_themes() -> FileResponse:
         media_type="application/javascript",
         headers={"Cache-Control": "no-cache"},
     )
-
-
-@router.get(
-    "/bgm",
-    summary="BGM 목록 조회",
-    description="영상에 입힐 수 있는 BGM 트랙 목록을 반환합니다. file 값을 렌더 요청의 "
-                "bgm 필드에 그대로 넣으면 됩니다.",
-    response_model=CommonResponse[list[BgmTrackResponse]],
-)
-def get_bgm_list():
-    tracks = video_service.list_bgm()
-    return CommonResponse.success_response("BGM 목록 조회 성공", data=tracks)
-
-
-@router.get(
-    "/bgm/preview",
-    summary="BGM 미리듣기",
-    description="BGM 파일을 오디오 스트림으로 반환합니다. 존재하지 않는 파일이면 404, "
-                "오디오가 아니면 400을 반환합니다.",
-    response_class=FileResponse,
-)
-def get_bgm_preview(file: str = Query(..., description="BGM 파일명 (GET /api/videos/bgm 의 file 값)")):
-    return FileResponse(video_service.get_bgm_path(file), media_type="audio/mpeg")
 
 
 @router.get(
