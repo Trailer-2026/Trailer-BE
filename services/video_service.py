@@ -3,7 +3,8 @@
 
 빌더 페이지가 보낸 GPS 지점/사진/옵션을 travel_data.json 으로 변환해
 services/videoMaker/render_video.py(로컬 GPU) 또는 modal_render.py(Modal T4 GPU)를
-서브프로세스로 실행하고, 완성된 mp4 파일명을 돌려준다. DB는 사용하지 않는다.
+서브프로세스로 실행하고, 완성된 mp4 파일명을 돌려준다. 렌더 관련 기능은 DB를
+쓰지 않으며, 릴스 추천(recommend_reels)만 reels 테이블을 읽는다.
 
 렌더러는 별도 conda 환경(trailer3d)의 의존성(playwright 등)이 필요하므로,
 로컬 엔진이 쓸 파이썬 경로를 properties_dev.ini 의 [videomaker] python 으로
@@ -27,6 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
+from sqlalchemy.orm import Session
 
 from config import Config
 from core.exceptions.custom import (
@@ -34,6 +36,7 @@ from core.exceptions.custom import (
     ExternalServiceException,
     NotFoundException,
 )
+from databases.daos import reels_dao
 
 VIDEO_MAKER_DIR = Path(__file__).resolve().parent / "videoMaker"
 BGM_DIR = VIDEO_MAKER_DIR / "bgm"
@@ -110,6 +113,39 @@ def get_bgm_path(filename: str) -> Path:
     if candidate.suffix.lower() not in AUDIO_EXTENSIONS:
         raise BadRequestException("오디오 파일이 아닙니다.")
     return candidate
+
+
+# --------------------------------------------------------------------------- #
+# 릴스 추천
+# --------------------------------------------------------------------------- #
+RECOMMEND_REELS_COUNT = 10
+
+
+def recommend_reels(db: Session, exclude: str) -> list[dict]:
+    """릴스를 무작위로 최대 10개 추천한다.
+
+    exclude(쉼표 구분 reels_idx 목록)에 담긴 릴스는 제외하고 뽑는다 — 프론트가
+    이미 받은 idx를 누적해 재요청하면 새 릴스만 내려간다. 남은 릴스가 10개
+    미만이면 있는 만큼만 반환하고, 제외 후 남은 릴스가 하나도 없으면 exclude를
+    무시하고 전체에서 처음부터 다시 추천한다.
+    """
+    exclude_idxs: list[int] = []
+    for token in exclude.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if not token.isdigit():
+            raise BadRequestException("exclude는 쉼표로 구분한 reels_idx 목록이어야 합니다.")
+        exclude_idxs.append(int(token))
+
+    rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, exclude_idxs)
+    if not rows and exclude_idxs:
+        # 전부 이미 추천된 상태 → 한 바퀴 돌았으니 처음부터 다시
+        rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, [])
+    return [
+        {"reels_idx": row.reels_idx, "url": row.url, "title": row.title}
+        for row in rows
+    ]
 
 
 # --------------------------------------------------------------------------- #

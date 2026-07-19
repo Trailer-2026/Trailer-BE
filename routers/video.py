@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
+from sqlalchemy.orm import Session
 
 from core.response import CommonResponse
+from databases.database import get_db
 from schemas.video_schema import (
     BgmTrackResponse,
+    ReelsRecommendResponse,
     VideoEditResponse,
     VideoRenderStatusResponse,
 )
@@ -155,6 +158,24 @@ def render_video_photos_only(
         start_longitude=start_longitude,
     )
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
+
+
+@router.get(
+    "/reels/recommend",
+    summary="릴스 무작위 추천",
+    description="릴스를 무작위로 10개 추천합니다. 재요청 시 이미 받은 reels_idx들을 exclude에 "
+                "쉼표로 구분해 넘기면 그 릴스들을 제외하고 새로 뽑으며, 남은 릴스가 10개 "
+                "미만이면 있는 만큼만 반환합니다. 제외하고 남은 릴스가 하나도 없으면(전부 "
+                "한 번씩 추천됨) exclude를 무시하고 처음부터 다시 추천합니다. exclude 형식이 "
+                "잘못되면 400을 반환합니다.",
+    response_model=CommonResponse[list[ReelsRecommendResponse]],
+)
+def recommend_reels(
+    exclude: str = Query("", description="제외할 reels_idx 목록 (쉼표 구분, 예: 1,5,9 — 이전 응답의 idx 누적)"),
+    db: Session = Depends(get_db),
+):
+    reels = video_service.recommend_reels(db, exclude)
+    return CommonResponse.success_response("릴스 추천 목록 조회 성공", data=reels)
 
 
 @router.post(

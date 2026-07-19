@@ -11,6 +11,14 @@ class BgmTrackResponse(BaseModel):
     source: str = Field(..., description="음원 출처 (예: Pixabay, 없으면 빈 문자열)")
 
 
+class ReelsRecommendResponse(BaseModel):
+    """릴스 무작위 추천 목록 항목."""
+
+    reels_idx: int = Field(..., description="릴스 PK (재요청 시 exclude에 누적해 전달)")
+    url: str = Field(..., description="릴스 영상 URL")
+    title: str | None = Field(None, description="릴스 제목 (없으면 null)")
+
+
 class VideoEditResponse(BaseModel):
     """완성 영상 편집(구간 삭제 / 이미지 삽입) 결과."""
 
