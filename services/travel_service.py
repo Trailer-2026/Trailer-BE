@@ -5,19 +5,29 @@
 station 테이블에서 채운다. 추천 관광지/숙소 대표 이미지는 schedule.image_url에 저장한다.
 숙소는 시각이 없어 'ⓐ 그날 마지막 방문 종료~다음날 첫 일정 시작'으로 잡는다.
 """
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.orm import Session
 
-from core.exceptions.custom import BadRequestException
-from databases.daos import schedule_dao, station_dao, travel_dao
-from schemas.travel_schema import HomeTravelCard, TravelResponse
+from core.exceptions.custom import BadRequestException, NotFoundException
+from databases.daos import schedule_dao, station_dao, travel_dao, travel_like_dao
+from schemas.travel_schema import (
+    HomeTravelCard,
+    PastTravelCard,
+    PastTravelListResponse,
+    TrainTicketResponse,
+    TravelDayGroup,
+    TravelDetailResponse,
+    TravelResponse,
+    TravelScheduleItem,
+    TravelTicketsResponse,
+)
 from utils import plan_cache
+from utils.timezone import now_kst
 
 _LODGING_CHECKIN = time(21, 0)   # 마지막 방문 종료를 못 구할 때 체크인 기본값
 _LODGING_CHECKOUT = time(9, 0)   # 다음날 첫 일정 시작을 못 구할 때 체크아웃 기본값
 _DEFAULT_TIME = time(9, 0)       # 방문/기차 시각이 비어 있을 때 안전 기본값
-_KST = timezone(timedelta(hours=9))  # 여행 진행 여부는 KST 오늘 기준으로 판단
 
 
 def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
@@ -33,7 +43,7 @@ def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
 
     travel = travel_dao.create(
         db, user_idx=user.user_idx,
-        title=(it.title or payload.get("region") or "여행"),
+        title=_travel_title(payload.get("region"), start_date, end_date, it.title),
         start_date=start_date, end_date=end_date, region=payload.get("region"),
         status="PLANNED",
     )
@@ -45,13 +55,10 @@ def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
         fields = _schedule_fields(db, seg, day_first, day_last, fallback)
         if fields is None:
             continue
-        title, st_time, en_time, lat, lng, image_url = fields
         seq[seg.day_no] = seq.get(seg.day_no, 0)
         schedule_dao.create(
             db, travel_idx=travel.travel_idx, user_idx=user.user_idx,
-            day_no=seg.day_no, sequence=seq[seg.day_no], title=title,
-            start_time=st_time, end_time=en_time, latitude=lat, longitude=lng,
-            image_url=image_url,
+            day_no=seg.day_no, sequence=seq[seg.day_no], **fields,
         )
         seq[seg.day_no] += 1
         count += 1
@@ -71,7 +78,7 @@ def current_travel(db: Session, user) -> HomeTravelCard | None:
     KST 오늘과 여행 기간으로 계산한다(스케줄러 불필요).
     """
     travels = travel_dao.list_by_user(db, user.user_idx)
-    today = datetime.now(_KST).date()
+    today = now_kst().date()
     ongoing = [t for t in travels if t.start_date <= today <= t.end_date]
     upcoming = sorted((t for t in travels if t.start_date > today), key=lambda t: t.start_date)
     chosen = ongoing[0] if ongoing else (upcoming[0] if upcoming else None)
@@ -83,6 +90,103 @@ def current_travel(db: Session, user) -> HomeTravelCard | None:
         status=_effective_status(chosen.start_date, chosen.end_date, today),
         cover_image_url=schedule_dao.cover_image(db, chosen.travel_idx),
     )
+
+
+def past_travels(db: Session, user) -> PastTravelListResponse:
+    """여행기록 화면의 '지난 여행' 목록 — 이미 종료된 여행만 최신순으로.
+
+    종료 여부는 _effective_status의 COMPLETED 정의(오늘 > end_date)와 같이 날짜로 판정한다.
+    썸네일·좋아요 여부는 여행 수와 무관하게 각 1쿼리로 일괄 조회한다(N+1 회피).
+    """
+    today = now_kst().date()
+    travels = travel_dao.list_completed_by_user(db, user.user_idx, today)
+    idxs = [t.travel_idx for t in travels]
+    covers = schedule_dao.cover_images(db, idxs)
+    liked = travel_like_dao.liked_travel_idxs(db, user.user_idx, idxs)
+
+    cards = [
+        PastTravelCard(
+            travel_idx=t.travel_idx, title=t.title,
+            start_date=t.start_date, end_date=t.end_date,
+            status="COMPLETED",
+            cover_image_url=covers.get(t.travel_idx),
+            liked=t.travel_idx in liked,
+        )
+        for t in travels
+    ]
+    return PastTravelListResponse(travels=cards, total=len(cards))
+
+
+def travel_detail(db: Session, user, travel_idx: int) -> TravelDetailResponse:
+    """여행 1건의 일정표(일자별 타임라인) 상세. 본인 여행이 아니거나 없으면 404."""
+    travel = travel_dao.get_by_idx(db, travel_idx)
+    if travel is None or travel.user_idx != user.user_idx:
+        raise NotFoundException("여행을 찾을 수 없습니다.")
+
+    schedules = schedule_dao.list_by_travel(db, travel_idx)
+    groups: dict[int, TravelDayGroup] = {}
+    for s in schedules:  # list_by_travel이 (day_no, sequence) 순 정렬을 보장
+        group = groups.get(s.day_no)
+        if group is None:
+            group = TravelDayGroup(
+                day_no=s.day_no,
+                date=travel.start_date + timedelta(days=s.day_no - 1),
+                items=[],
+            )
+            groups[s.day_no] = group
+        group.items.append(TravelScheduleItem.model_validate(s))
+
+    today = now_kst().date()
+    return TravelDetailResponse(
+        travel_idx=travel.travel_idx, title=travel.title,
+        start_date=travel.start_date, end_date=travel.end_date, region=travel.region,
+        status=_effective_status(travel.start_date, travel.end_date, today),
+        days=[groups[k] for k in sorted(groups)],
+    )
+
+
+def travel_tickets(db: Session, user, travel_idx: int) -> TravelTicketsResponse:
+    """여행 1건의 승차권 목록 — AI 추천 일정을 승인(저장)한 여행에서만 조회할 수 있다.
+
+    travel 행은 추천 플랜 승인 시에만 생기므로, 본인 여행 존재 확인이 곧 승인 여부 검증이다.
+    미승인(저장 안 됨)·타인 여행은 404. 승차권은 kind=train 일정에서 만들며, 좌석·호차·타는곳
+    등 예매 정보는 보유하지 않아 응답에 포함하지 않는다.
+    """
+    travel = travel_dao.get_by_idx(db, travel_idx)
+    if travel is None or travel.user_idx != user.user_idx:
+        raise NotFoundException("승인된 여행 일정을 찾을 수 없습니다.")
+
+    trains = schedule_dao.list_trains_by_travel(db, travel_idx)
+    tickets = [
+        TrainTicketResponse(
+            schedule_idx=s.schedule_idx,
+            day_no=s.day_no,
+            date=travel.start_date + timedelta(days=s.day_no - 1),
+            train_grade=s.train_grade or "",
+            train_no=s.train_no or "",
+            dep_station=s.dep_station or "",
+            arr_station=s.arr_station or "",
+            dep_time=s.start_time,
+            arr_time=s.end_time,
+        )
+        for s in trains
+    ]
+    return TravelTicketsResponse(travel_idx=travel.travel_idx, tickets=tickets)
+
+
+def _travel_title(region: str | None, start: date, end: date, fallback: str | None) -> str:
+    """여행 제목 = '<지역> N박 N일 여행'. 지역은 도착역명이라 끝의 '역' 접미사를 뗀다(부산역→부산).
+
+    지역명이 없으면 플랜 제목(fallback)→'여행' 순으로 대체한다. 당일 여행이면 'N박' 없이 표기.
+    """
+    place = region.removesuffix("역") if region else None
+    if not place:
+        return fallback or "여행"
+    days = (end - start).days + 1
+    nights = days - 1
+    if nights <= 0:
+        return f"{place} 당일 여행"
+    return f"{place} {nights}박 {days}일 여행"
 
 
 def _effective_status(start: date, end: date, today: date) -> str:
@@ -108,13 +212,16 @@ def _day_bounds(segments) -> tuple[dict, dict]:
     return first, last
 
 
-def _schedule_fields(db: Session, seg, day_first: dict, day_last: dict, fallback):
-    """세그먼트 → (title, start_time, end_time, lat, lng, image_url). 저장 불가면 None."""
+def _schedule_fields(db: Session, seg, day_first: dict, day_last: dict, fallback) -> dict | None:
+    """세그먼트 → schedule_dao.create 인자 dict(kind별). 저장 불가면 None."""
     if seg.kind == "visit" and seg.place is not None:
         p = seg.place
         st = seg.start_time.time() if seg.start_time else _DEFAULT_TIME
         en = seg.end_time.time() if seg.end_time else st
-        return (p.name, st, en, p.lat, p.lng, p.image_url)
+        return {
+            "kind": "visit", "title": p.name, "start_time": st, "end_time": en,
+            "latitude": p.lat, "longitude": p.lng, "image_url": p.image_url,
+        }
 
     if seg.kind == "train" and seg.train is not None:
         t = seg.train
@@ -122,11 +229,17 @@ def _schedule_fields(db: Session, seg, day_first: dict, day_last: dict, fallback
         if coord is None:  # 출발역 좌표 미상 → (0,0) 가짜 핀 대신 이 열차 세그먼트는 저장 생략
             return None
         no = t.train_no.lstrip("0") or t.train_no
-        title = f"{t.grade} {no} {t.dep_station}→{t.arr_station}"
         lat, lng = coord
         st = seg.start_time.time() if seg.start_time else _DEFAULT_TIME
         en = seg.end_time.time() if seg.end_time else st
-        return (title, st, en, lat, lng, None)
+        return {
+            "kind": "train",
+            "title": f"{t.grade} {no} {t.dep_station}→{t.arr_station}",  # 표시용 폴백
+            "train_no": no, "train_grade": t.grade,
+            "dep_station": t.dep_station, "arr_station": t.arr_station,
+            "start_time": st, "end_time": en, "latitude": lat, "longitude": lng,
+            "image_url": None,
+        }
 
     if seg.kind == "lodging" and seg.lodging is not None:
         lg = seg.lodging
@@ -134,7 +247,10 @@ def _schedule_fields(db: Session, seg, day_first: dict, day_last: dict, fallback
         checkout = day_first.get(seg.day_no + 1)
         st = checkin.time() if checkin else _LODGING_CHECKIN
         en = checkout.time() if checkout else _LODGING_CHECKOUT
-        return (lg.name, st, en, lg.lat, lg.lng, lg.image_url)
+        return {
+            "kind": "lodging", "title": lg.name, "start_time": st, "end_time": en,
+            "latitude": lg.lat, "longitude": lg.lng, "image_url": lg.image_url,
+        }
 
     return None
 

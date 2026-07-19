@@ -30,6 +30,7 @@ from routers.place import router as place_router
 from routers.comment import router as comment_router
 from routers.like import router as like_router
 from routers.ban import router as ban_router
+from routers.video import router as video_router
 from utils.firebase import init_firebase
 
 
@@ -105,7 +106,7 @@ app.include_router(place_router)
 app.include_router(comment_router)
 app.include_router(like_router)
 app.include_router(ban_router)
-
+app.include_router(video_router)
 
 @app.get("/")
 async def root():

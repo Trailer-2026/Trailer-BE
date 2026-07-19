@@ -35,3 +35,21 @@ def list_by_user(db: Session, user_idx: int) -> list[Travel]:
         .order_by(Travel.start_date.desc())
         .all()
     )
+
+
+def list_completed_by_user(db: Session, user_idx: int, today: date) -> list[Travel]:
+    """사용자의 '지난 여행'(종료일이 오늘 이전) 전체를 최신순으로 조회 (soft-delete 제외).
+
+    status 컬럼은 저장 시 항상 PLANNED이고 전환하는 배치가 없으므로 날짜로만 판정한다.
+    오늘(KST)은 서비스가 구해 넘긴다 — DAO는 시간 소스를 갖지 않는다.
+    """
+    return (
+        db.query(Travel)
+        .filter(
+            Travel.user_idx == user_idx,
+            Travel.deleted_at.is_(None),
+            Travel.end_date < today,
+        )
+        .order_by(Travel.end_date.desc(), Travel.travel_idx.desc())
+        .all()
+    )
