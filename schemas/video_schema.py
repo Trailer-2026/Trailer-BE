@@ -10,14 +10,6 @@ class ReelsRecommendResponse(BaseModel):
     title: str | None = Field(None, description="릴스 제목 (없으면 null)")
 
 
-class ReelsUploadResponse(BaseModel):
-    """릴스 업로드 결과."""
-
-    reels_idx: int = Field(..., description="생성된 릴스 PK")
-    url: str = Field(..., description="GCS 공개 영상 URL (바로 재생 가능)")
-    title: str | None = Field(None, description="릴스 제목 (없으면 null)")
-
-
 class VideoEditResponse(BaseModel):
     """완성 영상 편집(구간 삭제 / 이미지 삽입) 결과."""
 

@@ -37,7 +37,7 @@ from core.exceptions.custom import (
     ExternalServiceException,
     NotFoundException,
 )
-from databases.daos import reels_dao, travel_dao
+from databases.daos import reels_dao
 from utils import gcs
 
 logger = logging.getLogger(__name__)
@@ -92,48 +92,9 @@ def get_bgm_path(filename: str) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# 릴스 업로드 / 추천
+# 릴스 추천
 # --------------------------------------------------------------------------- #
 RECOMMEND_REELS_COUNT = 10
-REELS_MAX_BYTES = 100 * 1024 * 1024  # 100MB
-REELS_CONTENT_TYPES = {
-    ".mp4": "video/mp4",
-    ".mov": "video/quicktime",
-    ".webm": "video/webm",
-    ".m4v": "video/x-m4v",
-}
-
-
-def upload_reels(
-    db: Session,
-    user,
-    travel_idx: int,
-    title: str,
-    filename: str,
-    data: bytes,
-) -> dict:
-    """릴스 영상을 GCS 버킷(reels/)에 올리고 reels 행을 생성한다."""
-    suffix = Path(filename).suffix.lower()
-    if suffix not in REELS_CONTENT_TYPES:
-        raise BadRequestException("지원하지 않는 영상 형식입니다. (mp4/mov/webm/m4v)")
-    if not data:
-        raise BadRequestException("영상 파일이 비어 있습니다.")
-    if len(data) > REELS_MAX_BYTES:
-        raise BadRequestException("영상은 100MB 이하여야 합니다.")
-    if travel_dao.get_by_idx(db, travel_idx) is None:
-        raise NotFoundException("여행을 찾을 수 없습니다.")
-
-    object_path = f"reels/{uuid.uuid4().hex}{suffix}"
-    url = gcs.upload_bytes(object_path, data, REELS_CONTENT_TYPES[suffix])
-    row = reels_dao.create(
-        db,
-        travel_idx=travel_idx,
-        user_idx=user.user_idx,
-        url=url,
-        title=title.strip() or None,
-    )
-    db.commit()
-    return {"reels_idx": row.reels_idx, "url": row.url, "title": row.title}
 
 
 def recommend_reels(db: Session, exclude: str) -> list[dict]:

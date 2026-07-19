@@ -4,12 +4,9 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from core.response import CommonResponse
-from core.security import get_current_user
 from databases.database import get_db
-from databases.models.user import User
 from schemas.video_schema import (
     ReelsRecommendResponse,
-    ReelsUploadResponse,
     VideoEditResponse,
     VideoRenderStatusResponse,
 )
@@ -129,28 +126,6 @@ def render_video_photos_only(
         start_longitude=start_longitude,
     )
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
-
-
-@router.post(
-    "/reels",
-    summary="릴스 업로드",
-    description="릴스 영상을 GCS 버킷에 올리고 reels 테이블에 등록합니다"
-                "(multipart/form-data, 로그인 필요). 응답의 url 은 공개 URL이라 바로 재생할 "
-                "수 있습니다. 지원 형식은 mp4/mov/webm/m4v, 최대 100MB이며 형식·크기가 "
-                "잘못되면 400, 여행이 없으면 404, 저장소 업로드 실패 시 502를 반환합니다.",
-    response_model=CommonResponse[ReelsUploadResponse],
-)
-def upload_reels(
-    travel_idx: int = Form(..., description="영상이 속한 여행 travel_idx"),
-    title: str = Form("", description="릴스 제목 (선택, 빈 값이면 null)"),
-    video: UploadFile = File(..., description="릴스 영상 파일 (mp4/mov/webm/m4v, 100MB 이하)"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    result = video_service.upload_reels(
-        db, current_user, travel_idx, title, video.filename or "", video.file.read()
-    )
-    return CommonResponse.success_response("릴스 업로드 성공", data=result)
 
 
 @router.get(
