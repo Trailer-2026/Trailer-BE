@@ -12,6 +12,14 @@ def get_by_idx(db: Session, reels_idx: int) -> Reels | None:
     ).first()
 
 
+def create(db: Session, *, travel_idx: int, user_idx: int, url: str, title: str | None) -> Reels:
+    """릴스 행 생성 (flush만 — commit은 서비스가)."""
+    reels = Reels(travel_idx=travel_idx, user_idx=user_idx, url=url, title=title)
+    db.add(reels)
+    db.flush()
+    return reels
+
+
 def get_random_reels(db: Session, count: int, exclude_idxs: list[int]) -> list[Reels]:
     """무작위 count개 조회 (soft-delete·exclude_idxs 제외)."""
     query = db.query(Reels).filter(Reels.deleted_at.is_(None))
