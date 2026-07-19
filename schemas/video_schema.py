@@ -48,5 +48,7 @@ class VideoRenderStatusResponse(BaseModel):
     outro: bool = Field(..., description="TRAILER 아웃트로 포함 여부")
     bgm: str | None = Field(None, description="BGM 파일명 (없으면 null)")
     video_url: str | None = Field(None, description="완성 영상 경로 (status=done 일 때만)")
+    reels_idx: int | None = Field(None, description="자동 등록된 릴스 PK (사진만 렌더 완료 시)")
+    reels_url: str | None = Field(None, description="GCS 버킷 공개 영상 URL (사진만 렌더 완료 시)")
     error: str | None = Field(None, description="실패 사유 (status=failed 일 때만)")
     log_tail: str = Field("", description="렌더 로그 끝부분 (종료 후 디버깅용)")

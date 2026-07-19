@@ -93,7 +93,10 @@ def render_video(
                 "GPS 없는 사진은 자동 제외됩니다. 지점 기준 1km 미만인 연속 사진들은 카메라 "
                 "이동 없이 첫 사진 위치에 고정해 순서대로 보여주고, 1km 이상 떨어진 사진이 "
                 "나오면 그 위치로 이동합니다. start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 "
-                "삼아 첫 사진 지점으로 이동하며 시작합니다. 조건을 못 채우면 400을 반환합니다.",
+                "삼아 첫 사진 지점으로 이동하며 시작합니다. 조건을 못 채우면 400을 반환합니다. "
+                "렌더가 끝나면 완성 영상이 GCS 버킷에 올라가고 reels 테이블에 여행/사용자 "
+                "연결 없이 자동 등록되며, 상태 응답의 reels_idx/reels_url 로 확인할 수 "
+                "있습니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
 def render_video_photos_only(

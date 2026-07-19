@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import math
 import os
 import re
@@ -38,6 +39,8 @@ from core.exceptions.custom import (
 )
 from databases.daos import reels_dao, travel_dao
 from utils import gcs
+
+logger = logging.getLogger(__name__)
 
 VIDEO_MAKER_DIR = Path(__file__).resolve().parent / "videoMaker"
 BGM_DIR = VIDEO_MAKER_DIR / "bgm"
@@ -577,12 +580,20 @@ def _spawn_render_job(
     light_preset: str,
     intro: bool,
     outro: bool,
+    save_as_reels: bool = False,
 ) -> dict[str, object]:
-    """렌더 서브프로세스를 백그라운드 스레드로 띄우고 job 상태를 반환한다."""
+    """렌더 서브프로세스를 백그라운드 스레드로 띄우고 job 상태를 반환한다.
+
+    save_as_reels=True 면 렌더 완료 후 결과 영상을 GCS 버킷(reels/)에 올리고
+    reels 테이블에 FK 없이 등록한다 (사진만 렌더 자동 릴스화).
+    """
     command, marker = _build_command(
         travel_data_path, engine, quick, theme, light_preset, intro, outro
     )
     job = {
+        "save_as_reels": save_as_reels,
+        "reels_idx": None,
+        "reels_url": None,
         "job_id": uuid.uuid4().hex[:12],
         "status": "running",
         "phase": "렌더 준비 중",
@@ -796,7 +807,8 @@ def start_render_photos_only(
         json.dumps(travel_data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return _spawn_render_job(
-        travel_data_path, bgm_path, quick, engine, theme, light_preset, intro, outro
+        travel_data_path, bgm_path, quick, engine, theme, light_preset, intro, outro,
+        save_as_reels=True,
     )
 
 
@@ -819,6 +831,7 @@ def _job_snapshot(job: dict) -> dict[str, object]:
             remaining = snapshot["elapsed_seconds"] * (100 - snapshot["percent"]) / snapshot["percent"]
             snapshot["eta_seconds"] = round(remaining, 1)
     snapshot.pop("started_at", None)
+    snapshot.pop("save_as_reels", None)  # 내부 플래그 — 응답에서 제외
     return snapshot
 
 
@@ -916,12 +929,46 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
         )
         return
 
+    log_tail = stdout[-2000:]
+    reels_fields: dict[str, object] = {}
+    if job.get("save_as_reels"):
+        update(percent=99.0, phase="릴스 등록(버킷 업로드)")
+        try:
+            reels_fields = _register_render_as_reels(OUTPUT_DIR / output_name)
+        except Exception as error:  # 릴스 등록 실패해도 렌더 자체는 성공으로 처리
+            logger.exception("렌더 결과 릴스 등록 실패: %s", output_name)
+            log_tail += f"\n[warn] 릴스 등록 실패: {error}"
+
     update(
         status="done",
         phase="완료",
         percent=100.0,
         video_url=f"/api/videos/output/{output_name}",
-        elapsed_seconds=elapsed,
+        elapsed_seconds=round(time.time() - job["started_at"], 1),
         eta_seconds=0.0,
-        log_tail=stdout[-2000:],
+        log_tail=log_tail,
+        **reels_fields,
     )
+
+
+def _register_render_as_reels(video_path: Path) -> dict[str, object]:
+    """완성 영상을 GCS 버킷(reels/)에 올리고 reels 행을 FK 없이 등록한다.
+
+    사진만 렌더는 로그인/여행 없이 실행되므로 travel_idx·user_idx 는 NULL 로 둔다.
+    """
+    from databases.database import SessionLocal
+
+    url = gcs.upload_bytes(
+        f"reels/{uuid.uuid4().hex}.mp4", video_path.read_bytes(), "video/mp4"
+    )
+    db = SessionLocal()
+    try:
+        row = reels_dao.create(db, travel_idx=None, user_idx=None, url=url, title=None)
+        db.commit()
+        return {"reels_idx": row.reels_idx, "reels_url": url}
+    except Exception:
+        db.rollback()
+        gcs.delete_object(f"reels/{url.rsplit('/', 1)[-1]}")  # 고아 객체 정리
+        raise
+    finally:
+        db.close()
