@@ -84,14 +84,11 @@ def get_output_path(name: str) -> Path:
 # BGM
 # --------------------------------------------------------------------------- #
 def _bgm_display_name(filename: str) -> dict[str, str]:
-    """(Pixabay attribution 형식일 수 있는) 파일명을 곡명/아티스트로 정리한다."""
+    """`곡명 - 아티스트.mp3` 형식 파일명을 곡명/아티스트로 정리한다 (bgm/CREDITS.md 참고)."""
     stem = Path(filename).stem
-    # Pixabay 내보내기 파일명 형태:
-    #   "Music by a href=...content=469216Denys Kyshchuka from a href=..."
-    match = re.search(r"content=\d+(.+?)\s+from\b", stem)
-    if match:
-        artist = match.group(1).strip(" -_")
-        return {"title": "Pixabay BGM", "artist": artist or "Unknown", "source": "Pixabay"}
+    if " - " in stem:
+        title, artist = stem.rsplit(" - ", 1)
+        return {"title": title.strip(), "artist": artist.strip(), "source": "Pixabay"}
     return {"title": stem, "artist": "", "source": ""}
 
 
