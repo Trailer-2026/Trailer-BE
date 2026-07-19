@@ -65,3 +65,27 @@ def cover_image(db: Session, travel_idx: int) -> str | None:
         .first()
     )
     return row[0] if row else None
+
+
+def cover_images(db: Session, travel_idxs: list[int]) -> dict[int, str]:
+    """여행 여러 건의 대표 썸네일을 {travel_idx: image_url}로 일괄 조회 (목록 조회 N+1 회피).
+
+    여행별로 (day_no, sequence)상 이미지가 있는 첫 항목만 남긴다. 이미지가 하나도 없는
+    여행은 키 자체가 없다(호출부에서 .get()으로 None 처리).
+    """
+    if not travel_idxs:
+        return {}
+    rows = (
+        db.query(Schedule.travel_idx, Schedule.image_url)
+        .filter(
+            Schedule.travel_idx.in_(travel_idxs),
+            Schedule.deleted_at.is_(None),
+            Schedule.image_url.isnot(None),
+        )
+        .order_by(Schedule.travel_idx, Schedule.day_no, Schedule.sequence)
+        .all()
+    )
+    covers: dict[int, str] = {}
+    for travel_idx, image_url in rows:  # 정렬 순서상 먼저 온 행이 그 여행의 대표
+        covers.setdefault(travel_idx, image_url)
+    return covers
