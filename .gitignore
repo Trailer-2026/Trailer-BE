@@ -9,3 +9,29 @@ logs/
 venv/
 .venv/
 .DS_Store
+# 로컬 개발용 sqlite DB ([app] db.url 을 sqlite 로 뒀을 때 생성됨)
+/local_dev.db
+
+*.mp4
+
+# --- services/videoMaker ---
+# Working dirs
+/services/videoMaker/temp/
+/services/videoMaker/debug/
+/services/videoMaker/frames/
+/services/videoMaker/output/
+# Builder uploads (user-supplied photos + generated travel_data.json)
+/services/videoMaker/assets/uploads/
+# BGM audio — Pixabay Content License allows use in videos but restricts
+# standalone redistribution, so keep the audio files local (not committed).
+# CREDITS.md is tracked so attribution stays in the repo.
+/services/videoMaker/bgm/*.m4a
+/services/videoMaker/bgm/*.aac
+/services/videoMaker/bgm/*.wav
+/services/videoMaker/bgm/*.ogg
+/services/videoMaker/bgm/*.flac
+!/services/videoMaker/bgm/CREDITS.md
+# 3D 기차 디자인 소스 (로컬 변환용 대용량 원본 — convert_train_model.py 로 GLB 생성)
+/services/videoMaker/assets/Little train/
+/services/videoMaker/assets/lokomotiv/
+/services/videoMaker/assets/train.glb

@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>3D 여행 영상 빌더</title>
+  <!-- v3.9+ 필요: 테마 파티클(setSnow) 미리보기 -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css" rel="stylesheet" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js"></script>
+  <script src="/api/videos/assets/map_themes.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: "Segoe UI", system-ui, sans-serif;
+      background: #0f1115; color: #e6e8eb; display: flex; height: 100vh; overflow: hidden;
+    }
+    #map { flex: 1 1 auto; height: 100%; }
+    #panel {
+      width: 440px; height: 100%; overflow-y: auto; padding: 18px;
+      background: #161a21; border-left: 1px solid #262b34;
+    }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .hint { font-size: 12px; color: #8b93a1; margin: 0 0 16px; line-height: 1.5; }
+    .section { margin-bottom: 20px; }
+    .section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #8b93a1; margin: 0 0 8px; }
+    .point {
+      border: 1px solid #2b313c; border-radius: 10px; padding: 12px; margin-bottom: 10px; background: #1b2029;
+    }
+    .point .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .point .idx {
+      width: 24px; height: 24px; border-radius: 50%; background: #3b82f6; color: #fff;
+      display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex: 0 0 auto;
+    }
+    .point .coord { font-size: 11px; color: #8b93a1; }
+    input[type="text"], input[type="number"], select {
+      width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #2b313c;
+      background: #0f1115; color: #e6e8eb; font-size: 13px;
+    }
+    .btn {
+      border: none; border-radius: 8px; padding: 9px 14px; font-size: 13px; font-weight: 600;
+      cursor: pointer; background: #2b313c; color: #e6e8eb;
+    }
+    .btn:hover { background: #333a47; }
+    .btn.primary { background: #3b82f6; color: #fff; width: 100%; padding: 12px; font-size: 14px; }
+    .btn.primary:disabled { background: #2b313c; color: #6b7280; cursor: not-allowed; }
+    .btn.tiny { padding: 4px 8px; font-size: 12px; }
+    .btn.danger { background: #3a2326; color: #f87171; }
+    .thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .thumbs img { width: 46px; height: 46px; object-fit: cover; border-radius: 6px; border: 1px solid #2b313c; }
+    .filebtn { display: inline-block; margin-top: 6px; }
+    .filebtn input { display: none; }
+    label.field { display: block; font-size: 12px; color: #8b93a1; margin-bottom: 4px; }
+    .bgm-row { display: flex; gap: 8px; align-items: center; }
+    .bgm-row select { flex: 1; }
+    .check { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 8px; }
+    #status { font-size: 13px; margin-top: 12px; min-height: 18px; color: #8b93a1; white-space: pre-wrap; }
+    #result video { width: 100%; border-radius: 10px; margin-top: 12px; background: #000; }
+    .warn { color: #fbbf24; font-size: 12px; }
+    a.dl { color: #60a5fa; font-size: 13px; }
+    /* 지도 좌상단 테마 선택 (기존 UI를 가리지 않는 작은 플로팅 컨트롤) */
+    #theme-control {
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: rgba(15, 17, 21, 0.82); border: 1px solid #2b313c;
+      border-radius: 10px; padding: 6px 8px; display: flex; gap: 6px; align-items: center;
+      backdrop-filter: blur(4px);
+    }
+    #theme-control label { font-size: 12px; color: #c7cdd6; }
+    #theme-control select {
+      width: auto; padding: 4px 8px; font-size: 12px;
+      background: #0f1115; color: #e6e8eb; border: 1px solid #2b313c; border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <!-- #map 은 mapboxgl 이 관리하므로 컨트롤은 밖에 두고 지도 좌상단에 띄운다 -->
+  <div id="theme-control">
+    <label for="theme">🎨 테마</label>
+    <select id="theme">
+      <option value="default">기본</option>
+      <option value="spring">봄 · 벚꽃 🌸</option>
+      <option value="summer">여름 · 쨍한 하늘 ☀️</option>
+      <option value="autumn">가을 · 단풍 🍁</option>
+      <option value="winter">겨울 · 눈 ❄️</option>
+    </select>
+    <label for="light">🕐 조명</label>
+    <select id="light">
+      <option value="">자동 (테마 기본)</option>
+      <option value="dawn">아침 🌅</option>
+      <option value="day">정오 ☀️</option>
+      <option value="dusk">일몰 🌇</option>
+      <option value="night">밤 🌙</option>
+    </select>
+  </div>
+  <div id="panel">
+    <h1>3D 여행 영상 빌더</h1>
+    <p class="hint">
+      지도를 <b>클릭</b>해서 GPS 지점을 원하는 만큼 추가하세요. 각 지점에 이름과 사진을 넣고,
+      BGM을 고른 뒤 <b>영상 만들기</b>를 누르면 영상에 음악이 함께 입혀집니다.
+    </p>
+
+    <div class="section">
+      <h2>GPS 지점 (<span id="count">0</span>)</h2>
+      <div id="points"></div>
+      <button class="btn tiny" id="add-manual">+ 좌표 직접 입력</button>
+      <button class="btn tiny danger" id="clear-all">전체 지우기</button>
+    </div>
+
+    <div class="section">
+      <h2>배경음악 (BGM)</h2>
+      <div class="bgm-row">
+        <select id="bgm"><option value="">(없음)</option></select>
+        <button class="btn tiny" id="bgm-play" type="button">▶ 미리듣기</button>
+      </div>
+      <audio id="bgm-audio" style="display:none"></audio>
+    </div>
+
+    <div class="section">
+      <h2>렌더 엔진</h2>
+      <select id="engine">
+        <option value="local">내 GPU (로컬)</option>
+        <option value="modal">Modal T4 (클라우드)</option>
+      </select>
+      <p class="hint" style="margin:6px 0 0">
+        로컬: 이 PC의 GPU로 렌더. Modal: 클라우드 T4 GPU로 렌더(modal 로그인 필요, 콜드스타트로 처음엔 느릴 수 있음).
+      </p>
+      <label class="check"><input type="checkbox" id="quick" /> 빠른 테스트 모드 (저화질·빠름)</label>
+      <label class="check"><input type="checkbox" id="intro" checked /> 🎬 TRAILER 인트로 (글자 속 영상 + 줌인, ~3.6초)</label>
+      <label class="check"><input type="checkbox" id="outro" checked /> 🎬 TRAILER 아웃트로 (마지막 화면 → 글자 줌아웃, ~3.6초)</label>
+      <button class="btn primary" id="render" style="margin-top:12px">영상 만들기</button>
+      <div id="status"></div>
+      <div id="result"></div>
+    </div>
+  </div>
+
+  <script>
+    const MAPBOX_TOKEN = "__MAPBOX_TOKEN__";
+    const points = []; // { lat, lng, name, marker, photos: File[] }
+    let map = null;
+    let mapStyleReady = false;
+
+    // 빌더 지도의 원래 라인 스타일 — default 테마 복원 시 이 값으로 돌아간다.
+    const BUILDER_ROUTE_DEFAULTS = {
+      progress: { color: "#3b82f6", width: 3, opacity: 1 },
+      casing: { color: "#ffffff", width: 0, opacity: 0 },
+    };
+
+    function themeOpts() {
+      return {
+        lightPreset: document.getElementById("light").value,
+        routeLayers: { progress: "route-line", casing: "route-casing" },
+        defaultRouteLine: BUILDER_ROUTE_DEFAULTS,
+      };
+    }
+
+    // 선택한 테마를 미리보기 지도에 즉시 적용 (새로고침 불필요).
+    function applyBuilderTheme() {
+      if (!map || !mapStyleReady || !window.MapThemes) return;
+      MapThemes.applyTheme(map, document.getElementById("theme").value, themeOpts());
+    }
+
+    // ---------- Map ----------
+    function initMap() {
+      if (!MAPBOX_TOKEN) {
+        document.getElementById("map").innerHTML =
+          '<div style="padding:24px;color:#fbbf24;font-family:sans-serif">' +
+          'MAPBOX_ACCESS_TOKEN이 설정되지 않아 지도를 표시할 수 없습니다.<br>' +
+          '오른쪽의 "+ 좌표 직접 입력"으로 지점을 추가하세요.</div>';
+        return;
+      }
+      mapboxgl.accessToken = MAPBOX_TOKEN;
+      map = new mapboxgl.Map({
+        container: "map",
+        style: "mapbox://styles/mapbox/standard",
+        center: [127.5, 36.3],
+        zoom: 6,
+      });
+      map.on("load", () => {
+        map.addSource("route", { type: "geojson", data: emptyLine() });
+        // 테마용 케이싱 (기본 폭 0 = 안 보임, spring 테마가 흰 테두리로 씀)
+        map.addLayer({
+          id: "route-casing", type: "line", source: "route",
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: { "line-color": "#ffffff", "line-width": 0, "line-opacity": 0 },
+        });
+        map.addLayer({
+          id: "route-line", type: "line", source: "route",
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: { "line-color": "#3b82f6", "line-width": 3 },
+        });
+        mapStyleReady = true;
+        applyBuilderTheme();
+      });
+      map.on("click", (e) => addPoint(e.lngLat.lat, e.lngLat.lng));
+    }
+
+    function emptyLine() {
+      return { type: "Feature", geometry: { type: "LineString", coordinates: [] } };
+    }
+
+    function refreshMap() {
+      if (!map || !mapStyleReady || !map.getSource("route")) return;
+      map.getSource("route").setData({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: points.map((p) => [p.lng, p.lat]) },
+      });
+    }
+
+    // ---------- Points ----------
+    function addPoint(lat, lng) {
+      const p = { lat, lng, name: "", photos: [], marker: null };
+      if (map) {
+        const el = document.createElement("div");
+        const marker = new mapboxgl.Marker({ color: "#3b82f6" })
+          .setLngLat([lng, lat]).addTo(map);
+        p.marker = marker;
+      }
+      points.push(p);
+      renderPoints();
+      refreshMap();
+    }
+
+    function removePoint(i) {
+      if (points[i].marker) points[i].marker.remove();
+      points.splice(i, 1);
+      renderPoints();
+      refreshMap();
+    }
+
+    function movePoint(i, dir) {
+      const j = i + dir;
+      if (j < 0 || j >= points.length) return;
+      [points[i], points[j]] = [points[j], points[i]];
+      renderPoints();
+      refreshMap();
+    }
+
+    function renderPoints() {
+      const wrap = document.getElementById("points");
+      wrap.innerHTML = "";
+      points.forEach((p, i) => {
+        const card = document.createElement("div");
+        card.className = "point";
+        card.innerHTML = `
+          <div class="row">
+            <div class="idx">${i + 1}</div>
+            <input type="text" placeholder="지점 이름 (예: 서울역)" value="${escapeHtml(p.name)}" />
+            <button class="btn tiny" data-act="up">↑</button>
+            <button class="btn tiny" data-act="down">↓</button>
+            <button class="btn tiny danger" data-act="del">✕</button>
+          </div>
+          <div class="coord">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</div>
+          <label class="filebtn btn tiny">＋ 사진 추가
+            <input type="file" accept="image/*" multiple />
+          </label>
+          <div class="thumbs"></div>
+        `;
+        card.querySelector('input[type="text"]').addEventListener("input", (e) => {
+          p.name = e.target.value;
+        });
+        card.querySelector('[data-act="up"]').onclick = () => movePoint(i, -1);
+        card.querySelector('[data-act="down"]').onclick = () => movePoint(i, 1);
+        card.querySelector('[data-act="del"]').onclick = () => removePoint(i);
+        card.querySelector('input[type="file"]').addEventListener("change", (e) => {
+          for (const f of e.target.files) p.photos.push(f);
+          renderPoints();
+        });
+        const thumbs = card.querySelector(".thumbs");
+        p.photos.forEach((f, k) => {
+          const img = document.createElement("img");
+          img.src = URL.createObjectURL(f);
+          img.title = "클릭하면 삭제";
+          img.onclick = () => { p.photos.splice(k, 1); renderPoints(); };
+          thumbs.appendChild(img);
+        });
+        wrap.appendChild(card);
+      });
+      document.getElementById("count").textContent = points.length;
+    }
+
+    function escapeHtml(s) {
+      return (s || "").replace(/[&<>"']/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    // ---------- BGM ----------
+    async function loadBgm() {
+      const sel = document.getElementById("bgm");
+      try {
+        const res = await fetch("/api/videos/bgm");
+        const list = (await res.json()).data || [];
+        for (const t of list) {
+          const opt = document.createElement("option");
+          opt.value = t.file;
+          opt.textContent = t.artist ? `${t.title} — ${t.artist}` : t.title;
+          sel.appendChild(opt);
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    let previewTimer = null;
+    document.getElementById("bgm-play").onclick = () => {
+      const file = document.getElementById("bgm").value;
+      const audio = document.getElementById("bgm-audio");
+      if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+      if (!file) return;
+      if (!audio.paused && audio.dataset.file === file) { audio.pause(); return; }
+      audio.src = "/api/videos/bgm/preview?file=" + encodeURIComponent(file);
+      audio.dataset.file = file;
+      audio.currentTime = 0;
+      audio.play();
+      // 미리듣기는 10초만 재생하고 멈춤
+      previewTimer = setTimeout(() => { audio.pause(); previewTimer = null; }, 10000);
+    };
+
+    // ---------- Controls ----------
+    document.getElementById("add-manual").onclick = () => {
+      const lat = parseFloat(prompt("위도 (latitude)", "37.5547"));
+      const lng = parseFloat(prompt("경도 (longitude)", "126.9706"));
+      if (Number.isFinite(lat) && Number.isFinite(lng)) addPoint(lat, lng);
+    };
+    document.getElementById("clear-all").onclick = () => {
+      while (points.length) removePoint(0);
+    };
+
+    document.getElementById("render").onclick = async () => {
+      const status = document.getElementById("status");
+      const result = document.getElementById("result");
+      result.innerHTML = "";
+      if (points.length < 2) { status.textContent = "⚠ GPS 지점을 최소 2개 추가하세요."; return; }
+
+      const btn = document.getElementById("render");
+      btn.disabled = true;
+      const engineName = document.getElementById("engine").value === "modal"
+        ? "Modal T4 (클라우드)" : "내 GPU (로컬)";
+      status.textContent = `⏳ 렌더링 시작 중 — ${engineName}...`;
+
+      const fd = new FormData();
+      fd.append("points", JSON.stringify(points.map((p) => ({
+        latitude: p.lat, longitude: p.lng, name: p.name,
+      }))));
+      fd.append("bgm", document.getElementById("bgm").value);
+      fd.append("quick", document.getElementById("quick").checked ? "true" : "false");
+      fd.append("engine", document.getElementById("engine").value);
+      fd.append("intro", document.getElementById("intro").checked ? "true" : "false");
+      fd.append("outro", document.getElementById("outro").checked ? "true" : "false");
+      // 미리보기에서 고른 테마/조명이 그대로 렌더에 반영된다.
+      fd.append("theme", document.getElementById("theme").value);
+      fd.append("light_preset", document.getElementById("light").value);
+      const owners = [];
+      points.forEach((p, i) => p.photos.forEach((f) => {
+        fd.append("photos", f);
+        owners.push(i);
+      }));
+      fd.append("photo_points", JSON.stringify(owners));
+
+      try {
+        // 렌더링 시작 → job_id 를 받고, 완료까지 1.5초 간격으로 진행률 폴링.
+        const res = await fetch("/api/videos/render", { method: "POST", body: fd });
+        const body = await res.json();
+        if (!res.ok) {
+          status.textContent = "❌ 실패: " + (body.message || body.detail || res.statusText);
+          return;
+        }
+        const jobId = body.data.job_id;
+        while (true) {
+          await new Promise((r) => setTimeout(r, 1500));
+          let st;
+          try {
+            st = (await (await fetch(`/api/videos/render/${jobId}`)).json()).data;
+          } catch (e) { continue; } // 일시적 폴링 실패는 무시하고 재시도
+          if (!st) continue;
+          if (st.status === "running") {
+            const frames = st.total_frames ? ` (${st.frame}/${st.total_frames} 프레임)` : "";
+            const eta = st.eta_seconds != null ? ` · 남은 예상 ${Math.round(st.eta_seconds)}초` : "";
+            status.textContent =
+              `⏳ ${engineName} — ${st.phase} ${Math.round(st.percent)}%${frames}` +
+              ` · ${Math.round(st.elapsed_seconds)}초 경과${eta}`;
+          } else if (st.status === "done") {
+            showResult(st.video_url, `✅ 완료! [${st.engine}] ⏱ ${st.elapsed_seconds}초` +
+              (st.bgm ? ` (BGM: ${st.bgm})` : ""));
+            break;
+          } else {
+            status.textContent = "❌ 실패: " + (st.error || "원인 불명").split("\n")[0];
+            break;
+          }
+        }
+      } catch (e) {
+        status.textContent = "❌ 요청 실패: " + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    };
+
+    // ---------- 완성 영상 표시 + 편집 (구간 삭제 / 이미지 삽입) ----------
+    let currentVideoName = null;
+
+    function showResult(videoUrl, message) {
+      const status = document.getElementById("status");
+      const result = document.getElementById("result");
+      currentVideoName = videoUrl.split("/").pop();
+      if (message) status.textContent = message;
+      result.innerHTML = `
+        <video src="${videoUrl}" controls autoplay loop></video>
+        <a class="dl" href="${videoUrl}" download>⬇ 영상 다운로드</a>
+        <div class="section" style="margin-top:14px">
+          <h2>영상 편집</h2>
+          <label class="field">구간 삭제 — 해당 구간(초)을 잘라냅니다</label>
+          <div class="bgm-row">
+            <input type="number" id="cut-start" min="0" step="0.1" placeholder="시작 초" />
+            <input type="number" id="cut-end" min="0" step="0.1" placeholder="끝 초" />
+            <button class="btn tiny danger" id="cut-btn">✂ 삭제</button>
+          </div>
+          <label class="field" style="margin-top:10px">이미지 삽입 — 시점(초)에 사진을 끼워 넣고 이어서 재생합니다</label>
+          <div class="bgm-row">
+            <input type="number" id="ov-at" min="0" step="0.1" placeholder="삽입 시점 초" />
+            <input type="number" id="ov-dur" min="0.3" max="10" step="0.1" value="1.5" placeholder="표시 초" />
+          </div>
+          <div class="bgm-row" style="margin-top:6px">
+            <input type="file" id="ov-file" accept="image/*" />
+            <button class="btn tiny" id="ov-btn">🖼 삽입</button>
+          </div>
+          <div id="edit-status" class="hint" style="margin:8px 0 0"></div>
+        </div>`;
+      document.getElementById("cut-btn").onclick = editCut;
+      document.getElementById("ov-btn").onclick = editOverlay;
+    }
+
+    async function callEdit(url, fd, btn) {
+      const es = document.getElementById("edit-status");
+      btn.disabled = true;
+      es.textContent = "⏳ 편집 중...";
+      try {
+        const res = await fetch(url, { method: "POST", body: fd });
+        const body = await res.json();
+        if (!res.ok) {
+          // ffmpeg 상세 원인이 뒷줄에 있으므로 줄바꿈만 접어 앞 220자를 보여준다.
+          es.textContent = "❌ " + ((body.message || res.statusText) + "")
+            .replace(/\s+/g, " ").slice(0, 220);
+          return;
+        }
+        // 편집본이 새 현재 영상이 된다 (이어서 또 편집 가능).
+        showResult(body.data.video_url,
+          `✅ 편집 완료 — ${body.data.duration_seconds}초 영상 (처리 ${body.data.elapsed_seconds}초)`);
+      } catch (e) {
+        es.textContent = "❌ " + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function editCut() {
+      const s = parseFloat(document.getElementById("cut-start").value);
+      const e = parseFloat(document.getElementById("cut-end").value);
+      const es = document.getElementById("edit-status");
+      if (!Number.isFinite(s) || !Number.isFinite(e)) { es.textContent = "⚠ 시작/끝 초를 입력하세요."; return; }
+      const fd = new FormData();
+      fd.append("name", currentVideoName);
+      fd.append("start_seconds", s);
+      fd.append("end_seconds", e);
+      callEdit("/api/videos/edit/cut", fd, document.getElementById("cut-btn"));
+    }
+
+    function editOverlay() {
+      const at = parseFloat(document.getElementById("ov-at").value);
+      const dur = parseFloat(document.getElementById("ov-dur").value);
+      const file = document.getElementById("ov-file").files[0];
+      const es = document.getElementById("edit-status");
+      if (!Number.isFinite(at)) { es.textContent = "⚠ 삽입 시점(초)을 입력하세요."; return; }
+      if (!file) { es.textContent = "⚠ 삽입할 이미지를 선택하세요."; return; }
+      const fd = new FormData();
+      fd.append("name", currentVideoName);
+      fd.append("at_seconds", at);
+      fd.append("photo_seconds", Number.isFinite(dur) ? dur : 1.5);
+      fd.append("image", file);
+      callEdit("/api/videos/edit/insert", fd, document.getElementById("ov-btn"));
+    }
+
+    document.getElementById("theme").addEventListener("change", applyBuilderTheme);
+    document.getElementById("light").addEventListener("change", applyBuilderTheme);
+
+    initMap();
+    loadBgm();
+  </script>
+</body>
+</html>

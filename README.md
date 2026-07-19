@@ -186,6 +186,17 @@ See also: #456, #789
 ```ini
 [app]
 db.url = mysql+pymysql://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4
+
+[mapbox]
+; services/videoMaker 렌더러/빌더용 Mapbox 공개 토큰
+; (없으면 services/videoMaker/.env 의 MAPBOX_ACCESS_TOKEN 폴백 — Modal 등 단독 실행용)
+access_token = pk.your_public_token_here
+
+[videomaker]
+; 영상 렌더 엔진(POST /api/videos/render)이 쓸 trailer3d 환경 파이썬
+; (생략 시 서버 프로세스의 파이썬 사용 — playwright, modal 등이 설치돼 있어야 함)
+; engine=modal 은 배포된 Modal 앱을 호출하므로 사전 1회 `modal deploy modal_render.py` 필요.
+python = C:\path\to\anaconda3\envs\trailer3d\python.exe
 ```
 
 ---
