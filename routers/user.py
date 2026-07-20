@@ -31,7 +31,7 @@ async def get_my_profile(current_user: User = Depends(get_current_user)):
                 "(access token 인증 필요)",
     response_model=CommonResponse[ProfileResponse],
 )
-async def update_nickname(
+def update_nickname(
     request_data: NicknameUpdateRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
