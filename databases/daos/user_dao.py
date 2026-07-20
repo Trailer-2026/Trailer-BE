@@ -28,6 +28,17 @@ def create(db: Session, provider: str, provider_id: str, email: Optional[str] = 
     return user
 
 
+def update(db: Session, user: User, *, nickname: Optional[str] = None,
+           profile_image: Optional[str] = None) -> User:
+    """전달된 필드만 갱신한다(닉네임 / 프로필 사진). user는 현재 세션에 붙어있는 객체."""
+    if nickname is not None:
+        user.nickname = nickname
+    if profile_image is not None:
+        user.profile_image = profile_image
+    db.flush()
+    return user
+
+
 def soft_delete(db: Session, user_idx: int) -> Optional[User]:
     """회원 탈퇴 — 소프트 삭제(deleted_at). 이미 삭제됐거나 없으면 None.
 
