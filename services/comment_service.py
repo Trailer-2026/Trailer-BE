@@ -30,7 +30,7 @@ def create_comment(
         db, reels_idx=reels_idx, user_idx=user.user_idx, content=content, parent_idx=parent_idx
     )
     db.commit()
-    return _to_response(comment, user.nickname)
+    return _to_response(comment, user.nickname, user.profile_image)
 
 
 def list_comments(db: Session, user, reels_idx: int) -> list[CommentResponse]:
@@ -51,9 +51,9 @@ def list_comments(db: Session, user, reels_idx: int) -> list[CommentResponse]:
 
     tops: list[CommentResponse] = []
     by_idx: dict[int, CommentResponse] = {}
-    for comment, nickname in rows:  # comment_idx 오름차순 = 부모가 답글보다 항상 먼저 나온다
+    for comment, nickname, profile_image in rows:  # comment_idx 오름차순 = 부모가 답글보다 항상 먼저 나온다
         item = _to_response(
-            comment, nickname,
+            comment, nickname, profile_image,
             like_count=counts.get(comment.comment_idx, 0),
             liked=comment.comment_idx in liked,
         )
@@ -74,7 +74,7 @@ def update_comment(db: Session, user, comment_idx: int, content: str) -> Comment
     comment_dao.update_content(db, comment, content)
     db.commit()
     return _to_response(
-        comment, user.nickname,
+        comment, user.nickname, user.profile_image,
         like_count=like_dao.count_by_comment(db, comment_idx),
         liked=like_dao.get(db, user.user_idx, comment_idx=comment_idx) is not None,
     )
@@ -96,13 +96,15 @@ def _own_comment(db: Session, user, comment_idx: int):
 
 
 def _to_response(
-    comment, nickname: str | None, like_count: int = 0, liked: bool = False
+    comment, nickname: str | None, profile_image: str | None = None,
+    like_count: int = 0, liked: bool = False
 ) -> CommentResponse:
     return CommentResponse(
         comment_idx=comment.comment_idx,
         reels_idx=comment.reels_idx,
         user_idx=comment.user_idx,
         nickname=nickname,
+        profile_image=profile_image,
         content=comment.content,
         parent_idx=comment.parent_idx,
         created_at=comment.created_at,
