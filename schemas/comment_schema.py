@@ -29,6 +29,9 @@ class CommentResponse(BaseModel):
     reels_idx: int = Field(..., description="릴스 PK", examples=[5])
     user_idx: int = Field(..., description="작성자 PK", examples=[2])
     nickname: str | None = Field(None, description="작성자 닉네임", examples=["여행하는너구리"])
+    profile_image: str | None = Field(
+        None, description="작성자 프로필 사진 URL (없으면 null → 프론트 기본 이미지)", examples=[None]
+    )
     content: str = Field(..., description="댓글 내용", examples=["여기 진짜 좋네요"])
     parent_idx: int | None = Field(
         None, description="부모 댓글 PK (답글이면 세팅)", examples=[None]
