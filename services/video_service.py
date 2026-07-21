@@ -38,6 +38,7 @@ from core.exceptions.custom import (
     NotFoundException,
 )
 from databases.daos import reels_dao
+from schemas.video_schema import ReelsRecommendResponse
 from utils import gcs
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,7 @@ def get_bgm_path(filename: str) -> Path:
 RECOMMEND_REELS_COUNT = 10
 
 
-def recommend_reels(db: Session, exclude: str) -> list[dict]:
+def recommend_reels(db: Session, exclude: str) -> list[ReelsRecommendResponse]:
     """릴스를 무작위로 최대 10개 추천한다.
 
     exclude(쉼표 구분 reels_idx 목록)에 담긴 릴스는 제외하고 뽑는다 — 프론트가
@@ -119,13 +120,13 @@ def recommend_reels(db: Session, exclude: str) -> list[dict]:
         # 전부 이미 추천된 상태 → 한 바퀴 돌았으니 처음부터 다시
         rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, [])
     return [
-        {
-            "reels_idx": reels.reels_idx,
-            "url": reels.url,
-            "title": reels.title,
-            "nickname": nickname,
-            "profile_image": profile_image,
-        }
+        ReelsRecommendResponse(
+            reels_idx=reels.reels_idx,
+            url=reels.url,
+            title=reels.title,
+            nickname=nickname,
+            profile_image=profile_image,
+        )
         for reels, nickname, profile_image in rows
     ]
 
