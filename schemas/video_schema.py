@@ -8,6 +8,8 @@ class ReelsRecommendResponse(BaseModel):
     reels_idx: int = Field(..., description="릴스 PK (재요청 시 exclude에 누적해 전달)")
     url: str = Field(..., description="릴스 영상 URL")
     title: str | None = Field(None, description="릴스 제목 (없으면 null)")
+    nickname: str | None = Field(None, description="릴스 작성자 닉네임 (작성자 없는 옛 릴스는 null)")
+    profile_image: str | None = Field(None, description="릴스 작성자 프로필 사진 URL (작성자 없는 옛 릴스는 null)")
 
 
 class VideoEditResponse(BaseModel):

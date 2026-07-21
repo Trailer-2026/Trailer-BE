@@ -119,8 +119,14 @@ def recommend_reels(db: Session, exclude: str) -> list[dict]:
         # 전부 이미 추천된 상태 → 한 바퀴 돌았으니 처음부터 다시
         rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, [])
     return [
-        {"reels_idx": row.reels_idx, "url": row.url, "title": row.title}
-        for row in rows
+        {
+            "reels_idx": reels.reels_idx,
+            "url": reels.url,
+            "title": reels.title,
+            "nickname": nickname,
+            "profile_image": profile_image,
+        }
+        for reels, nickname, profile_image in rows
     ]
 
 
@@ -542,17 +548,20 @@ def _spawn_render_job(
     intro: bool,
     outro: bool,
     save_as_reels: bool = False,
+    user_idx: int | None = None,
 ) -> dict[str, object]:
     """렌더 서브프로세스를 백그라운드 스레드로 띄우고 job 상태를 반환한다.
 
     save_as_reels=True 면 렌더 완료 후 결과 영상을 GCS 버킷(reels/)에 올리고
-    reels 테이블에 FK 없이 등록한다 (사진만 렌더 자동 릴스화).
+    reels 테이블에 등록한다 (사진만 렌더 자동 릴스화). user_idx 가 있으면 작성자로
+    붙여 무작위 추천에서 프로필 사진을 함께 내려줄 수 있다.
     """
     command, marker = _build_command(
         travel_data_path, engine, quick, theme, light_preset, intro, outro
     )
     job = {
         "save_as_reels": save_as_reels,
+        "user_idx": user_idx,
         "reels_idx": None,
         "reels_url": None,
         "job_id": uuid.uuid4().hex[:12],
@@ -660,6 +669,7 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def start_render_photos_only(
     photos: list[tuple[str, bytes]],
+    user_idx: int,
     bgm: str = "",
     quick: bool = False,
     engine: str = "local",
@@ -769,7 +779,7 @@ def start_render_photos_only(
     )
     return _spawn_render_job(
         travel_data_path, bgm_path, quick, engine, theme, light_preset, intro, outro,
-        save_as_reels=True,
+        save_as_reels=True, user_idx=user_idx,
     )
 
 
@@ -793,6 +803,7 @@ def _job_snapshot(job: dict) -> dict[str, object]:
             snapshot["eta_seconds"] = round(remaining, 1)
     snapshot.pop("started_at", None)
     snapshot.pop("save_as_reels", None)  # 내부 플래그 — 응답에서 제외
+    snapshot.pop("user_idx", None)  # 내부용(릴스 작성자) — 응답에서 제외
     return snapshot
 
 
@@ -895,7 +906,9 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
     if job.get("save_as_reels"):
         update(percent=99.0, phase="릴스 등록(버킷 업로드)")
         try:
-            reels_fields = _register_render_as_reels(OUTPUT_DIR / output_name)
+            reels_fields = _register_render_as_reels(
+                OUTPUT_DIR / output_name, user_idx=job.get("user_idx")
+            )
         except Exception as error:  # 릴스 등록 실패해도 렌더 자체는 성공으로 처리
             logger.exception("렌더 결과 릴스 등록 실패: %s", output_name)
             log_tail += f"\n[warn] 릴스 등록 실패: {error}"
@@ -912,10 +925,12 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
     )
 
 
-def _register_render_as_reels(video_path: Path) -> dict[str, object]:
-    """완성 영상을 GCS 버킷(reels/)에 올리고 reels 행을 FK 없이 등록한다.
+def _register_render_as_reels(
+    video_path: Path, user_idx: int | None = None
+) -> dict[str, object]:
+    """완성 영상을 GCS 버킷(reels/)에 올리고 reels 행을 등록한다.
 
-    사진만 렌더는 로그인/여행 없이 실행되므로 travel_idx·user_idx 는 NULL 로 둔다.
+    user_idx 는 로그인한 작성자(무작위 추천에서 프로필 사진을 붙이는 근거)로 채운다.
     """
     from databases.database import SessionLocal
 
@@ -924,7 +939,7 @@ def _register_render_as_reels(video_path: Path) -> dict[str, object]:
     )
     db = SessionLocal()
     try:
-        row = reels_dao.create(db, travel_idx=None, user_idx=None, url=url, title=None)
+        row = reels_dao.create(db, user_idx=user_idx, url=url, title=None)
         db.commit()
         return {"reels_idx": row.reels_idx, "reels_url": url}
     except Exception:
