@@ -896,7 +896,10 @@ def _stopover_visits(recs: list, start_dt, end_dt) -> list:
     if start_dt is None:
         return [None] * len(recs)
     start_h = start_dt.hour + start_dt.minute / 60
-    end_h = (end_dt.hour + end_dt.minute / 60) if end_dt is not None else start_h
+    # 다음 출발이 자정을 넘겨 다음날이면 start 기준 24+시로 환산한다(실제 경과시간으로 계산).
+    # 안 하면 end_h<start_h가 돼 심야 경유(예: 23:10 도착~다음날 00:40 출발)에서
+    # arrive>=end_h가 항상 참이 되어 모든 경유지가 방문불가로 걸러진다.
+    end_h = start_h + (end_dt - start_dt).total_seconds() / 3600 if end_dt is not None else start_h
     cursor = start_h
     out = []
     for rec in recs:
