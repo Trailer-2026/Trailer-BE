@@ -83,10 +83,8 @@ def two_opt(order: list[ScoredPlace]) -> list[ScoredPlace]:
                     improved = True
     return best
 
-"""
-Nearest Neighbor (nearest_neighbor()) — "가장 가까운 곳부터 그리디하게" 초기 순서를 빠르게 만듭니다. 단, 그리디라서 종종 비효율적인 꼬임이 생깁니다.
-2-opt (two_opt()) — 그 초기 순서의 꼬임을 다듬어 개선합니다.
-"""
+# Nearest Neighbor(nearest_neighbor) — "가장 가까운 곳부터 그리디하게" 초기 순서를 빠르게 만든다.
+# 단, 그리디라서 종종 비효율적인 꼬임이 생긴다. 2-opt(two_opt)가 그 초기 순서의 꼬임을 다듬는다.
 
 def close_cycle(
     order: list[ScoredPlace],
@@ -108,7 +106,5 @@ def close_cycle(
         return list(reversed(order))
     return order
 
-"""
-2-opt는 TSP(외판원 문제, Traveling Salesman Problem) 를 빠르게 개선하는 고전적인 지역 탐색(local search) 알고리즘 
-이 파일에서는 "하루(Day) 안에서 관광지들을 어떤 순서로 돌면 이동 거리가 가장 짧은가"를 푸는 데 쓰임
-"""
+# 2-opt는 TSP(외판원 문제)를 빠르게 개선하는 고전적인 지역 탐색(local search) 알고리즘.
+# 이 파일에서는 "하루(Day) 안에서 관광지를 어떤 순서로 돌면 이동 거리가 가장 짧은가"를 푸는 데 쓴다.
