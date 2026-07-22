@@ -32,19 +32,15 @@ def hhmm(hour: float | None) -> str | None:
     return f"{hh:02d}:{mm:02d}"
 
 
-def nearest_neighbor(
-    points: list[ScoredPlace],
-    start: ScoredPlace | None = None,
-) -> list[ScoredPlace]:
-    """그리디 최근접 이웃으로 초기 방문 순서를 만든다. start 미지정 시 첫 노드부터.
+def nearest_neighbor(points: list[ScoredPlace]) -> list[ScoredPlace]:
+    """그리디 최근접 이웃으로 초기 방문 순서를 만든다(첫 노드부터).
 
     2곳 이하는 순서가 무의미하므로 그대로 반환. 결과는 2-opt의 시작 해로 쓰인다.
     """
     if len(points) <= 2:
         return list(points)
     remaining = list(points)
-    # start가 목록에 없으면 첫 노드를 시작점으로
-    cur = start if start in remaining else remaining[0]
+    cur = remaining[0]
     remaining.remove(cur)
     order = [cur]
     while remaining:

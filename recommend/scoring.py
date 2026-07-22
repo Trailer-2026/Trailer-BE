@@ -102,7 +102,7 @@ def _to_scored(p, score: float) -> ScoredPlace:
         score=score,
         image_url=p.image_url,
         # 운영시간은 아직 미조회. content_type_id만 실어 이후 detailIntro2 조회에 쓴다.
-        content_type_id=getattr(p, "content_type_id", None),
+        content_type_id=p.content_type_id,
     )
 
 

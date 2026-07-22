@@ -424,7 +424,7 @@ def _courses_for_route(scored: list, criteria: SearchCriteria, k: int, anchor, r
     return sorted(courses, key=lambda c: c.total_preference_score, reverse=True)
 
 
-def _caps_arrival_only(arr, k: int) -> tuple[int | None, int | None]:
+def _caps_arrival_only(arr) -> tuple[int | None, int | None]:
     """도착일만 제약하고 마지막날은 출발 제약 없는 구간의 (첫날, 마지막날) 상한.
 
     '먼저 묵는 도시'용 — 마지막날은 그 밤을 자고 다음날 아침에 이동하므로 하루 종일 관광 가능(제약 없음).
@@ -493,7 +493,7 @@ def _course_for_overnight(db, dest_scored, criteria, k, dest_anchor, route, memo
         seg_anchor = via_anchor if is_via else dest_anchor
         seg_scored = via_scored if is_via else dest_scored
         if idx == 0:  # 먼저 묵는 도시: 마지막날 출발 제약 없음(자고 다음날 이동)
-            fc, lc = _caps_arrival_only(arr, seg_k)
+            fc, lc = _caps_arrival_only(arr)
             win = _windows_arrival_only(arr, seg_k)
         else:         # 나중 도시: 도착~귀가 표준
             fc, lc = _caps_between(arr, dep, seg_k)
