@@ -15,8 +15,11 @@ from services import video_service
 
 router = APIRouter(prefix="/api/videos", tags=["Video"])
 
-# Swagger 설명란에 넣을 실제 BGM 파일명 목록 — 서버 시작 시 bgm/ 폴더에서 읽는다.
-_BGM_FILES = ", ".join(track["file"] for track in video_service.list_bgm()) or "(없음)"
+# Swagger 표기용 실제 BGM 파일명 — 서버 시작 시 bgm/ 폴더에서 읽는다.
+# enum 을 스키마에만 얹으면 Swagger UI 는 드롭다운으로 보여주되(빈 값 = 무음),
+# 서버 검증은 느슨한 매칭(곡명만 보내도 인식) 그대로 유지된다.
+_BGM_CHOICES = ["", *(track["file"] for track in video_service.list_bgm())]
+_BGM_FILES = ", ".join(_BGM_CHOICES[1:]) or "(없음)"
 
 
 @router.get("/assets/map_themes.js", include_in_schema=False)
@@ -77,7 +80,7 @@ def get_output_video(name: str) -> FileResponse:
 )
 def render_video(
     points: str = Form(..., description='GPS 지점 JSON 배열 문자열: [{"latitude","longitude","name"}, ...] (최소 2개)'),
-    bgm: str = Form("", description=f"BGM 파일명 또는 곡명 (빈 값이면 무음, 곡명만 보내도 매칭, 없으면 404). 사용 가능: {_BGM_FILES}"),
+    bgm: str = Form("", description=f"BGM 파일명 또는 곡명 (빈 값이면 무음, 곡명만 보내도 매칭, 없으면 404). 사용 가능: {_BGM_FILES}", json_schema_extra={"enum": _BGM_CHOICES}),
     quick: str = Form("false", description='"true"면 저해상도 빠른 렌더 (local: 540x960/15fps, modal: JPEG q95)'),
     engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
     theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
@@ -128,7 +131,7 @@ def render_video_photos_only(
     start_name: str = Form("", description="출발지 라벨 (예: 서울역, 기본 '출발')"),
     start_latitude: float | None = Form(None, description="출발지 위도 (경도와 함께 지정, 생략 시 첫 사진 위치에서 시작)"),
     start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
-    bgm: str = Form("", description=f"BGM 파일명 또는 곡명 (빈 값이면 무음, 곡명만 보내도 매칭, 없으면 404). 사용 가능: {_BGM_FILES}"),
+    bgm: str = Form("", description=f"BGM 파일명 또는 곡명 (빈 값이면 무음, 곡명만 보내도 매칭, 없으면 404). 사용 가능: {_BGM_FILES}", json_schema_extra={"enum": _BGM_CHOICES}),
     quick: str = Form("false", description='"true"면 저해상도 빠른 렌더'),
     engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
     theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
