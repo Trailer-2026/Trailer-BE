@@ -15,6 +15,9 @@ from services import video_service
 
 router = APIRouter(prefix="/api/videos", tags=["Video"])
 
+# Swagger 설명란에 넣을 실제 BGM 파일명 목록 — 서버 시작 시 bgm/ 폴더에서 읽는다.
+_BGM_FILES = ", ".join(track["file"] for track in video_service.list_bgm()) or "(없음)"
+
 
 @router.get("/assets/map_themes.js", include_in_schema=False)
 def get_map_themes() -> FileResponse:
@@ -47,7 +50,7 @@ def get_bgm_list():
                 "반환합니다.",
     response_class=FileResponse,
 )
-def get_bgm_preview(file: str = Query(..., description="BGM 파일명 또는 곡명 (GET /api/videos/bgm 의 file 값 권장)")):
+def get_bgm_preview(file: str = Query(..., description=f"BGM 파일명 또는 곡명. 사용 가능: {_BGM_FILES}")):
     return FileResponse(video_service.get_bgm_path(file), media_type="audio/mpeg")
 
 
@@ -74,7 +77,7 @@ def get_output_video(name: str) -> FileResponse:
 )
 def render_video(
     points: str = Form(..., description='GPS 지점 JSON 배열 문자열: [{"latitude","longitude","name"}, ...] (최소 2개)'),
-    bgm: str = Form("", description="BGM 파일명 또는 곡명 (GET /api/videos/bgm 의 file 값 권장, 곡명만 보내도 매칭, 빈 값이면 무음, 일치하는 트랙이 없으면 404)"),
+    bgm: str = Form("", description=f"BGM 파일명 또는 곡명 (빈 값이면 무음, 곡명만 보내도 매칭, 없으면 404). 사용 가능: {_BGM_FILES}"),
     quick: str = Form("false", description='"true"면 저해상도 빠른 렌더 (local: 540x960/15fps, modal: JPEG q95)'),
     engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
     theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
@@ -125,7 +128,7 @@ def render_video_photos_only(
     start_name: str = Form("", description="출발지 라벨 (예: 서울역, 기본 '출발')"),
     start_latitude: float | None = Form(None, description="출발지 위도 (경도와 함께 지정, 생략 시 첫 사진 위치에서 시작)"),
     start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
-    bgm: str = Form("", description="BGM 파일명 또는 곡명 (GET /api/videos/bgm 의 file 값 권장, 곡명만 보내도 매칭, 빈 값이면 무음, 일치하는 트랙이 없으면 404)"),
+    bgm: str = Form("", description=f"BGM 파일명 또는 곡명 (빈 값이면 무음, 곡명만 보내도 매칭, 없으면 404). 사용 가능: {_BGM_FILES}"),
     quick: str = Form("false", description='"true"면 저해상도 빠른 렌더'),
     engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
     theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
