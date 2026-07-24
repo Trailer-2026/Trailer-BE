@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from core.response import CommonResponse
 from databases.database import get_db
 from schemas.video_schema import (
+    BgmTrackResponse,
     ReelsRecommendResponse,
     VideoEditResponse,
     VideoRenderStatusResponse,
@@ -24,6 +25,30 @@ def get_map_themes() -> FileResponse:
         media_type="application/javascript",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+@router.get(
+    "/bgm",
+    summary="BGM 목록 조회",
+    description="영상에 입힐 수 있는 BGM 트랙 목록을 반환합니다. file 값을 렌더 요청의 "
+                "bgm 필드에 그대로 넣으면 됩니다.",
+    response_model=CommonResponse[list[BgmTrackResponse]],
+)
+def get_bgm_list():
+    tracks = video_service.list_bgm()
+    return CommonResponse.success_response("BGM 목록 조회 성공", data=tracks)
+
+
+@router.get(
+    "/bgm/preview",
+    summary="BGM 미리듣기",
+    description="BGM 파일을 오디오 스트림으로 반환합니다. 파일명 외에 곡명(예: Funk)으로도 "
+                "찾을 수 있습니다. 일치하는 트랙이 없으면 404, 오디오가 아니면 400을 "
+                "반환합니다.",
+    response_class=FileResponse,
+)
+def get_bgm_preview(file: str = Query(..., description="BGM 파일명 또는 곡명 (GET /api/videos/bgm 의 file 값 권장)")):
+    return FileResponse(video_service.get_bgm_path(file), media_type="audio/mpeg")
 
 
 @router.get(
@@ -49,7 +74,7 @@ def get_output_video(name: str) -> FileResponse:
 )
 def render_video(
     points: str = Form(..., description='GPS 지점 JSON 배열 문자열: [{"latitude","longitude","name"}, ...] (최소 2개)'),
-    bgm: str = Form("", description="BGM 파일명 (GET /api/videos/bgm 의 file 값, 빈 값이면 무음)"),
+    bgm: str = Form("", description="BGM 파일명 또는 곡명 (GET /api/videos/bgm 의 file 값 권장, 곡명만 보내도 매칭, 빈 값이면 무음, 일치하는 트랙이 없으면 404)"),
     quick: str = Form("false", description='"true"면 저해상도 빠른 렌더 (local: 540x960/15fps, modal: JPEG q95)'),
     engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
     theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
@@ -100,7 +125,7 @@ def render_video_photos_only(
     start_name: str = Form("", description="출발지 라벨 (예: 서울역, 기본 '출발')"),
     start_latitude: float | None = Form(None, description="출발지 위도 (경도와 함께 지정, 생략 시 첫 사진 위치에서 시작)"),
     start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
-    bgm: str = Form("", description="BGM 파일명 (GET /api/videos/bgm 의 file 값, 빈 값이면 무음)"),
+    bgm: str = Form("", description="BGM 파일명 또는 곡명 (GET /api/videos/bgm 의 file 값 권장, 곡명만 보내도 매칭, 빈 값이면 무음, 일치하는 트랙이 없으면 404)"),
     quick: str = Form("false", description='"true"면 저해상도 빠른 렌더'),
     engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
     theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),

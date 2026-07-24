@@ -2,6 +2,15 @@
 from pydantic import BaseModel, Field
 
 
+class BgmTrackResponse(BaseModel):
+    """렌더 요청에 쓸 수 있는 BGM 트랙 목록 항목."""
+
+    file: str = Field(..., description="bgm 폴더 내 파일명 (렌더 요청의 bgm 값으로 사용)")
+    title: str = Field(..., description="표시용 곡명")
+    artist: str = Field(..., description="아티스트명 (파싱 실패 시 빈 문자열)")
+    source: str = Field(..., description="음원 출처 (예: Pixabay, 없으면 빈 문자열)")
+
+
 class ReelsRecommendResponse(BaseModel):
     """릴스 무작위 추천 목록 항목."""
 

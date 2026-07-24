@@ -81,14 +81,59 @@ def get_output_path(name: str) -> Path:
 # --------------------------------------------------------------------------- #
 # BGM
 # --------------------------------------------------------------------------- #
+def _bgm_display_name(filename: str) -> dict[str, str]:
+    """`곡명 - 아티스트.mp3` 형식 파일명을 곡명/아티스트로 정리한다 (bgm/CREDITS.md 참고)."""
+    stem = Path(filename).stem
+    if " - " in stem:
+        title, artist = stem.rsplit(" - ", 1)
+        return {"title": title.strip(), "artist": artist.strip(), "source": "Pixabay"}
+    return {"title": stem, "artist": "", "source": ""}
+
+
+def list_bgm() -> list[dict[str, str]]:
+    """bgm/ 폴더의 트랙 목록. file 값을 렌더 요청의 bgm 필드에 그대로 쓴다."""
+    if not BGM_DIR.exists():
+        return []
+    return [
+        {"file": path.name, **_bgm_display_name(path.name)}
+        for path in sorted(BGM_DIR.iterdir())
+        if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
+    ]
+
+
 def get_bgm_path(filename: str) -> Path:
-    """BGM 파일명을 bgm/ 밖으로 못 나가게 검증해 경로로 반환한다."""
-    candidate = (BGM_DIR / filename).resolve()
-    if candidate.parent != BGM_DIR.resolve() or not candidate.is_file():
-        raise NotFoundException("BGM을 찾을 수 없습니다.")
-    if candidate.suffix.lower() not in AUDIO_EXTENSIONS:
-        raise BadRequestException("오디오 파일이 아닙니다.")
-    return candidate
+    """BGM 이름을 bgm/ 트랙 경로로 해석한다 (bgm/ 밖으로 경로 탈출 불가).
+
+    파일명 완전 일치 외에 대소문자 무시·확장자 생략·곡명("Funk")만 보내는
+    형태도 허용한다 — 파일이 개명되거나 프론트가 표시명으로 보내도 매칭되게.
+    """
+    query = (filename or "").strip()
+    candidate = (BGM_DIR / query).resolve()
+    if candidate.parent == BGM_DIR.resolve() and candidate.is_file():
+        if candidate.suffix.lower() not in AUDIO_EXTENSIONS:
+            raise BadRequestException("오디오 파일이 아닙니다.")
+        return candidate
+
+    # 완전 일치 실패 → 확장자 떼고 대소문자 무시로 파일명 → 곡명 → 유일한
+    # 부분 일치 순서로 찾는다. 후보는 bgm/ 안의 오디오 파일뿐이라 탈출 위험 없음.
+    tracks = [
+        path
+        for path in (sorted(BGM_DIR.iterdir()) if BGM_DIR.exists() else [])
+        if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
+    ]
+    normalized = Path(query).stem.strip().casefold()
+    if normalized:
+        for track in tracks:
+            if track.stem.casefold() == normalized:
+                return track
+        for track in tracks:
+            if track.stem.rsplit(" - ", 1)[0].strip().casefold() == normalized:
+                return track
+        partial = [t for t in tracks if normalized in t.stem.casefold()]
+        if len(partial) == 1:
+            return partial[0]
+    available = ", ".join(t.name for t in tracks) or "(bgm 폴더가 비어 있음)"
+    raise NotFoundException(f"BGM을 찾을 수 없습니다: {query} (사용 가능: {available})")
 
 
 # --------------------------------------------------------------------------- #
