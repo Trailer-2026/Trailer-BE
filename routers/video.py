@@ -164,6 +164,59 @@ def render_video_photos_only(
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
 
 
+@router.post(
+    "/render/photos-ordered",
+    summary="사진 순서 지정 영상 렌더링 시작 (업로드 순서대로)",
+    description="POST /render/photos-only 와 같지만 촬영 시각을 무시하고, 업로드한 사진 "
+                "순서 그대로(사용자가 지정한 순서) 지점을 이동하며 각 지점에서 해당 사진을 "
+                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률 폴링은 "
+                "POST /render 와 동일). EXIF 에서는 GPS 좌표만 사용합니다. "
+                "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
+                "GPS 없는 사진은 자동 제외되어 순서에서 빠집니다. 직전 지점 기준 1km 미만인 "
+                "연속 사진들은 카메라 이동 없이 그 지점에 고정해 순서대로 보여주고, 1km 이상 "
+                "떨어진 사진이 나오면 그 위치로 이동합니다. start_latitude/longitude 를 주면 "
+                "그 위치(예: 서울역)를 출발지로 삼아 첫 사진 지점으로 이동하며 시작합니다. "
+                "조건을 못 채우면 400을 반환합니다. 렌더가 끝나면 완성 영상이 GCS 버킷에 "
+                "올라가고 reels 테이블에 로그인 사용자(user_idx)와 연결되어 자동 등록되며, "
+                "상태 응답의 reels_idx/reels_url 로 확인할 수 있습니다. JWT 인증이 필요하며 "
+                "토큰이 없거나 유효하지 않으면 401을 반환합니다.",
+    response_model=CommonResponse[VideoRenderStatusResponse],
+)
+def render_video_photos_ordered(
+    start_name: str = Form("", description="출발지 라벨 (예: 서울역, 기본 '출발')"),
+    start_latitude: float | None = Form(None, description="출발지 위도 (경도와 함께 지정, 생략 시 첫 사진 위치에서 시작)"),
+    start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
+    bgm: str = Form("", description=f"BGM 파일명 또는 곡명 (빈 값이면 무음, 곡명만 보내도 매칭, 없으면 404). 사용 가능: {_BGM_FILES}", json_schema_extra={"enum": _BGM_CHOICES}),
+    quick: str = Form("false", description='"true"면 저해상도 빠른 렌더'),
+    engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
+    theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
+    light_preset: str = Form("", description="시간대 조명: dawn|day|dusk|night (빈 값 = 테마 기본)"),
+    intro: str = Form("false", description='"true"면 TRAILER 인트로 클립을 앞에 붙임'),
+    outro: str = Form("false", description='"true"면 TRAILER 아웃트로 클립을 뒤에 붙임'),
+    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장) — 보낸 순서가 곧 영상 순서"),
+    current_user: User = Depends(get_current_user),
+):
+    photo_payloads = [
+        (upload.filename or "", upload.file.read()) for upload in photos
+    ]
+    job = video_service.start_render_photos_only(
+        photos=photo_payloads,
+        bgm=bgm,
+        quick=quick.lower().strip() == "true",
+        engine=engine,
+        theme=theme,
+        light_preset=light_preset,
+        intro=intro.lower().strip() == "true",
+        outro=outro.lower().strip() == "true",
+        start_name=start_name,
+        start_latitude=start_latitude,
+        start_longitude=start_longitude,
+        user_idx=current_user.user_idx,
+        sort_by_time=False,
+    )
+    return CommonResponse.success_response("영상 렌더링 시작", data=job)
+
+
 @router.get(
     "/reels/recommend",
     summary="릴스 무작위 추천",

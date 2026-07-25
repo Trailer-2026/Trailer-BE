@@ -719,16 +719,19 @@ def start_render_photos_only(
     start_latitude: float | None = None,
     start_longitude: float | None = None,
     user_idx: int | None = None,
+    sort_by_time: bool = True,
 ) -> dict[str, object]:
     """사진들의 EXIF(GPS·촬영시각)만으로 여행 경로 영상 렌더링을 시작한다.
 
     user_idx(JWT 인증 사용자)를 받으면 렌더 완료 후 자동 등록되는 릴스 행의
     작성자(user_idx)로 매핑한다.
 
-    촬영 시각 순으로 지점을 이동하며 각 지점에서 해당 사진을 보여준다.
-    GPS 없는 사진은 제외한다. 지점 기준점(묶음 첫 사진 위치)에서 PHOTO_CLUSTER_KM(1km)
-    미만인 연속 사진은 이동 없이 그 지점에 고정해 사진1→사진2→사진3 순으로 보여주고,
-    1km 이상 떨어진 사진이 나오면 그 위치로 이동한다.
+    sort_by_time=True(기본)면 촬영 시각 순으로, False 면 촬영 시각을 무시하고
+    업로드한 순서 그대로(사용자 지정 순서) 지점을 이동하며 각 지점에서 해당
+    사진을 보여준다. GPS 없는 사진은 제외한다. 지점 기준점(묶음 첫 사진 위치)에서
+    PHOTO_CLUSTER_KM(1km) 미만인 연속 사진은 이동 없이 그 지점에 고정해
+    사진1→사진2→사진3 순으로 보여주고, 1km 이상 떨어진 사진이 나오면 그 위치로
+    이동한다.
 
     start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 삼아
     첫 사진 지점으로 이동하며 시작한다 (출발지에서는 사진 없이 라벨만 표시).
@@ -757,7 +760,9 @@ def start_render_photos_only(
         )
 
     # 촬영 시각 순 정렬 — 시각 없는 사진은 업로드 순서를 유지한 채 뒤로 보낸다.
-    tagged.sort(key=lambda item: (item[2]["taken"] is None, item[2]["taken"] or datetime.min))
+    # (순서 지정 모드에서는 업로드 순서가 곧 사용자 지정 순서라 정렬하지 않는다.)
+    if sort_by_time:
+        tagged.sort(key=lambda item: (item[2]["taken"] is None, item[2]["taken"] or datetime.min))
 
     job_dir = UPLOADS_DIR / uuid.uuid4().hex[:12]
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -784,7 +789,8 @@ def start_render_photos_only(
             "latitude": meta["latitude"],
             "longitude": meta["longitude"],
         }
-        if meta["taken"] is not None:
+        # 순서 지정 모드에서는 촬영 시각이 이동 순서와 어긋날 수 있어 넣지 않는다.
+        if sort_by_time and meta["taken"] is not None:
             point["timestamp"] = meta["taken"].isoformat()
         track_points.append(point)
         media_points.append(
