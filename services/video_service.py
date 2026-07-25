@@ -3,8 +3,8 @@
 
 사진 EXIF·여행 일정(schedule)에서 뽑은 GPS 지점/사진/옵션을 travel_data.json 으로 변환해
 services/videoMaker/render_video.py(로컬 GPU) 또는 modal_render.py(Modal T4 GPU)를
-서브프로세스로 실행하고, 완성된 mp4 파일명을 돌려준다. 렌더 관련 기능은 DB를
-쓰지 않으며, 릴스 추천(recommend_reels)만 reels 테이블을 읽는다.
+서브프로세스로 실행하고, 완성된 mp4 파일명을 돌려준다. 여행 렌더는
+travel/schedule/travel_image 를 읽고, 렌더 완료 시 reels 행을 등록한다.
 
 렌더러는 별도 conda 환경(trailer3d)의 의존성(playwright 등)이 필요하므로,
 로컬 엔진이 쓸 파이썬 경로를 properties_dev.ini 의 [videomaker] python 으로
@@ -25,6 +25,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -89,15 +90,20 @@ def _bgm_display_name(filename: str) -> dict[str, str]:
     return {"title": stem, "artist": "", "source": ""}
 
 
-def list_bgm() -> list[dict[str, str]]:
-    """bgm/ 폴더의 트랙 목록. file 값을 렌더 요청의 bgm 필드에 그대로 쓴다."""
+def _bgm_tracks() -> list[Path]:
+    """bgm/ 폴더의 오디오 트랙 경로 목록 (정렬 순서 고정)."""
     if not BGM_DIR.exists():
         return []
     return [
-        {"file": path.name, **_bgm_display_name(path.name)}
+        path
         for path in sorted(BGM_DIR.iterdir())
         if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
     ]
+
+
+def list_bgm() -> list[dict[str, str]]:
+    """bgm/ 폴더의 트랙 목록. file 값을 렌더 요청의 bgm 필드에 그대로 쓴다."""
+    return [{"file": path.name, **_bgm_display_name(path.name)} for path in _bgm_tracks()]
 
 
 def get_bgm_path(filename: str) -> Path:
@@ -115,11 +121,7 @@ def get_bgm_path(filename: str) -> Path:
 
     # 완전 일치 실패 → 확장자 떼고 대소문자 무시로 파일명 → 곡명 → 유일한
     # 부분 일치 순서로 찾는다. 후보는 bgm/ 안의 오디오 파일뿐이라 탈출 위험 없음.
-    tracks = [
-        path
-        for path in (sorted(BGM_DIR.iterdir()) if BGM_DIR.exists() else [])
-        if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS
-    ]
+    tracks = _bgm_tracks()
     normalized = Path(query).stem.strip().casefold()
     if normalized:
         for track in tracks:
@@ -475,6 +477,9 @@ def insert_image(
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
+# job dict 에만 두고 상태 응답(_job_snapshot)에서는 빼는 내부 필드.
+_INTERNAL_JOB_KEYS = ("started_at", "user_idx")
+
 # render_video.py 가 15프레임마다 찍는 "[perf:frame] 000060/000127 ..." 라인.
 _FRAME_PROGRESS_RE = re.compile(r"\[perf:frame\]\s*(\d+)/(\d+)")
 # 프레임 이후 후처리 마커 → 해당 시점의 percent.
@@ -503,18 +508,15 @@ def _spawn_render_job(
     quick: bool,
     engine: str,
     theme: str,
-    save_as_reels: bool = False,
-    user_idx: int | None = None,
+    user_idx: int,
 ) -> dict[str, object]:
     """렌더 서브프로세스를 백그라운드 스레드로 띄우고 job 상태를 반환한다.
 
-    save_as_reels=True 면 렌더 완료 후 결과 영상을 GCS 버킷(reels/)에 올리고
-    reels 테이블에 등록한다 (사진만 렌더 자동 릴스화). user_idx 가 있으면
-    릴스 행의 작성자로 매핑한다.
+    렌더 완료 후 결과 영상을 GCS 버킷(reels/)에 올리고 reels 테이블에
+    user_idx(렌더 요청자)를 작성자로 매핑해 등록한다.
     """
     command, marker = _build_command(travel_data_path, engine, quick, theme)
     job = {
-        "save_as_reels": save_as_reels,
         "user_idx": user_idx,
         "reels_idx": None,
         "reels_url": None,
@@ -598,8 +600,82 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * radius * math.asin(math.sqrt(a))
 
 
+def _new_job_dir() -> Path:
+    """이번 렌더 작업의 입력을 담을 uploads/ 하위 디렉터리를 만든다."""
+    job_dir = UPLOADS_DIR / uuid.uuid4().hex[:12]
+    job_dir.mkdir(parents=True, exist_ok=True)
+    return job_dir
+
+
+def _save_render_image(job_dir: Path, stem: str, source_name: str, content: bytes) -> str:
+    """이미지를 job 디렉터리에 저장하고 렌더러 기준 상대 경로(POSIX)를 반환한다."""
+    suffix = Path(source_name or "").suffix.lower()
+    if suffix not in IMAGE_EXTENSIONS:
+        suffix = ".jpg"
+    saved = job_dir / f"{stem}{suffix}"
+    saved.write_bytes(content)
+    return saved.relative_to(VIDEO_MAKER_DIR).as_posix()
+
+
+def _append_stop(
+    track_points: list[dict[str, object]],
+    media_points: list[dict[str, object]],
+    latitude: float,
+    longitude: float,
+    photos: list[str],
+    name: str | None = None,
+    timestamp: str | None = None,
+) -> None:
+    """지점을 추가하거나, 직전 지점에서 PHOTO_CLUSTER_KM 미만이면 사진만 합친다.
+
+    새 지점의 name 을 생략하면 "지점 N"(추가 후 순번)으로 채운다.
+    """
+    if track_points and _haversine_km(
+        float(track_points[-1]["latitude"]), float(track_points[-1]["longitude"]),
+        latitude, longitude,
+    ) < PHOTO_CLUSTER_KM:
+        # 같은 장소의 연속 사진/일정 → 직전 지점에서 순서대로 이어 보여준다.
+        media_points[-1]["photos"].extend(photos)
+        return
+
+    point: dict[str, object] = {"latitude": latitude, "longitude": longitude}
+    if timestamp is not None:
+        point["timestamp"] = timestamp
+    track_points.append(point)
+    media_points.append({
+        "trackIndex": len(track_points) - 1,
+        "name": name if name is not None else f"지점 {len(track_points)}",
+        "photos": photos,
+    })
+
+
+def _write_travel_data(
+    job_dir: Path,
+    track_points: list[dict[str, object]],
+    media_points: list[dict[str, object]],
+    bgm: str,
+) -> tuple[Path, Path | None]:
+    """travel_data.json 을 job 디렉터리에 쓰고 (경로, BGM 경로|None)을 반환한다."""
+    travel_data: dict[str, object] = {
+        "trackPoints": track_points,
+        "mediaPoints": media_points,
+    }
+    bgm_path: Path | None = None
+    if bgm.strip():
+        bgm_path = get_bgm_path(bgm.strip())
+        travel_data["bgm"] = bgm_path.relative_to(VIDEO_MAKER_DIR).as_posix()
+
+    travel_data_path = job_dir / "travel_data.json"
+    travel_data_path.write_text(
+        json.dumps(travel_data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return travel_data_path, bgm_path
+
+
 def start_render_photos_only(
     photos: list[tuple[str, bytes]],
+    *,
+    user_idx: int,
     bgm: str = "",
     quick: bool = False,
     engine: str = "local",
@@ -607,13 +683,12 @@ def start_render_photos_only(
     start_name: str = "",
     start_latitude: float | None = None,
     start_longitude: float | None = None,
-    user_idx: int | None = None,
     sort_by_time: bool = True,
 ) -> dict[str, object]:
     """사진들의 EXIF(GPS·촬영시각)만으로 여행 경로 영상 렌더링을 시작한다.
 
-    user_idx(JWT 인증 사용자)를 받으면 렌더 완료 후 자동 등록되는 릴스 행의
-    작성자(user_idx)로 매핑한다.
+    렌더 완료 후 자동 등록되는 릴스 행의 작성자는 user_idx(JWT 인증 사용자)로
+    매핑한다.
 
     sort_by_time=True(기본)면 촬영 시각 순으로, False 면 촬영 시각을 무시하고
     업로드한 순서 그대로(사용자 지정 순서) 지점을 이동하며 각 지점에서 해당
@@ -653,37 +728,18 @@ def start_render_photos_only(
     if sort_by_time:
         tagged.sort(key=lambda item: (item[2]["taken"] is None, item[2]["taken"] or datetime.min))
 
-    job_dir = UPLOADS_DIR / uuid.uuid4().hex[:12]
-    job_dir.mkdir(parents=True, exist_ok=True)
-
+    job_dir = _new_job_dir()
     track_points: list[dict[str, object]] = []
     media_points: list[dict[str, object]] = []
     for order, (filename, content, meta) in enumerate(tagged):
-        suffix = Path(filename or "").suffix.lower()
-        if suffix not in IMAGE_EXTENSIONS:
-            suffix = ".jpg"
-        saved = job_dir / f"photo_{order}{suffix}"
-        saved.write_bytes(content)
-        rel = saved.relative_to(VIDEO_MAKER_DIR).as_posix()
-
-        if track_points and _haversine_km(
-            float(track_points[-1]["latitude"]), float(track_points[-1]["longitude"]),
-            float(meta["latitude"]), float(meta["longitude"]),
-        ) < PHOTO_CLUSTER_KM:
-            # 같은 장소에서 연속 촬영 → 직전 지점의 사진 묶음에 추가.
-            media_points[-1]["photos"].append(rel)
-            continue
-
-        point: dict[str, object] = {
-            "latitude": meta["latitude"],
-            "longitude": meta["longitude"],
-        }
+        rel = _save_render_image(job_dir, f"photo_{order}", filename, content)
         # 순서 지정 모드에서는 촬영 시각이 이동 순서와 어긋날 수 있어 넣지 않는다.
-        if sort_by_time and meta["taken"] is not None:
-            point["timestamp"] = meta["taken"].isoformat()
-        track_points.append(point)
-        media_points.append(
-            {"trackIndex": len(track_points) - 1, "name": f"지점 {len(track_points)}", "photos": [rel]}
+        timestamp = (
+            meta["taken"].isoformat() if sort_by_time and meta["taken"] is not None else None
+        )
+        _append_stop(
+            track_points, media_points,
+            meta["latitude"], meta["longitude"], [rel], timestamp=timestamp,
         )
 
     # 지정된 출발지를 맨 앞에 끼워 넣는다 (첫 사진과 사실상 같은 장소면 생략).
@@ -701,23 +757,8 @@ def start_render_photos_only(
     if len(track_points) < 2:
         raise BadRequestException("사진들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
 
-    travel_data: dict[str, object] = {
-        "trackPoints": track_points,
-        "mediaPoints": media_points,
-    }
-    bgm_path: Path | None = None
-    if bgm.strip():
-        bgm_path = get_bgm_path(bgm.strip())
-        travel_data["bgm"] = bgm_path.relative_to(VIDEO_MAKER_DIR).as_posix()
-
-    travel_data_path = job_dir / "travel_data.json"
-    travel_data_path.write_text(
-        json.dumps(travel_data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return _spawn_render_job(
-        travel_data_path, bgm_path, quick, engine, theme,
-        save_as_reels=True, user_idx=user_idx,
-    )
+    travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
+    return _spawn_render_job(travel_data_path, bgm_path, quick, engine, theme, user_idx)
 
 
 # --------------------------------------------------------------------------- #
@@ -744,6 +785,7 @@ def start_render_travel(
     db: Session,
     user,
     travel_idx: int,
+    *,
     bgm: str = "",
     quick: bool = False,
     engine: str = "local",
@@ -768,67 +810,37 @@ def start_render_travel(
     if not schedules:
         raise BadRequestException("여행에 일정이 없습니다.")
 
-    images_by_schedule: dict[int, list[str]] = {}
-    for image in travel_image_dao.list_by_schedule_idxs(
+    images_by_schedule = travel_image_dao.urls_by_schedule(
         db, [s.schedule_idx for s in schedules]
-    ):
-        images_by_schedule.setdefault(image.schedule_idx, []).append(image.url)
+    )
 
-    job_dir = UPLOADS_DIR / uuid.uuid4().hex[:12]
-    job_dir.mkdir(parents=True, exist_ok=True)
+    # 이미지 다운로드는 서로 독립이라 병렬로 받는다 (결과 순서는 스케줄 순서 그대로).
+    urls = [url for s in schedules for url in images_by_schedule.get(s.schedule_idx, [])]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        contents = iter(list(pool.map(_fetch_travel_image, urls)))
 
+    job_dir = _new_job_dir()
     track_points: list[dict[str, object]] = []
     media_points: list[dict[str, object]] = []
     saved_count = 0
     for schedule in schedules:
         photos: list[str] = []
         for url in images_by_schedule.get(schedule.schedule_idx, []):
-            content = _fetch_travel_image(url)
+            content = next(contents)
             if content is None:
                 continue
-            suffix = Path(url).suffix.lower()
-            if suffix not in IMAGE_EXTENSIONS:
-                suffix = ".jpg"
-            saved = job_dir / f"img_{saved_count}{suffix}"
-            saved.write_bytes(content)
+            photos.append(_save_render_image(job_dir, f"img_{saved_count}", url, content))
             saved_count += 1
-            photos.append(saved.relative_to(VIDEO_MAKER_DIR).as_posix())
-
-        if track_points and _haversine_km(
-            float(track_points[-1]["latitude"]), float(track_points[-1]["longitude"]),
-            schedule.latitude, schedule.longitude,
-        ) < PHOTO_CLUSTER_KM:
-            # 같은 지역의 연속 일정 → 직전 지점에서 사진만 이어서 보여준다.
-            media_points[-1]["photos"].extend(photos)
-            continue
-
-        track_points.append(
-            {"latitude": schedule.latitude, "longitude": schedule.longitude}
-        )
-        media_points.append(
-            {"trackIndex": len(track_points) - 1, "name": schedule.title, "photos": photos}
+        _append_stop(
+            track_points, media_points,
+            schedule.latitude, schedule.longitude, photos, name=schedule.title,
         )
 
     if len(track_points) < 2:
         raise BadRequestException("일정 지점이 2개 이상이어야 이동 경로를 만들 수 있습니다.")
 
-    travel_data: dict[str, object] = {
-        "trackPoints": track_points,
-        "mediaPoints": media_points,
-    }
-    bgm_path: Path | None = None
-    if bgm.strip():
-        bgm_path = get_bgm_path(bgm.strip())
-        travel_data["bgm"] = bgm_path.relative_to(VIDEO_MAKER_DIR).as_posix()
-
-    travel_data_path = job_dir / "travel_data.json"
-    travel_data_path.write_text(
-        json.dumps(travel_data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return _spawn_render_job(
-        travel_data_path, bgm_path, quick, engine, theme,
-        save_as_reels=True, user_idx=user.user_idx,
-    )
+    travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
+    return _spawn_render_job(travel_data_path, bgm_path, quick, engine, theme, user.user_idx)
 
 
 def get_render_job(job_id: str) -> dict[str, object]:
@@ -849,9 +861,8 @@ def _job_snapshot(job: dict) -> dict[str, object]:
         if snapshot["percent"] >= 5:
             remaining = snapshot["elapsed_seconds"] * (100 - snapshot["percent"]) / snapshot["percent"]
             snapshot["eta_seconds"] = round(remaining, 1)
-    snapshot.pop("started_at", None)
-    snapshot.pop("save_as_reels", None)  # 내부 플래그 — 응답에서 제외
-    snapshot.pop("user_idx", None)  # 내부 필드(릴스 작성자 매핑용) — 응답에서 제외
+    for key in _INTERNAL_JOB_KEYS:
+        snapshot.pop(key, None)
     return snapshot
 
 
@@ -951,15 +962,14 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
 
     log_tail = stdout[-2000:]
     reels_fields: dict[str, object] = {}
-    if job.get("save_as_reels"):
-        update(percent=99.0, phase="릴스 등록(버킷 업로드)")
-        try:
-            reels_fields = _register_render_as_reels(
-                OUTPUT_DIR / output_name, user_idx=job.get("user_idx")
-            )
-        except Exception as error:  # 릴스 등록 실패해도 렌더 자체는 성공으로 처리
-            logger.exception("렌더 결과 릴스 등록 실패: %s", output_name)
-            log_tail += f"\n[warn] 릴스 등록 실패: {error}"
+    update(percent=99.0, phase="릴스 등록(버킷 업로드)")
+    try:
+        reels_fields = _register_render_as_reels(
+            OUTPUT_DIR / output_name, user_idx=job["user_idx"]
+        )
+    except Exception as error:  # 릴스 등록 실패해도 렌더 자체는 성공으로 처리
+        logger.exception("렌더 결과 릴스 등록 실패: %s", output_name)
+        log_tail += f"\n[warn] 릴스 등록 실패: {error}"
 
     update(
         status="done",
@@ -973,18 +983,14 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
     )
 
 
-def _register_render_as_reels(
-    video_path: Path, user_idx: int | None = None
-) -> dict[str, object]:
+def _register_render_as_reels(video_path: Path, user_idx: int) -> dict[str, object]:
     """완성 영상을 GCS 버킷(reels/)에 올리고 reels 행을 등록한다.
 
     작성자는 렌더 요청 시 JWT 에서 뽑은 user_idx 로 매핑한다.
     """
     from databases.database import SessionLocal
 
-    url = gcs.upload_bytes(
-        f"reels/{uuid.uuid4().hex}.mp4", video_path.read_bytes(), "video/mp4"
-    )
+    url = gcs.upload_file(f"reels/{uuid.uuid4().hex}.mp4", video_path, "video/mp4")
     db = SessionLocal()
     try:
         row = reels_dao.create(db, user_idx=user_idx, url=url, title=None)
@@ -992,7 +998,7 @@ def _register_render_as_reels(
         return {"reels_idx": row.reels_idx, "reels_url": url}
     except Exception:
         db.rollback()
-        gcs.delete_object(f"reels/{url.rsplit('/', 1)[-1]}")  # 고아 객체 정리
+        gcs.delete_object(gcs.object_path_from_url(url) or url)  # 고아 객체 정리
         raise
     finally:
         db.close()

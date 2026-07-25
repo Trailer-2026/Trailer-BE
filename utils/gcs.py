@@ -32,22 +32,41 @@ def _bucket() -> storage.Bucket:
     return client.bucket(bucket_name)
 
 
+def _public_prefix() -> str:
+    """이 버킷 공개 URL 의 고정 접두어 (업로드 반환 URL·역변환이 같은 형식을 공유)."""
+    return f"https://storage.googleapis.com/{_bucket().name}/"
+
+
 def upload_bytes(object_path: str, data: bytes, content_type: str) -> str:
     """바이트를 버킷의 object_path 에 올리고 공개 URL을 반환한다."""
     try:
-        bucket = _bucket()
-        bucket.blob(object_path).upload_from_string(data, content_type=content_type)
+        _bucket().blob(object_path).upload_from_string(data, content_type=content_type)
     except ExternalServiceException:
         raise
     except Exception as exc:
         logger.exception("GCS 업로드 실패: %s", object_path)
         raise ExternalServiceException("영상 저장소 업로드에 실패했습니다.") from exc
-    return f"https://storage.googleapis.com/{bucket.name}/{object_path}"
+    return _public_prefix() + object_path
+
+
+def upload_file(object_path: str, path, content_type: str) -> str:
+    """로컬 파일을 버킷의 object_path 에 스트리밍 업로드하고 공개 URL을 반환한다.
+
+    큰 영상 파일을 통째로 메모리에 올리지 않도록 upload_bytes 대신 사용한다.
+    """
+    try:
+        _bucket().blob(object_path).upload_from_filename(str(path), content_type=content_type)
+    except ExternalServiceException:
+        raise
+    except Exception as exc:
+        logger.exception("GCS 업로드 실패: %s", object_path)
+        raise ExternalServiceException("영상 저장소 업로드에 실패했습니다.") from exc
+    return _public_prefix() + object_path
 
 
 def object_path_from_url(url: str) -> str | None:
     """이 버킷의 공개 URL 이면 객체 경로를, 아니면 None 을 반환한다."""
-    prefix = f"https://storage.googleapis.com/{Config.read('gcs', 'bucket_name')}/"
+    prefix = _public_prefix()
     return url[len(prefix):] if url.startswith(prefix) else None
 
 

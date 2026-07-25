@@ -12,9 +12,7 @@ def get_by_idx(db: Session, reels_idx: int) -> Reels | None:
     ).first()
 
 
-def create(
-    db: Session, *, user_idx: int | None, url: str, title: str | None
-) -> Reels:
+def create(db: Session, *, user_idx: int | None, url: str, title: str | None) -> Reels:
     """릴스 행 생성 (flush만 — commit은 서비스가)."""
     reels = Reels(user_idx=user_idx, url=url, title=title)
     db.add(reels)
