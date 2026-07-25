@@ -978,7 +978,6 @@ def _register_render_as_reels(
 ) -> dict[str, object]:
     """완성 영상을 GCS 버킷(reels/)에 올리고 reels 행을 등록한다.
 
-    사진만 렌더는 여행(travel) 없이 실행되므로 travel_idx 는 NULL 로 두고,
     작성자는 렌더 요청 시 JWT 에서 뽑은 user_idx 로 매핑한다.
     """
     from databases.database import SessionLocal
@@ -988,7 +987,7 @@ def _register_render_as_reels(
     )
     db = SessionLocal()
     try:
-        row = reels_dao.create(db, travel_idx=None, user_idx=user_idx, url=url, title=None)
+        row = reels_dao.create(db, user_idx=user_idx, url=url, title=None)
         db.commit()
         return {"reels_idx": row.reels_idx, "reels_url": url}
     except Exception:

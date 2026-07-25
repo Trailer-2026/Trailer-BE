@@ -6,8 +6,7 @@ from databases.models.base import BaseModel
 class Reels(BaseModel):
     """여행 릴스 — 짧은 영상 1개.
 
-    보통은 확정된 여행(travel)에 사용자가 올리지만, 사진만으로 자동 생성된 영상
-    (photos-only 렌더)은 여행 없이 등록되므로 travel_idx 는 NULL 허용이다.
+    여행(travel)과 직접 연결하지 않고 작성자(user_idx)로만 매핑한다.
     user_idx 는 렌더 요청자의 JWT 에서 뽑아 매핑한다 (과거 데이터는 NULL 가능).
     """
 
@@ -15,10 +14,6 @@ class Reels(BaseModel):
     __table_args__ = ({"comment": "릴스"},)
 
     reels_idx = Column(Integer, primary_key=True, autoincrement=True, comment="PK")
-    travel_idx = Column(
-        Integer, ForeignKey("travel.travel_idx"), nullable=True, index=True,
-        comment="FK 여행 (사진만 렌더로 자동 생성된 릴스는 NULL)",
-    )
     user_idx = Column(
         Integer, ForeignKey("user.user_idx"), nullable=True, index=True,
         comment="FK 작성자 (렌더 요청자의 JWT user_idx, 과거 데이터는 NULL)",
