@@ -48,18 +48,6 @@ def get_bgm_list():
 
 
 @router.get(
-    "/bgm/preview",
-    summary="BGM 미리듣기",
-    description="BGM 파일을 오디오 스트림으로 반환합니다. 파일명 외에 곡명(예: Funk)으로도 "
-                "찾을 수 있습니다. 일치하는 트랙이 없으면 404, 오디오가 아니면 400을 "
-                "반환합니다.",
-    response_class=FileResponse,
-)
-def get_bgm_preview(file: str = Query(..., description=f"BGM 파일명 또는 곡명. 사용 가능: {_BGM_FILES}")):
-    return FileResponse(video_service.get_bgm_path(file), media_type="audio/mpeg")
-
-
-@router.get(
     "/output/{name}",
     summary="완성 영상 다운로드",
     description="렌더링이 끝난 mp4 파일을 반환합니다. 렌더 응답의 video_url 이 이 경로를 "
@@ -71,49 +59,12 @@ def get_output_video(name: str) -> FileResponse:
 
 
 @router.post(
-    "/render",
-    summary="좌표 직접 입력으로 영상 렌더링 시작",
-    description="GPS 지점 목록(points)과 지점별 사진, BGM/테마 옵션을 받아 세로형"
-                "(1080x1920) 3D 지도 여행 영상 렌더링을 시작하고 job_id 를 즉시 "
-                "반환합니다(multipart/form-data). 영상 앞뒤에는 TRAILER 인트로·아웃트로가 "
-                "항상 붙습니다. 진행률·완료 여부는 "
-                "GET /api/videos/render/{job_id} 로 폴링하세요. engine=local 은 서버 GPU, "
-                "engine=modal 은 Modal T4 클라우드에서 렌더링합니다.",
-    response_model=CommonResponse[VideoRenderStatusResponse],
-)
-def render_video(
-    points: str = Form(..., description='GPS 지점 JSON 배열 문자열: [{"latitude","longitude","name"}, ...] (최소 2개)'),
-    bgm: str = Form("", description=f"BGM 파일명 또는 곡명 (빈 값이면 무음, 곡명만 보내도 매칭, 없으면 404). 사용 가능: {_BGM_FILES}", json_schema_extra={"enum": _BGM_CHOICES}),
-    quick: str = Form("false", description='"true"면 저해상도 빠른 렌더 (local: 540x960/15fps, modal: JPEG q95)'),
-    engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
-    theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
-    photo_points: str = Form("[]", description="photos 각 파일이 속한 지점 인덱스 JSON 배열 (photos와 개수 일치)"),
-    # fastapi 0.110 에서는 `list[UploadFile] | None = None` 이 422 를 내므로
-    # File([]) 기본값으로 선언해야 파일 없이도 빈 리스트로 들어온다.
-    photos: list[UploadFile] = File([], description="지점별 첨부 사진 파일들 (없으면 생략)"),
-):
-    photo_payloads = [
-        (upload.filename or "", upload.file.read()) for upload in (photos or [])
-    ]
-    job = video_service.start_render(
-        points_json=points,
-        photo_points_json=photo_points,
-        photos=photo_payloads,
-        bgm=bgm,
-        quick=quick.lower().strip() == "true",
-        engine=engine,
-        theme=theme,
-    )
-    return CommonResponse.success_response("영상 렌더링 시작", data=job)
-
-
-@router.post(
     "/render/photos-only",
     summary="사진만으로 영상 렌더링 시작 (여행 ID 없이)",
     description="여행 ID나 좌표 입력 없이, 업로드한 사진들의 EXIF 메타데이터에서 GPS 좌표와 "
                 "촬영 시각을 추출해 촬영 시각 순서대로 지점을 이동하며 각 지점에서 해당 사진을 "
-                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률 폴링은 "
-                "POST /render 와 동일). "
+                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률은 "
+                "GET /api/videos/render/{job_id} 로 폴링). "
                 "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
                 "GPS 없는 사진은 자동 제외됩니다. 지점 기준 1km 미만인 연속 사진들은 카메라 "
                 "이동 없이 첫 사진 위치에 고정해 순서대로 보여주고, 1km 이상 떨어진 사진이 "
@@ -159,8 +110,8 @@ def render_video_photos_only(
     summary="사진 순서 지정 영상 렌더링 시작 (업로드 순서대로)",
     description="POST /render/photos-only 와 같지만 촬영 시각을 무시하고, 업로드한 사진 "
                 "순서 그대로(사용자가 지정한 순서) 지점을 이동하며 각 지점에서 해당 사진을 "
-                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률 폴링은 "
-                "POST /render 와 동일). EXIF 에서는 GPS 좌표만 사용합니다. "
+                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률은 "
+                "GET /api/videos/render/{job_id} 로 폴링). EXIF 에서는 GPS 좌표만 사용합니다. "
                 "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
                 "GPS 없는 사진은 자동 제외되어 순서에서 빠집니다. 직전 지점 기준 1km 미만인 "
                 "연속 사진들은 카메라 이동 없이 그 지점에 고정해 순서대로 보여주고, 1km 이상 "
@@ -208,7 +159,7 @@ def render_video_photos_ordered(
     description="저장된 여행(travel_idx)의 일정(schedule)을 타임라인 순(day_no, sequence)으로 "
                 "따라가며 각 일정의 좌표로 이동 경로를 만들고, 일정에 첨부된 여행 "
                 "이미지(travel_image)를 해당 지점에서 보여주는 영상 렌더링을 시작하고 "
-                "job_id 를 즉시 반환합니다(진행률 폴링은 POST /render 와 동일). 직전 지점 "
+                "job_id 를 즉시 반환합니다(진행률은 GET /api/videos/render/{job_id} 로 폴링). 직전 지점 "
                 "기준 1km 미만인 연속 일정은 별도 지점 없이 한 지점으로 묶여 사진만 이어서 "
                 "나오고, 기차 일정은 출발역 좌표가 경유 지점이 됩니다. 이미지 다운로드에 "
                 "실패한 이미지는 건너뜁니다. 본인 여행이 아니거나 없으면 404, 여행에 일정이 "

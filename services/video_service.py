@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """여행 경로 3D 영상(videoMaker) 서비스.
 
-빌더 페이지가 보낸 GPS 지점/사진/옵션을 travel_data.json 으로 변환해
+사진 EXIF·여행 일정(schedule)에서 뽑은 GPS 지점/사진/옵션을 travel_data.json 으로 변환해
 services/videoMaker/render_video.py(로컬 GPU) 또는 modal_render.py(Modal T4 GPU)를
 서브프로세스로 실행하고, 완성된 mp4 파일명을 돌려준다. 렌더 관련 기능은 DB를
 쓰지 않으며, 릴스 추천(recommend_reels)만 reels 테이블을 읽는다.
@@ -174,75 +174,6 @@ def recommend_reels(db: Session, exclude: str) -> list[dict]:
 def _render_python() -> str:
     """로컬 엔진(render_video.py)을 실행할 파이썬 경로."""
     return Config.read("videomaker", "python", default=sys.executable) or sys.executable
-
-
-def _build_travel_data(
-    points_json: str,
-    photo_points_json: str,
-    photos: list[tuple[str, bytes]],
-    bgm: str,
-) -> tuple[Path, Path | None]:
-    """빌더 입력을 job 디렉터리의 travel_data.json 으로 저장한다.
-
-    반환: (travel_data.json 경로, BGM 경로 또는 None)
-    """
-    try:
-        raw_points = json.loads(points_json)
-        photo_owner_indices = json.loads(photo_points_json)
-    except json.JSONDecodeError as error:
-        raise BadRequestException(f"잘못된 JSON입니다: {error}") from error
-
-    if not isinstance(raw_points, list) or len(raw_points) < 2:
-        raise BadRequestException("GPS 지점은 최소 2개가 필요합니다.")
-    if len(photo_owner_indices) != len(photos):
-        raise BadRequestException("photo_points와 photos 개수가 다릅니다.")
-
-    job_dir = UPLOADS_DIR / uuid.uuid4().hex[:12]
-    job_dir.mkdir(parents=True, exist_ok=True)
-
-    # 업로드 사진을 지점별로 저장.
-    photos_by_point: dict[int, list[str]] = {}
-    for order, ((filename, content), owner) in enumerate(zip(photos, photo_owner_indices)):
-        try:
-            point_index = int(owner)
-        except (TypeError, ValueError):
-            continue
-        suffix = Path(filename or "").suffix.lower()
-        if suffix not in IMAGE_EXTENSIONS:
-            suffix = ".jpg"
-        saved = job_dir / f"p{point_index}_{order}{suffix}"
-        saved.write_bytes(content)
-        rel = saved.relative_to(VIDEO_MAKER_DIR).as_posix()
-        photos_by_point.setdefault(point_index, []).append(rel)
-
-    track_points: list[dict[str, object]] = []
-    media_points: list[dict[str, object]] = []
-    for index, point in enumerate(raw_points):
-        try:
-            latitude = float(point["latitude"])
-            longitude = float(point["longitude"])
-        except (KeyError, TypeError, ValueError) as error:
-            raise BadRequestException(f"지점 {index}의 좌표가 올바르지 않습니다.") from error
-        track_points.append({"latitude": latitude, "longitude": longitude})
-        name = str(point.get("name") or f"지점 {index + 1}").strip()
-        media_points.append(
-            {"trackIndex": index, "name": name, "photos": photos_by_point.get(index, [])}
-        )
-
-    travel_data: dict[str, object] = {
-        "trackPoints": track_points,
-        "mediaPoints": media_points,
-    }
-    bgm_path: Path | None = None
-    if bgm.strip():
-        bgm_path = get_bgm_path(bgm.strip())
-        travel_data["bgm"] = bgm_path.relative_to(VIDEO_MAKER_DIR).as_posix()
-
-    travel_data_path = job_dir / "travel_data.json"
-    travel_data_path.write_text(
-        json.dumps(travel_data, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return travel_data_path, bgm_path
 
 
 def _build_command(
@@ -537,7 +468,7 @@ def insert_image(
 # --------------------------------------------------------------------------- #
 # 렌더 작업(job) 관리 — 진행률 조회를 위해 비동기로 돌린다.
 #
-# POST /render 는 job_id 를 즉시 반환하고, 렌더 서브프로세스는 데몬 스레드에서
+# 렌더 시작 API 는 job_id 를 즉시 반환하고, 렌더 서브프로세스는 데몬 스레드에서
 # stdout 을 한 줄씩 읽으며 진행률을 갱신한다. 클라이언트는 GET /render/{job_id}
 # 로 폴링한다. 레지스트리는 인메모리라 서버 재시작(--reload 포함) 시 사라진다.
 # --------------------------------------------------------------------------- #
@@ -609,21 +540,6 @@ def _spawn_render_job(
         target=_run_render_job, args=(job, command, marker), daemon=True
     ).start()
     return _job_snapshot(job)
-
-
-def start_render(
-    points_json: str,
-    photo_points_json: str,
-    photos: list[tuple[str, bytes]],
-    bgm: str = "",
-    quick: bool = False,
-    engine: str = "local",
-    theme: str = "default",
-) -> dict[str, object]:
-    """입력을 검증하고 렌더 작업을 시작한 뒤 job 상태(dict)를 즉시 반환한다."""
-    engine, theme = _validate_render_options(engine, theme)
-    travel_data_path, bgm_path = _build_travel_data(points_json, photo_points_json, photos, bgm)
-    return _spawn_render_job(travel_data_path, bgm_path, quick, engine, theme)
 
 
 # --------------------------------------------------------------------------- #

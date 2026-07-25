@@ -30,8 +30,9 @@ class VideoEditResponse(BaseModel):
 class VideoRenderStatusResponse(BaseModel):
     """여행 경로 3D 영상 렌더 작업 상태 (시작 응답·진행률 폴링 공용).
 
-    POST /render 가 이 형태로 job_id 를 반환하고, GET /render/{job_id} 를
-    폴링하면 percent/eta 가 갱신되다가 status=done 에서 video_url 이 채워진다.
+    렌더 시작 API(POST /render/photos-only·photos-ordered·travel)가 이 형태로
+    job_id 를 반환하고, GET /render/{job_id} 를 폴링하면 percent/eta 가
+    갱신되다가 status=done 에서 video_url 이 채워진다.
     """
 
     job_id: str = Field(..., description="렌더 작업 ID (진행률 조회에 사용)")
