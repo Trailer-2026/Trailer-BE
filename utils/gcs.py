@@ -45,6 +45,23 @@ def upload_bytes(object_path: str, data: bytes, content_type: str) -> str:
     return f"https://storage.googleapis.com/{bucket.name}/{object_path}"
 
 
+def object_path_from_url(url: str) -> str | None:
+    """이 버킷의 공개 URL 이면 객체 경로를, 아니면 None 을 반환한다."""
+    prefix = f"https://storage.googleapis.com/{Config.read('gcs', 'bucket_name')}/"
+    return url[len(prefix):] if url.startswith(prefix) else None
+
+
+def download_bytes(object_path: str) -> bytes:
+    """버킷의 object_path 객체를 바이트로 내려받는다."""
+    try:
+        return _bucket().blob(object_path).download_as_bytes()
+    except ExternalServiceException:
+        raise
+    except Exception as exc:
+        logger.exception("GCS 다운로드 실패: %s", object_path)
+        raise ExternalServiceException("영상 저장소에서 이미지를 받지 못했습니다.") from exc
+
+
 def delete_object(object_path: str) -> None:
     """버킷에서 객체를 삭제한다. 없으면 조용히 넘어간다."""
     try:

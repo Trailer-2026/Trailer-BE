@@ -28,6 +28,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import requests
 from PIL import Image
 from sqlalchemy.orm import Session
 
@@ -37,7 +38,7 @@ from core.exceptions.custom import (
     ExternalServiceException,
     NotFoundException,
 )
-from databases.daos import reels_dao
+from databases.daos import reels_dao, schedule_dao, travel_dao, travel_image_dao
 from utils import gcs
 
 logger = logging.getLogger(__name__)
@@ -800,6 +801,117 @@ def start_render_photos_only(
     return _spawn_render_job(
         travel_data_path, bgm_path, quick, engine, theme,
         save_as_reels=True, user_idx=user_idx,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 여행(travel) 일정으로 렌더링 — 스케줄 좌표·첨부 이미지로 경로를 구성한다.
+# --------------------------------------------------------------------------- #
+def _fetch_travel_image(url: str) -> bytes | None:
+    """travel_image URL 의 이미지 바이트를 받아온다. 실패하면 None (렌더는 계속).
+
+    우리 버킷 URL 이면 GCS 클라이언트로, 그 외(외부 이미지)는 HTTP 로 받는다.
+    """
+    try:
+        object_path = gcs.object_path_from_url(url)
+        if object_path is not None:
+            return gcs.download_bytes(object_path)
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        return response.content
+    except Exception:
+        logger.warning("여행 이미지 다운로드 실패(건너뜀): %s", url)
+        return None
+
+
+def start_render_travel(
+    db: Session,
+    user,
+    travel_idx: int,
+    bgm: str = "",
+    quick: bool = False,
+    engine: str = "local",
+    theme: str = "default",
+) -> dict[str, object]:
+    """저장된 여행(travel)의 일정·첨부 이미지만으로 여행 경로 영상 렌더링을 시작한다.
+
+    스케줄을 타임라인 순(day_no, sequence)으로 따라가며 지점을 만들고, 각 스케줄에
+    첨부된 travel_image 이미지들을 해당 지점에서 보여준다. 직전 지점 기준
+    PHOTO_CLUSTER_KM(1km) 미만인 연속 스케줄은 별도 지점 없이 직전 지점에 사진만
+    합친다(기차 일정은 출발역 좌표가 경유 지점이 된다). 본인 여행이 아니거나 없으면
+    404. 이미지 다운로드 실패는 건너뛰며, 렌더 완료 후 결과 영상은 reels 로 자동
+    등록되고 요청자(user_idx)와 매핑된다.
+    """
+    engine, theme = _validate_render_options(engine, theme)
+
+    travel = travel_dao.get_by_idx(db, travel_idx)
+    if travel is None or travel.user_idx != user.user_idx:
+        raise NotFoundException("여행을 찾을 수 없습니다.")
+
+    schedules = schedule_dao.list_by_travel(db, travel_idx)
+    if not schedules:
+        raise BadRequestException("여행에 일정이 없습니다.")
+
+    images_by_schedule: dict[int, list[str]] = {}
+    for image in travel_image_dao.list_by_schedule_idxs(
+        db, [s.schedule_idx for s in schedules]
+    ):
+        images_by_schedule.setdefault(image.schedule_idx, []).append(image.url)
+
+    job_dir = UPLOADS_DIR / uuid.uuid4().hex[:12]
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    track_points: list[dict[str, object]] = []
+    media_points: list[dict[str, object]] = []
+    saved_count = 0
+    for schedule in schedules:
+        photos: list[str] = []
+        for url in images_by_schedule.get(schedule.schedule_idx, []):
+            content = _fetch_travel_image(url)
+            if content is None:
+                continue
+            suffix = Path(url).suffix.lower()
+            if suffix not in IMAGE_EXTENSIONS:
+                suffix = ".jpg"
+            saved = job_dir / f"img_{saved_count}{suffix}"
+            saved.write_bytes(content)
+            saved_count += 1
+            photos.append(saved.relative_to(VIDEO_MAKER_DIR).as_posix())
+
+        if track_points and _haversine_km(
+            float(track_points[-1]["latitude"]), float(track_points[-1]["longitude"]),
+            schedule.latitude, schedule.longitude,
+        ) < PHOTO_CLUSTER_KM:
+            # 같은 지역의 연속 일정 → 직전 지점에서 사진만 이어서 보여준다.
+            media_points[-1]["photos"].extend(photos)
+            continue
+
+        track_points.append(
+            {"latitude": schedule.latitude, "longitude": schedule.longitude}
+        )
+        media_points.append(
+            {"trackIndex": len(track_points) - 1, "name": schedule.title, "photos": photos}
+        )
+
+    if len(track_points) < 2:
+        raise BadRequestException("일정 지점이 2개 이상이어야 이동 경로를 만들 수 있습니다.")
+
+    travel_data: dict[str, object] = {
+        "trackPoints": track_points,
+        "mediaPoints": media_points,
+    }
+    bgm_path: Path | None = None
+    if bgm.strip():
+        bgm_path = get_bgm_path(bgm.strip())
+        travel_data["bgm"] = bgm_path.relative_to(VIDEO_MAKER_DIR).as_posix()
+
+    travel_data_path = job_dir / "travel_data.json"
+    travel_data_path.write_text(
+        json.dumps(travel_data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return _spawn_render_job(
+        travel_data_path, bgm_path, quick, engine, theme,
+        save_as_reels=True, user_idx=user.user_idx,
     )
 
 

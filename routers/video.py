@@ -202,6 +202,44 @@ def render_video_photos_ordered(
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
 
 
+@router.post(
+    "/render/travel",
+    summary="여행 일정으로 영상 렌더링 시작 (travel_idx)",
+    description="저장된 여행(travel_idx)의 일정(schedule)을 타임라인 순(day_no, sequence)으로 "
+                "따라가며 각 일정의 좌표로 이동 경로를 만들고, 일정에 첨부된 여행 "
+                "이미지(travel_image)를 해당 지점에서 보여주는 영상 렌더링을 시작하고 "
+                "job_id 를 즉시 반환합니다(진행률 폴링은 POST /render 와 동일). 직전 지점 "
+                "기준 1km 미만인 연속 일정은 별도 지점 없이 한 지점으로 묶여 사진만 이어서 "
+                "나오고, 기차 일정은 출발역 좌표가 경유 지점이 됩니다. 이미지 다운로드에 "
+                "실패한 이미지는 건너뜁니다. 본인 여행이 아니거나 없으면 404, 여행에 일정이 "
+                "없거나 지점이 2개 미만이면 400을 반환합니다. 영상 앞뒤에는 TRAILER "
+                "인트로·아웃트로가 항상 붙습니다. 렌더가 끝나면 완성 영상이 GCS 버킷에 "
+                "올라가고 reels 테이블에 로그인 사용자(user_idx)와 연결되어 자동 등록되며, "
+                "상태 응답의 reels_idx/reels_url 로 확인할 수 있습니다. JWT 인증이 필요하며 "
+                "토큰이 없거나 유효하지 않으면 401을 반환합니다.",
+    response_model=CommonResponse[VideoRenderStatusResponse],
+)
+def render_video_from_travel(
+    travel_idx: int = Form(..., description="영상을 만들 여행 PK (본인 여행만 가능)"),
+    bgm: str = Form("", description=f"BGM 파일명 또는 곡명 (빈 값이면 무음, 곡명만 보내도 매칭, 없으면 404). 사용 가능: {_BGM_FILES}", json_schema_extra={"enum": _BGM_CHOICES}),
+    quick: str = Form("false", description='"true"면 저해상도 빠른 렌더'),
+    engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
+    theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = video_service.start_render_travel(
+        db,
+        current_user,
+        travel_idx,
+        bgm=bgm,
+        quick=quick.lower().strip() == "true",
+        engine=engine,
+        theme=theme,
+    )
+    return CommonResponse.success_response("영상 렌더링 시작", data=job)
+
+
 @router.get(
     "/reels/recommend",
     summary="릴스 무작위 추천",
