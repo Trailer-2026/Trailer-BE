@@ -56,8 +56,6 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 RENDER_TIMEOUT_SECONDS = 60 * 30  # 30분 하드 캡
 # render_video.py --theme 와 map_themes.js THEMES 에 맞춰 유지.
 ALLOWED_THEMES = {"default", "spring", "summer", "autumn", "winter"}
-# Standard 스타일 시간대 조명 (빈 값 = 테마 기본).
-ALLOWED_LIGHT_PRESETS = {"", "dawn", "day", "dusk", "night"}
 
 
 # --------------------------------------------------------------------------- #
@@ -251,9 +249,6 @@ def _build_command(
     engine: str,
     quick: bool,
     theme: str,
-    light_preset: str,
-    intro: bool,
-    outro: bool,
 ) -> tuple[list[str], str]:
     """엔진별 렌더 명령을 만든다. 반환: (command, 출력 파일명 파싱용 marker)
 
@@ -279,12 +274,8 @@ def _build_command(
         command.append("--quick" if quick else "--quality-fast")
     if theme != "default":
         command += ["--theme", theme]
-    if light_preset:
-        command += ["--light-preset", light_preset]
-    if intro:
-        command.append("--intro")
-    if outro:
-        command.append("--outro")
+    # TRAILER 인트로·아웃트로는 항상 붙인다.
+    command += ["--intro", "--outro"]
     return command, engine
 
 
@@ -563,18 +554,15 @@ _POSTPROCESS_MARKS = [
 ]
 
 
-def _validate_render_options(engine: str, theme: str, light_preset: str) -> tuple[str, str, str]:
-    """엔진/테마/조명 옵션을 정규화·검증한다 (400 은 여기서 동기적으로 발생)."""
+def _validate_render_options(engine: str, theme: str) -> tuple[str, str]:
+    """엔진/테마 옵션을 정규화·검증한다 (400 은 여기서 동기적으로 발생)."""
     engine = (engine or "local").lower().strip()
     if engine not in {"local", "modal"}:
         raise BadRequestException(f"알 수 없는 엔진: {engine}")
     theme = (theme or "default").lower().strip()
     if theme not in ALLOWED_THEMES:
         raise BadRequestException(f"알 수 없는 테마: {theme}")
-    light_preset = (light_preset or "").lower().strip()
-    if light_preset not in ALLOWED_LIGHT_PRESETS:
-        raise BadRequestException(f"알 수 없는 조명: {light_preset}")
-    return engine, theme, light_preset
+    return engine, theme
 
 
 def _spawn_render_job(
@@ -583,9 +571,6 @@ def _spawn_render_job(
     quick: bool,
     engine: str,
     theme: str,
-    light_preset: str,
-    intro: bool,
-    outro: bool,
     save_as_reels: bool = False,
     user_idx: int | None = None,
 ) -> dict[str, object]:
@@ -595,9 +580,7 @@ def _spawn_render_job(
     reels 테이블에 등록한다 (사진만 렌더 자동 릴스화). user_idx 가 있으면
     릴스 행의 작성자로 매핑한다.
     """
-    command, marker = _build_command(
-        travel_data_path, engine, quick, theme, light_preset, intro, outro
-    )
+    command, marker = _build_command(travel_data_path, engine, quick, theme)
     job = {
         "save_as_reels": save_as_reels,
         "user_idx": user_idx,
@@ -614,9 +597,6 @@ def _spawn_render_job(
         "eta_seconds": None,
         "engine": engine,
         "theme": theme,
-        "light_preset": light_preset or None,
-        "intro": intro,
-        "outro": outro,
         "bgm": bgm_path.name if bgm_path else None,
         "video_url": None,
         "error": None,
@@ -638,16 +618,11 @@ def start_render(
     quick: bool = False,
     engine: str = "local",
     theme: str = "default",
-    light_preset: str = "",
-    intro: bool = False,
-    outro: bool = False,
 ) -> dict[str, object]:
     """입력을 검증하고 렌더 작업을 시작한 뒤 job 상태(dict)를 즉시 반환한다."""
-    engine, theme, light_preset = _validate_render_options(engine, theme, light_preset)
+    engine, theme = _validate_render_options(engine, theme)
     travel_data_path, bgm_path = _build_travel_data(points_json, photo_points_json, photos, bgm)
-    return _spawn_render_job(
-        travel_data_path, bgm_path, quick, engine, theme, light_preset, intro, outro
-    )
+    return _spawn_render_job(travel_data_path, bgm_path, quick, engine, theme)
 
 
 # --------------------------------------------------------------------------- #
@@ -712,9 +687,6 @@ def start_render_photos_only(
     quick: bool = False,
     engine: str = "local",
     theme: str = "default",
-    light_preset: str = "",
-    intro: bool = False,
-    outro: bool = False,
     start_name: str = "",
     start_latitude: float | None = None,
     start_longitude: float | None = None,
@@ -736,7 +708,7 @@ def start_render_photos_only(
     start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 삼아
     첫 사진 지점으로 이동하며 시작한다 (출발지에서는 사진 없이 라벨만 표시).
     """
-    engine, theme, light_preset = _validate_render_options(engine, theme, light_preset)
+    engine, theme = _validate_render_options(engine, theme)
 
     # 시작 위치 검증 — 위도/경도는 함께 와야 한다.
     if (start_latitude is None) != (start_longitude is None):
@@ -826,7 +798,7 @@ def start_render_photos_only(
         json.dumps(travel_data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return _spawn_render_job(
-        travel_data_path, bgm_path, quick, engine, theme, light_preset, intro, outro,
+        travel_data_path, bgm_path, quick, engine, theme,
         save_as_reels=True, user_idx=user_idx,
     )
 

@@ -73,9 +73,10 @@ def get_output_video(name: str) -> FileResponse:
 @router.post(
     "/render",
     summary="좌표 직접 입력으로 영상 렌더링 시작",
-    description="GPS 지점 목록(points)과 지점별 사진, BGM/테마/조명/인트로·아웃트로 옵션을 "
-                "받아 세로형(1080x1920) 3D 지도 여행 영상 렌더링을 시작하고 job_id 를 즉시 "
-                "반환합니다(multipart/form-data). 진행률·완료 여부는 "
+    description="GPS 지점 목록(points)과 지점별 사진, BGM/테마 옵션을 받아 세로형"
+                "(1080x1920) 3D 지도 여행 영상 렌더링을 시작하고 job_id 를 즉시 "
+                "반환합니다(multipart/form-data). 영상 앞뒤에는 TRAILER 인트로·아웃트로가 "
+                "항상 붙습니다. 진행률·완료 여부는 "
                 "GET /api/videos/render/{job_id} 로 폴링하세요. engine=local 은 서버 GPU, "
                 "engine=modal 은 Modal T4 클라우드에서 렌더링합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
@@ -86,9 +87,6 @@ def render_video(
     quick: str = Form("false", description='"true"면 저해상도 빠른 렌더 (local: 540x960/15fps, modal: JPEG q95)'),
     engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
     theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
-    light_preset: str = Form("", description="시간대 조명: dawn|day|dusk|night (빈 값 = 테마 기본)"),
-    intro: str = Form("false", description='"true"면 TRAILER 인트로 클립을 앞에 붙임'),
-    outro: str = Form("false", description='"true"면 TRAILER 아웃트로 클립을 뒤에 붙임'),
     photo_points: str = Form("[]", description="photos 각 파일이 속한 지점 인덱스 JSON 배열 (photos와 개수 일치)"),
     # fastapi 0.110 에서는 `list[UploadFile] | None = None` 이 422 를 내므로
     # File([]) 기본값으로 선언해야 파일 없이도 빈 리스트로 들어온다.
@@ -105,9 +103,6 @@ def render_video(
         quick=quick.lower().strip() == "true",
         engine=engine,
         theme=theme,
-        light_preset=light_preset,
-        intro=intro.lower().strip() == "true",
-        outro=outro.lower().strip() == "true",
     )
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
 
@@ -124,6 +119,7 @@ def render_video(
                 "이동 없이 첫 사진 위치에 고정해 순서대로 보여주고, 1km 이상 떨어진 사진이 "
                 "나오면 그 위치로 이동합니다. start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 "
                 "삼아 첫 사진 지점으로 이동하며 시작합니다. 조건을 못 채우면 400을 반환합니다. "
+                "영상 앞뒤에는 TRAILER 인트로·아웃트로가 항상 붙습니다. "
                 "렌더가 끝나면 완성 영상이 GCS 버킷에 올라가고 reels 테이블에 로그인 "
                 "사용자(user_idx)와 연결되어 자동 등록되며, 상태 응답의 reels_idx/reels_url "
                 "로 확인할 수 있습니다. JWT 인증이 필요하며 토큰이 없거나 유효하지 않으면 "
@@ -138,9 +134,6 @@ def render_video_photos_only(
     quick: str = Form("false", description='"true"면 저해상도 빠른 렌더'),
     engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
     theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
-    light_preset: str = Form("", description="시간대 조명: dawn|day|dusk|night (빈 값 = 테마 기본)"),
-    intro: str = Form("false", description='"true"면 TRAILER 인트로 클립을 앞에 붙임'),
-    outro: str = Form("false", description='"true"면 TRAILER 아웃트로 클립을 뒤에 붙임'),
     photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장)"),
     current_user: User = Depends(get_current_user),
 ):
@@ -153,9 +146,6 @@ def render_video_photos_only(
         quick=quick.lower().strip() == "true",
         engine=engine,
         theme=theme,
-        light_preset=light_preset,
-        intro=intro.lower().strip() == "true",
-        outro=outro.lower().strip() == "true",
         start_name=start_name,
         start_latitude=start_latitude,
         start_longitude=start_longitude,
@@ -176,7 +166,8 @@ def render_video_photos_only(
                 "연속 사진들은 카메라 이동 없이 그 지점에 고정해 순서대로 보여주고, 1km 이상 "
                 "떨어진 사진이 나오면 그 위치로 이동합니다. start_latitude/longitude 를 주면 "
                 "그 위치(예: 서울역)를 출발지로 삼아 첫 사진 지점으로 이동하며 시작합니다. "
-                "조건을 못 채우면 400을 반환합니다. 렌더가 끝나면 완성 영상이 GCS 버킷에 "
+                "조건을 못 채우면 400을 반환합니다. 영상 앞뒤에는 TRAILER 인트로·아웃트로가 "
+                "항상 붙습니다. 렌더가 끝나면 완성 영상이 GCS 버킷에 "
                 "올라가고 reels 테이블에 로그인 사용자(user_idx)와 연결되어 자동 등록되며, "
                 "상태 응답의 reels_idx/reels_url 로 확인할 수 있습니다. JWT 인증이 필요하며 "
                 "토큰이 없거나 유효하지 않으면 401을 반환합니다.",
@@ -190,9 +181,6 @@ def render_video_photos_ordered(
     quick: str = Form("false", description='"true"면 저해상도 빠른 렌더'),
     engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
     theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
-    light_preset: str = Form("", description="시간대 조명: dawn|day|dusk|night (빈 값 = 테마 기본)"),
-    intro: str = Form("false", description='"true"면 TRAILER 인트로 클립을 앞에 붙임'),
-    outro: str = Form("false", description='"true"면 TRAILER 아웃트로 클립을 뒤에 붙임'),
     photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장) — 보낸 순서가 곧 영상 순서"),
     current_user: User = Depends(get_current_user),
 ):
@@ -205,9 +193,6 @@ def render_video_photos_ordered(
         quick=quick.lower().strip() == "true",
         engine=engine,
         theme=theme,
-        light_preset=light_preset,
-        intro=intro.lower().strip() == "true",
-        outro=outro.lower().strip() == "true",
         start_name=start_name,
         start_latitude=start_latitude,
         start_longitude=start_longitude,
