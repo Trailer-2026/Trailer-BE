@@ -7,7 +7,8 @@ class Reels(BaseModel):
     """여행 릴스 — 짧은 영상 1개.
 
     보통은 확정된 여행(travel)에 사용자가 올리지만, 사진만으로 자동 생성된 영상
-    (photos-only 렌더)은 여행/사용자 없이 등록되므로 두 FK 모두 NULL 허용이다.
+    (photos-only 렌더)은 여행 없이 등록되므로 travel_idx 는 NULL 허용이다.
+    user_idx 는 렌더 요청자의 JWT 에서 뽑아 매핑한다 (과거 데이터는 NULL 가능).
     """
 
     __tablename__ = "reels"
@@ -20,7 +21,7 @@ class Reels(BaseModel):
     )
     user_idx = Column(
         Integer, ForeignKey("user.user_idx"), nullable=True, index=True,
-        comment="FK 작성자 (사진만 렌더로 자동 생성된 릴스는 NULL)",
+        comment="FK 작성자 (렌더 요청자의 JWT user_idx, 과거 데이터는 NULL)",
     )
     url = Column(String(100), nullable=False, comment="영상 URL")
     title = Column(String(100), nullable=True, comment="제목")

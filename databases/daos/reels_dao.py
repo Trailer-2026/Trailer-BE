@@ -15,7 +15,7 @@ def get_by_idx(db: Session, reels_idx: int) -> Reels | None:
 def create(
     db: Session, *, travel_idx: int | None, user_idx: int | None, url: str, title: str | None
 ) -> Reels:
-    """릴스 행 생성 (flush만 — commit은 서비스가). 사진만 렌더 자동 등록은 FK 둘 다 None."""
+    """릴스 행 생성 (flush만 — commit은 서비스가). 사진만 렌더 자동 등록은 travel_idx=None."""
     reels = Reels(travel_idx=travel_idx, user_idx=user_idx, url=url, title=title)
     db.add(reels)
     db.flush()

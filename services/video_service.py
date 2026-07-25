@@ -587,17 +587,20 @@ def _spawn_render_job(
     intro: bool,
     outro: bool,
     save_as_reels: bool = False,
+    user_idx: int | None = None,
 ) -> dict[str, object]:
     """렌더 서브프로세스를 백그라운드 스레드로 띄우고 job 상태를 반환한다.
 
     save_as_reels=True 면 렌더 완료 후 결과 영상을 GCS 버킷(reels/)에 올리고
-    reels 테이블에 FK 없이 등록한다 (사진만 렌더 자동 릴스화).
+    reels 테이블에 등록한다 (사진만 렌더 자동 릴스화). user_idx 가 있으면
+    릴스 행의 작성자로 매핑한다.
     """
     command, marker = _build_command(
         travel_data_path, engine, quick, theme, light_preset, intro, outro
     )
     job = {
         "save_as_reels": save_as_reels,
+        "user_idx": user_idx,
         "reels_idx": None,
         "reels_url": None,
         "job_id": uuid.uuid4().hex[:12],
@@ -715,8 +718,12 @@ def start_render_photos_only(
     start_name: str = "",
     start_latitude: float | None = None,
     start_longitude: float | None = None,
+    user_idx: int | None = None,
 ) -> dict[str, object]:
     """사진들의 EXIF(GPS·촬영시각)만으로 여행 경로 영상 렌더링을 시작한다.
+
+    user_idx(JWT 인증 사용자)를 받으면 렌더 완료 후 자동 등록되는 릴스 행의
+    작성자(user_idx)로 매핑한다.
 
     촬영 시각 순으로 지점을 이동하며 각 지점에서 해당 사진을 보여준다.
     GPS 없는 사진은 제외한다. 지점 기준점(묶음 첫 사진 위치)에서 PHOTO_CLUSTER_KM(1km)
@@ -814,7 +821,7 @@ def start_render_photos_only(
     )
     return _spawn_render_job(
         travel_data_path, bgm_path, quick, engine, theme, light_preset, intro, outro,
-        save_as_reels=True,
+        save_as_reels=True, user_idx=user_idx,
     )
 
 
@@ -838,6 +845,7 @@ def _job_snapshot(job: dict) -> dict[str, object]:
             snapshot["eta_seconds"] = round(remaining, 1)
     snapshot.pop("started_at", None)
     snapshot.pop("save_as_reels", None)  # 내부 플래그 — 응답에서 제외
+    snapshot.pop("user_idx", None)  # 내부 필드(릴스 작성자 매핑용) — 응답에서 제외
     return snapshot
 
 
@@ -940,7 +948,9 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
     if job.get("save_as_reels"):
         update(percent=99.0, phase="릴스 등록(버킷 업로드)")
         try:
-            reels_fields = _register_render_as_reels(OUTPUT_DIR / output_name)
+            reels_fields = _register_render_as_reels(
+                OUTPUT_DIR / output_name, user_idx=job.get("user_idx")
+            )
         except Exception as error:  # 릴스 등록 실패해도 렌더 자체는 성공으로 처리
             logger.exception("렌더 결과 릴스 등록 실패: %s", output_name)
             log_tail += f"\n[warn] 릴스 등록 실패: {error}"
@@ -957,10 +967,13 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
     )
 
 
-def _register_render_as_reels(video_path: Path) -> dict[str, object]:
-    """완성 영상을 GCS 버킷(reels/)에 올리고 reels 행을 FK 없이 등록한다.
+def _register_render_as_reels(
+    video_path: Path, user_idx: int | None = None
+) -> dict[str, object]:
+    """완성 영상을 GCS 버킷(reels/)에 올리고 reels 행을 등록한다.
 
-    사진만 렌더는 로그인/여행 없이 실행되므로 travel_idx·user_idx 는 NULL 로 둔다.
+    사진만 렌더는 여행(travel) 없이 실행되므로 travel_idx 는 NULL 로 두고,
+    작성자는 렌더 요청 시 JWT 에서 뽑은 user_idx 로 매핑한다.
     """
     from databases.database import SessionLocal
 
@@ -969,7 +982,7 @@ def _register_render_as_reels(video_path: Path) -> dict[str, object]:
     )
     db = SessionLocal()
     try:
-        row = reels_dao.create(db, travel_idx=None, user_idx=None, url=url, title=None)
+        row = reels_dao.create(db, travel_idx=None, user_idx=user_idx, url=url, title=None)
         db.commit()
         return {"reels_idx": row.reels_idx, "reels_url": url}
     except Exception:
