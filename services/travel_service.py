@@ -300,8 +300,8 @@ def _manual_schedule_fields(
         raise BadRequestException("기차는 출발일·도착일·출발시각·도착시각이 필요합니다.")
     if not (travel.start_date <= req.dep_date <= travel.end_date):
         raise BadRequestException("출발일이 여행 기간을 벗어났습니다.")
-    if req.arr_date < req.dep_date:
-        raise BadRequestException("도착일이 출발일보다 빠를 수 없습니다.")
+    # arr_date는 받되 검증·저장하지 않는다 — day_no는 출발일 기준이고 자정 넘김은 미지원.
+    # 도착일이 출발일과 달라도 막지 않고 무시한다(같은 날 시각 역전만 아래에서 거른다).
     _validate_time_order(req.start_time, req.end_time)
     coord = _station_coords(db, req.dep_station, None)
     if coord is None:
