@@ -10,7 +10,7 @@ from datetime import date, datetime, time, timedelta
 from sqlalchemy.orm import Session
 
 from core.exceptions.custom import BadRequestException, NotFoundException
-from databases.daos import schedule_dao, station_dao, travel_dao, travel_like_dao
+from databases.daos import schedule_dao, station_dao, travel_dao, travel_like_dao, user_dao
 from schemas.travel_schema import (
     HomeTravelCard,
     PastTravelCard,
@@ -239,7 +239,12 @@ def travel_tickets(db: Session, user, travel_idx: int) -> TravelTicketsResponse:
 
 
 def _ensure_no_active_travel(db: Session, user) -> None:
-    """'예정 여행은 1개만' — 종료 안 된 여행이 이미 있으면 400. 지난(종료) 여행은 세지 않는다."""
+    """'예정 여행은 1개만' — 종료 안 된 여행이 이미 있으면 400. 지난(종료) 여행은 세지 않는다.
+
+    검사~생성이 한 트랜잭션 안에서 사용자별로 직렬화되도록 먼저 user 행을 잠근다 — 동시
+    생성 요청이 둘 다 검사를 통과해 예정 여행이 2개 만들어지는 경합을 막는다(커밋 시 해제).
+    """
+    user_dao.lock_by_idx(db, user.user_idx)
     if travel_dao.get_active_travel(db, user.user_idx, now_kst().date()) is not None:
         raise BadRequestException("이미 예정된 여행이 있습니다. 기존 여행을 삭제한 뒤 새로 만들어 주세요.")
 
