@@ -124,7 +124,10 @@ def update_schedule(
 ) -> TravelScheduleItem:
     """일정 항목 편집 — 보낸 필드만 반영. 본인 여행의 항목이 아니면 404."""
     schedule = _owned_schedule(db, user, travel_idx, schedule_idx)
-    for field, value in req.model_dump(exclude_unset=True).items():
+    data = req.model_dump(exclude_unset=True)
+    # 병합 후 최종 시각으로 순서 검증 — 보낸 값이 없으면 기존 값을 쓴다.
+    _validate_time_order(data.get("start_time", schedule.start_time), data.get("end_time", schedule.end_time))
+    for field, value in data.items():
         setattr(schedule, field, value)
     db.commit()
     return TravelScheduleItem.model_validate(schedule)
@@ -261,6 +264,15 @@ def _owned_schedule(db: Session, user, travel_idx: int, schedule_idx: int):
     return schedule
 
 
+def _validate_time_order(start_time, end_time) -> None:
+    """종료(도착) 시각이 시작(출발) 시각보다 빠르면 400 — 자정 넘김은 다루지 않는다(같은 날 기준).
+
+    둘 중 하나가 없으면 검증하지 않는다(편집에서 한쪽만 바뀔 때 상대는 기존 값이 넘어온다).
+    """
+    if start_time is not None and end_time is not None and end_time < start_time:
+        raise BadRequestException("종료(도착) 시각은 시작(출발) 시각보다 빠를 수 없습니다.")
+
+
 def _manual_schedule_fields(
     db: Session, req: ScheduleCreateRequest, travel, total_days: int,
 ) -> tuple[int, dict]:
@@ -273,9 +285,11 @@ def _manual_schedule_fields(
             raise BadRequestException("장소는 일자(day_no)·이름·좌표(위도·경도)가 필요합니다.")
         if req.day_no > total_days:
             raise BadRequestException("여행 기간을 벗어난 일자입니다.")
+        end_time = req.end_time or req.start_time
+        _validate_time_order(req.start_time, end_time)
         return req.day_no, {
             "kind": "visit", "title": req.title,
-            "start_time": req.start_time, "end_time": req.end_time or req.start_time,
+            "start_time": req.start_time, "end_time": end_time,
             "latitude": req.latitude, "longitude": req.longitude, "image_url": req.image_url,
         }
 
@@ -288,6 +302,7 @@ def _manual_schedule_fields(
         raise BadRequestException("출발일이 여행 기간을 벗어났습니다.")
     if req.arr_date < req.dep_date:
         raise BadRequestException("도착일이 출발일보다 빠를 수 없습니다.")
+    _validate_time_order(req.start_time, req.end_time)
     coord = _station_coords(db, req.dep_station, None)
     if coord is None:
         raise BadRequestException("출발역 좌표를 찾을 수 없습니다.")

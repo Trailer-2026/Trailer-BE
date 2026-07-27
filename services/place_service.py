@@ -43,7 +43,7 @@ def search_places(query: str) -> PlaceSearchResponse:
         documents = kakao_local.search_keyword(query)
     except Exception as e:
         logger.warning("카카오 장소 검색 실패(query=%s): %s", query, e)
-        raise ExternalServiceException("장소 검색에 실패했습니다.")
+        raise ExternalServiceException("장소 검색에 실패했습니다.") from e
 
     results = []
     for d in documents:
