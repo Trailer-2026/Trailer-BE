@@ -27,6 +27,19 @@ def get_by_idx(db: Session, travel_idx: int) -> Travel | None:
     ).first()
 
 
+def get_for_update(db: Session, travel_idx: int) -> Travel | None:
+    """travel 행을 FOR UPDATE로 잠가 단건 조회 (soft-delete 제외).
+
+    일정 항목 추가 시 sequence 계산(max+1)→insert를 한 트랜잭션 안에서 직렬화하기 위한 락.
+    같은 여행에 대한 동시 추가만 막고(단일 사용자라 경합 미미), 커밋 시 해제된다.
+    SQLite(노션 export)에선 FOR UPDATE가 무시돼도 무해하다.
+    """
+    return db.query(Travel).filter(
+        Travel.travel_idx == travel_idx,
+        Travel.deleted_at.is_(None),
+    ).with_for_update().first()
+
+
 def list_by_user(db: Session, user_idx: int) -> list[Travel]:
     """사용자의 여행 전체를 시작일 내림차순(최신/예정 먼저)으로 조회 (soft-delete 제외)."""
     return (
@@ -34,6 +47,23 @@ def list_by_user(db: Session, user_idx: int) -> list[Travel]:
         .filter(Travel.user_idx == user_idx, Travel.deleted_at.is_(None))
         .order_by(Travel.start_date.desc())
         .all()
+    )
+
+
+def get_active_travel(db: Session, user_idx: int, today: date) -> Travel | None:
+    """사용자의 '예정/진행 중' 여행 1건 — 종료일이 오늘 이후(포함)인 여행 (soft-delete 제외).
+
+    '예정 여행은 1개만' 정책 검사용. 종료된(오늘 이전) 여행은 지난 여행이라 세지 않는다.
+    """
+    return (
+        db.query(Travel)
+        .filter(
+            Travel.user_idx == user_idx,
+            Travel.deleted_at.is_(None),
+            Travel.end_date >= today,
+        )
+        .order_by(Travel.start_date)
+        .first()
     )
 
 
