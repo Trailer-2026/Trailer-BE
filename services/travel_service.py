@@ -99,14 +99,13 @@ def add_schedule(db: Session, user, travel_idx: int, req: ScheduleCreateRequest)
     travel = travel_dao.get_by_idx(db, travel_idx)
     if travel is None or travel.user_idx != user.user_idx:
         raise NotFoundException("여행을 찾을 수 없습니다.")
-    if req.day_no > (travel.end_date - travel.start_date).days + 1:
-        raise BadRequestException("여행 기간을 벗어난 일자입니다.")
 
-    fields = _manual_schedule_fields(db, req)
-    sequence = schedule_dao.next_sequence(db, travel_idx, req.day_no)
+    total_days = (travel.end_date - travel.start_date).days + 1
+    day_no, fields = _manual_schedule_fields(db, req, travel, total_days)
+    sequence = schedule_dao.next_sequence(db, travel_idx, day_no)
     schedule = schedule_dao.create(
         db, travel_idx=travel_idx, user_idx=user.user_idx,
-        day_no=req.day_no, sequence=sequence, memo=req.memo, **fields,
+        day_no=day_no, sequence=sequence, memo=req.memo, **fields,
     )
     db.commit()
     return TravelScheduleItem.model_validate(schedule)
@@ -119,7 +118,6 @@ def update_schedule(
     schedule = _owned_schedule(db, user, travel_idx, schedule_idx)
     for field, value in req.model_dump(exclude_unset=True).items():
         setattr(schedule, field, value)
-    db.flush()
     db.commit()
     return TravelScheduleItem.model_validate(schedule)
 
@@ -250,25 +248,39 @@ def _owned_schedule(db: Session, user, travel_idx: int, schedule_idx: int):
     return schedule
 
 
-def _manual_schedule_fields(db: Session, req: ScheduleCreateRequest) -> dict:
-    """ScheduleCreateRequest → schedule_dao.create 인자 dict (kind별 검증·좌표 처리)."""
+def _manual_schedule_fields(
+    db: Session, req: ScheduleCreateRequest, travel, total_days: int,
+) -> tuple[int, dict]:
+    """ScheduleCreateRequest → (day_no, schedule_dao.create 인자 dict). kind별 검증·좌표·day_no 계산.
+
+    visit은 요청의 day_no를, train은 출발일(dep_date)로 day_no를 계산한다.
+    """
     if req.kind == "visit":
-        if not req.title or req.latitude is None or req.longitude is None:
-            raise BadRequestException("장소는 이름과 좌표(위도·경도)가 필요합니다.")
-        return {
+        if req.day_no is None or not req.title or req.latitude is None or req.longitude is None:
+            raise BadRequestException("장소는 일자(day_no)·이름·좌표(위도·경도)가 필요합니다.")
+        if req.day_no > total_days:
+            raise BadRequestException("여행 기간을 벗어난 일자입니다.")
+        return req.day_no, {
             "kind": "visit", "title": req.title,
-            "start_time": req.start_time, "end_time": req.end_time,
+            "start_time": req.start_time, "end_time": req.end_time or req.start_time,
             "latitude": req.latitude, "longitude": req.longitude, "image_url": req.image_url,
         }
 
     # kind == "train"
     if not (req.train_no and req.train_grade and req.dep_station and req.arr_station):
         raise BadRequestException("기차는 열차번호·등급·출발역·도착역이 필요합니다.")
+    if req.dep_date is None or req.arr_date is None or req.end_time is None:
+        raise BadRequestException("기차는 출발일·도착일·출발시각·도착시각이 필요합니다.")
+    if not (travel.start_date <= req.dep_date <= travel.end_date):
+        raise BadRequestException("출발일이 여행 기간을 벗어났습니다.")
+    if req.arr_date < req.dep_date:
+        raise BadRequestException("도착일이 출발일보다 빠를 수 없습니다.")
     coord = _station_coords(db, req.dep_station, None)
     if coord is None:
         raise BadRequestException("출발역 좌표를 찾을 수 없습니다.")
     lat, lng = coord
-    return {
+    day_no = (req.dep_date - travel.start_date).days + 1
+    return day_no, {
         "kind": "train",
         "title": f"{req.train_grade} {req.train_no} {req.dep_station}→{req.arr_station}",
         "train_no": req.train_no, "train_grade": req.train_grade,

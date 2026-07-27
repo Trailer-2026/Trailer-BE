@@ -146,13 +146,14 @@ def get_travel_tickets(
     "/{travel_idx}/schedules",
     summary="일정 항목 추가",
     description="여행에 일정 항목 1건을 추가합니다(내 일정 > 직접 만들기). `kind`로 구분합니다.\n\n"
-                "- **kind=visit(장소)**: `title`·`latitude`·`longitude` 필수(장소 검색 결과에서 채워 전송). "
-                "`memo`·`image_url` 선택.\n"
-                "- **kind=train(티켓)**: `train_no`·`train_grade`·`dep_station`·`arr_station` 필수, "
-                "`car_no`·`seat_no`·`memo` 선택. 좌표는 서버가 출발역명으로 조회합니다.\n"
+                "- **kind=visit(장소)**: `day_no`·`start_time`(방문 시각)·`title`·`latitude`·`longitude` 필수"
+                "(장소 검색 결과에서 채워 전송). `end_time` 미지정 시 방문 시각과 동일 처리, `memo`·`image_url` 선택.\n"
+                "- **kind=train(티켓)**: `dep_date`·`arr_date`(출발일·도착일)·`start_time`(출발)·`end_time`(도착)·"
+                "`train_no`·`train_grade`·`dep_station`·`arr_station` 필수, `car_no`·`seat_no`·`memo` 선택. "
+                "day_no는 출발일로 서버가 계산하고, 좌표는 출발역명으로 조회합니다.\n"
                 "- `sequence`는 서버가 그날 마지막 뒤로 자동 배정합니다.\n\n"
                 "- 404: 존재하지 않거나 본인 여행이 아님\n"
-                "- 400: kind별 필수값 누락 / 여행 기간을 벗어난 day_no / 출발역 좌표 없음\n"
+                "- 400: kind별 필수값 누락 / 여행 기간을 벗어난 일자·출발일 / 도착일<출발일 / 출발역 좌표 없음\n"
                 "- 401: 인증 필요",
     response_model=CommonResponse[TravelScheduleItem],
 )

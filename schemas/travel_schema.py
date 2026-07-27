@@ -28,24 +28,29 @@ class TravelManualCreateRequest(BaseModel):
 class ScheduleCreateRequest(BaseModel):
     """일정 항목 추가 요청 (장소 방문 / 기차 티켓). kind로 구분.
 
-    - kind=visit: title·latitude·longitude 필수 (장소 검색 결과에서 채워 보낸다).
-    - kind=train: dep_station·arr_station·train_no·train_grade 필수. 좌표는 서버가 출발역으로 조회한다.
-    day_no만 지정하면 그날 마지막 순서 뒤에 추가된다(sequence 서버 자동).
+    - kind=visit(장소): `day_no`·`start_time`(방문 시각) 필수, `end_time` 미지정 시 방문 시각과 동일
+      처리(단일 시각). `title`·`latitude`·`longitude` 필수(장소 검색 결과에서 채워 보낸다).
+    - kind=train(티켓): `dep_date`·`arr_date`(출발일·도착일)·`start_time`(출발)·`end_time`(도착)·
+      `train_no`·`train_grade`·`dep_station`·`arr_station` 필수. day_no는 출발일로 서버가 계산한다.
+      좌표는 서버가 출발역명으로 조회한다. `car_no`·`seat_no`·`memo` 선택.
+    sequence는 그날 마지막 뒤로 서버가 자동 배정한다.
     """
 
     kind: Literal["visit", "train"] = Field(..., description="항목 종류", examples=["visit"])
-    day_no: int = Field(..., ge=1, description="여행 일자 (day1=1)", examples=[1])
-    start_time: time = Field(..., description="시작(기차는 출발) 시각 HH:MM", examples=["10:00"])
-    end_time: time = Field(..., description="종료(기차는 도착) 시각 HH:MM", examples=["12:00"])
+    start_time: time = Field(..., description="방문(기차는 출발) 시각 HH:MM", examples=["10:00"])
+    end_time: time | None = Field(None, description="종료(기차는 도착) 시각 HH:MM. visit 미지정 시 방문 시각과 동일, train 필수", examples=["12:00"])
     memo: str | None = Field(None, description="메모", examples=["점심 예약"])
 
     # kind=visit
+    day_no: int | None = Field(None, ge=1, description="여행 일자 day1=1 (visit 필수)", examples=[1])
     title: str | None = Field(None, max_length=100, description="장소명 (visit 필수)", examples=["감천문화마을"])
     latitude: float | None = Field(None, description="위도 (visit 필수)", examples=[35.0975])
     longitude: float | None = Field(None, description="경도 (visit 필수)", examples=[129.0107])
     image_url: str | None = Field(None, max_length=255, description="대표 이미지 URL (visit, 선택)")
 
     # kind=train
+    dep_date: date | None = Field(None, description="출발일 (train 필수, 여행 기간 내)", examples=["2026-08-01"])
+    arr_date: date | None = Field(None, description="도착일 (train 필수, 출발일 이후)", examples=["2026-08-01"])
     train_no: str | None = Field(None, max_length=10, description="열차번호 (train 필수)", examples=["101"])
     train_grade: str | None = Field(None, max_length=20, description="열차 등급 (train 필수)", examples=["KTX"])
     dep_station: str | None = Field(None, max_length=50, description="출발역명 (train 필수, '역' 없이)", examples=["서울"])
