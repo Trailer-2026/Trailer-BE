@@ -8,10 +8,14 @@ from databases.models.user import User
 from schemas.travel_schema import (
     HomeTravelCard,
     PastTravelListResponse,
+    ScheduleCreateRequest,
+    ScheduleUpdateRequest,
     TravelCreateRequest,
     TravelDetailResponse,
     TravelLikeResponse,
+    TravelManualCreateRequest,
     TravelResponse,
+    TravelScheduleItem,
     TravelTicketsResponse,
 )
 from services import travel_like_service, travel_service
@@ -36,6 +40,25 @@ def create_travel(
 ):
     result = travel_service.save_selected_plan(db, current_user, req.plan_id)
     return CommonResponse.success_response("여행 저장 성공", data=result)
+
+
+@router.post(
+    "/manual",
+    summary="직접 일정 만들기",
+    description="빈 여행(일정) 1건을 직접 생성합니다(제목·기간·지역). 일정 항목은 이후 "
+                "`POST /{travel_idx}/schedules`로 개별 추가합니다.\n\n"
+                "- **예정 여행은 1개만** 가질 수 있습니다. 종료되지 않은 여행이 이미 있으면 400입니다.\n"
+                "- 400: 예정 여행이 이미 있음 / 종료일이 시작일보다 빠름\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[TravelResponse],
+)
+def create_manual_travel(
+    req: TravelManualCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = travel_service.create_manual(db, current_user, req)
+    return CommonResponse.success_response("여행 생성 성공", data=result)
 
 
 @router.get(
@@ -117,6 +140,69 @@ def get_travel_tickets(
 ):
     result = travel_service.travel_tickets(db, current_user, travel_idx)
     return CommonResponse.success_response("승차권 조회 성공", data=result)
+
+
+@router.post(
+    "/{travel_idx}/schedules",
+    summary="일정 항목 추가",
+    description="여행에 일정 항목 1건을 추가합니다(내 일정 > 직접 만들기). `kind`로 구분합니다.\n\n"
+                "- **kind=visit(장소)**: `day_no`·`start_time`(방문 시각)·`title`·`latitude`·`longitude` 필수"
+                "(장소 검색 결과에서 채워 전송). `end_time` 미지정 시 방문 시각과 동일 처리, `memo`·`image_url` 선택.\n"
+                "- **kind=train(티켓)**: `dep_date`·`arr_date`(출발일·도착일)·`start_time`(출발)·`end_time`(도착)·"
+                "`train_no`·`train_grade`·`dep_station`·`arr_station` 필수, `car_no`·`seat_no`·`memo` 선택. "
+                "day_no는 출발일로 서버가 계산하고, 좌표는 출발역명으로 조회합니다.\n"
+                "- `sequence`는 서버가 그날 마지막 뒤로 자동 배정합니다.\n\n"
+                "- 404: 존재하지 않거나 본인 여행이 아님\n"
+                "- 400: kind별 필수값 누락 / 여행 기간을 벗어난 일자·출발일 / 도착일<출발일 / 출발역 좌표 없음\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[TravelScheduleItem],
+)
+def add_schedule(
+    travel_idx: int,
+    req: ScheduleCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = travel_service.add_schedule(db, current_user, travel_idx, req)
+    return CommonResponse.success_response("일정 항목 추가 성공", data=result)
+
+
+@router.patch(
+    "/{travel_idx}/schedules/{schedule_idx}",
+    summary="일정 항목 편집",
+    description="일정 항목 1건을 수정합니다. 보낸 필드만 반영되고 나머지는 그대로 유지됩니다. "
+                "일자(day_no) 이동·종류(kind) 변경은 지원하지 않습니다.\n\n"
+                "- 404: 항목이 없거나 본인 여행의 항목이 아님\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[TravelScheduleItem],
+)
+def update_schedule(
+    travel_idx: int,
+    schedule_idx: int,
+    req: ScheduleUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = travel_service.update_schedule(db, current_user, travel_idx, schedule_idx, req)
+    return CommonResponse.success_response("일정 항목 수정 성공", data=result)
+
+
+@router.delete(
+    "/{travel_idx}/schedules/{schedule_idx}",
+    summary="일정 항목 삭제",
+    description="일정 항목 1건을 삭제합니다(소프트 삭제).\n\n"
+                "- 404: 항목이 없거나 본인 여행의 항목이 아님\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[None],
+)
+def delete_schedule(
+    travel_idx: int,
+    schedule_idx: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    travel_service.delete_schedule(db, current_user, travel_idx, schedule_idx)
+    return CommonResponse.success_response("일정 항목 삭제 성공")
 
 
 @router.post(
