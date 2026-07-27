@@ -37,7 +37,11 @@ def get_by_idx(db: Session, schedule_idx: int) -> Schedule | None:
 
 
 def next_sequence(db: Session, travel_idx: int, day_no: int) -> int:
-    """해당 여행·일자에 항목을 뒤에 붙일 sequence = 현재 최대+1 (없으면 0)."""
+    """해당 여행·일자에 항목을 뒤에 붙일 sequence = 현재 최대+1 (없으면 0).
+
+    max 조회→insert 사이 경합을 막으려면 호출부가 travel 행을 FOR UPDATE로 잠근 상태여야 한다
+    (services.travel_service.add_schedule 참조).
+    """
     current = (
         db.query(func.max(Schedule.sequence))
         .filter(

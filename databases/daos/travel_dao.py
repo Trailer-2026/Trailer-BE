@@ -27,6 +27,19 @@ def get_by_idx(db: Session, travel_idx: int) -> Travel | None:
     ).first()
 
 
+def get_for_update(db: Session, travel_idx: int) -> Travel | None:
+    """travel 행을 FOR UPDATE로 잠가 단건 조회 (soft-delete 제외).
+
+    일정 항목 추가 시 sequence 계산(max+1)→insert를 한 트랜잭션 안에서 직렬화하기 위한 락.
+    같은 여행에 대한 동시 추가만 막고(단일 사용자라 경합 미미), 커밋 시 해제된다.
+    SQLite(노션 export)에선 FOR UPDATE가 무시돼도 무해하다.
+    """
+    return db.query(Travel).filter(
+        Travel.travel_idx == travel_idx,
+        Travel.deleted_at.is_(None),
+    ).with_for_update().first()
+
+
 def list_by_user(db: Session, user_idx: int) -> list[Travel]:
     """사용자의 여행 전체를 시작일 내림차순(최신/예정 먼저)으로 조회 (soft-delete 제외)."""
     return (

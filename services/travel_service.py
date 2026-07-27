@@ -95,8 +95,12 @@ def create_manual(db: Session, user, req: TravelManualCreateRequest) -> TravelRe
 
 
 def add_schedule(db: Session, user, travel_idx: int, req: ScheduleCreateRequest) -> TravelScheduleItem:
-    """여행에 일정 항목(장소/기차) 1건 추가. 본인 여행이 아니면 404. sequence는 그날 끝에 append."""
-    travel = travel_dao.get_by_idx(db, travel_idx)
+    """여행에 일정 항목(장소/기차) 1건 추가. 본인 여행이 아니면 404. sequence는 그날 끝에 append.
+
+    travel 행을 FOR UPDATE로 잠근 뒤 next_sequence(max+1)→create를 수행해, 같은 여행에 동시
+    추가가 와도 sequence가 중복되지 않도록 직렬화한다(커밋 시 락 해제).
+    """
+    travel = travel_dao.get_for_update(db, travel_idx)
     if travel is None or travel.user_idx != user.user_idx:
         raise NotFoundException("여행을 찾을 수 없습니다.")
 
