@@ -31,6 +31,8 @@ from utils.timezone import now_kst
 _LODGING_CHECKIN = time(21, 0)   # 마지막 방문 종료를 못 구할 때 체크인 기본값
 _LODGING_CHECKOUT = time(9, 0)   # 다음날 첫 일정 시작을 못 구할 때 체크아웃 기본값
 _DEFAULT_TIME = time(9, 0)       # 방문/기차 시각이 비어 있을 때 안전 기본값
+# 편집 시 null로 지우면 안 되는 NOT NULL 컬럼(schedule) — 명시적 null 요청을 400으로 막는다.
+_NON_NULL_EDIT_FIELDS = ("title", "start_time", "end_time", "latitude", "longitude")
 
 
 def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
@@ -125,6 +127,9 @@ def update_schedule(
     """일정 항목 편집 — 보낸 필드만 반영. 본인 여행의 항목이 아니면 404."""
     schedule = _owned_schedule(db, user, travel_idx, schedule_idx)
     data = req.model_dump(exclude_unset=True)
+    # NOT NULL 컬럼을 명시적 null로 지우려 하면 커밋 시 500 대신 400으로 막는다.
+    if any(f in data and data[f] is None for f in _NON_NULL_EDIT_FIELDS):
+        raise BadRequestException("제목·시각·좌표는 빈 값(null)으로 지울 수 없습니다.")
     # 병합 후 최종 시각으로 순서 검증 — 보낸 값이 없으면 기존 값을 쓴다.
     _validate_time_order(data.get("start_time", schedule.start_time), data.get("end_time", schedule.end_time))
     for field, value in data.items():
@@ -296,12 +301,11 @@ def _manual_schedule_fields(
     # kind == "train"
     if not (req.train_no and req.train_grade and req.dep_station and req.arr_station):
         raise BadRequestException("기차는 열차번호·등급·출발역·도착역이 필요합니다.")
-    if req.dep_date is None or req.arr_date is None or req.end_time is None:
-        raise BadRequestException("기차는 출발일·도착일·출발시각·도착시각이 필요합니다.")
+    if req.dep_date is None or req.end_time is None:
+        raise BadRequestException("기차는 출발일·출발시각·도착시각이 필요합니다.")
     if not (travel.start_date <= req.dep_date <= travel.end_date):
         raise BadRequestException("출발일이 여행 기간을 벗어났습니다.")
-    # arr_date는 받되 검증·저장하지 않는다 — day_no는 출발일 기준이고 자정 넘김은 미지원.
-    # 도착일이 출발일과 달라도 막지 않고 무시한다(같은 날 시각 역전만 아래에서 거른다).
+    # arr_date는 받아도 검증·저장하지 않는다(선택) — day_no는 출발일 기준이고 자정 넘김은 미지원.
     _validate_time_order(req.start_time, req.end_time)
     coord = _station_coords(db, req.dep_station, None)
     if coord is None:

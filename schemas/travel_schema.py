@@ -50,7 +50,7 @@ class ScheduleCreateRequest(BaseModel):
 
     # kind=train
     dep_date: date | None = Field(None, description="출발일 (train 필수, 여행 기간 내)", examples=["2026-08-01"])
-    arr_date: date | None = Field(None, description="도착일 (train 필수 — day_no는 출발일 기준이라 값 자체는 사용하지 않음)", examples=["2026-08-01"])
+    arr_date: date | None = Field(None, description="도착일 (선택 — day_no는 출발일 기준이라 값 자체는 사용하지 않음)", examples=["2026-08-01"])
     train_no: str | None = Field(None, max_length=10, description="열차번호 (train 필수)", examples=["101"])
     train_grade: str | None = Field(None, max_length=20, description="열차 등급 (train 필수)", examples=["KTX"])
     dep_station: str | None = Field(None, max_length=50, description="출발역명 (train 필수, '역' 없이)", examples=["서울"])
