@@ -81,8 +81,12 @@ def create_manual(db: Session, user, req: TravelManualCreateRequest) -> TravelRe
         raise BadRequestException("종료일이 시작일보다 빠를 수 없습니다.")
     _ensure_no_active_travel(db, user)
 
+    # 제목 미입력·공백이면 AI 저장과 동일하게 지역·기간으로 자동 생성('부산 3박 4일 여행' 형태).
+    title = (req.title or "").strip() or _travel_title(
+        req.region, req.start_date, req.end_date, None
+    )
     travel = travel_dao.create(
-        db, user_idx=user.user_idx, title=req.title,
+        db, user_idx=user.user_idx, title=title,
         start_date=req.start_date, end_date=req.end_date,
         region=req.region, status="PLANNED",
     )

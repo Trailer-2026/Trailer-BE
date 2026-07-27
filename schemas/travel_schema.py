@@ -19,7 +19,7 @@ class TravelCreateRequest(BaseModel):
 class TravelManualCreateRequest(BaseModel):
     """직접 일정 만들기 — 빈 여행 1건 생성 요청 (일정 항목은 이후 개별 추가)."""
 
-    title: str = Field(..., max_length=100, description="여행 제목", examples=["부산 여행"])
+    title: str | None = Field(None, max_length=100, description="여행 제목(미입력·공백이면 지역·기간으로 자동 생성)", examples=["부산 여행"])
     start_date: date = Field(..., description="여행 시작일", examples=["2026-08-01"])
     end_date: date = Field(..., description="여행 종료일", examples=["2026-08-03"])
     region: str | None = Field(None, max_length=100, description="대표 지역(선택)", examples=["부산"])
