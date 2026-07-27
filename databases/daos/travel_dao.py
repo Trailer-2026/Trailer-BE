@@ -37,6 +37,23 @@ def list_by_user(db: Session, user_idx: int) -> list[Travel]:
     )
 
 
+def get_active_travel(db: Session, user_idx: int, today: date) -> Travel | None:
+    """사용자의 '예정/진행 중' 여행 1건 — 종료일이 오늘 이후(포함)인 여행 (soft-delete 제외).
+
+    '예정 여행은 1개만' 정책 검사용. 종료된(오늘 이전) 여행은 지난 여행이라 세지 않는다.
+    """
+    return (
+        db.query(Travel)
+        .filter(
+            Travel.user_idx == user_idx,
+            Travel.deleted_at.is_(None),
+            Travel.end_date >= today,
+        )
+        .order_by(Travel.start_date)
+        .first()
+    )
+
+
 def list_completed_by_user(db: Session, user_idx: int, today: date) -> list[Travel]:
     """사용자의 '지난 여행'(종료일이 오늘 이전) 전체를 최신순으로 조회 (soft-delete 제외).
 

@@ -1,5 +1,6 @@
 from datetime import time
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from databases.models.schedule import Schedule
@@ -10,6 +11,7 @@ def create(
     title: str, start_time: time, end_time: time, latitude: float, longitude: float,
     kind: str = "visit", train_no: str | None = None, train_grade: str | None = None,
     dep_station: str | None = None, arr_station: str | None = None,
+    car_no: str | None = None, seat_no: str | None = None,
     image_url: str | None = None, memo: str | None = None,
 ) -> Schedule:
     """스케줄(일정 항목) 1행 생성. flush만 하고 commit은 서비스가 한다."""
@@ -17,12 +19,41 @@ def create(
         travel_idx=travel_idx, user_idx=user_idx, day_no=day_no, sequence=sequence,
         kind=kind, title=title, train_no=train_no, train_grade=train_grade,
         dep_station=dep_station, arr_station=arr_station,
+        car_no=car_no, seat_no=seat_no,
         start_time=start_time, end_time=end_time,
         latitude=latitude, longitude=longitude, image_url=image_url, memo=memo,
     )
     db.add(schedule)
     db.flush()
     return schedule
+
+
+def get_by_idx(db: Session, schedule_idx: int) -> Schedule | None:
+    """schedule_idx로 단건 조회 (soft-delete 제외). 편집·삭제용."""
+    return db.query(Schedule).filter(
+        Schedule.schedule_idx == schedule_idx,
+        Schedule.deleted_at.is_(None),
+    ).first()
+
+
+def next_sequence(db: Session, travel_idx: int, day_no: int) -> int:
+    """해당 여행·일자에 항목을 뒤에 붙일 sequence = 현재 최대+1 (없으면 0)."""
+    current = (
+        db.query(func.max(Schedule.sequence))
+        .filter(
+            Schedule.travel_idx == travel_idx,
+            Schedule.day_no == day_no,
+            Schedule.deleted_at.is_(None),
+        )
+        .scalar()
+    )
+    return 0 if current is None else current + 1
+
+
+def soft_delete(db: Session, schedule: Schedule) -> None:
+    """일정 항목 소프트 삭제 (deleted_at 세팅). flush만, commit은 서비스."""
+    schedule.deleted_at = func.now()
+    db.flush()
 
 
 def list_by_travel(db: Session, travel_idx: int) -> list[Schedule]:

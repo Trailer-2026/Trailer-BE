@@ -33,6 +33,8 @@ class Schedule(BaseModel):
     train_grade = Column(String(20), nullable=True, comment="열차 등급 (kind=train만, 예: KTX)")
     dep_station = Column(String(50), nullable=True, comment="출발역명 (kind=train만, 접미사 '역' 없음)")
     arr_station = Column(String(50), nullable=True, comment="도착역명 (kind=train만, 접미사 '역' 없음)")
+    car_no = Column(String(10), nullable=True, comment="호차 번호 (kind=train, 직접 입력만)")
+    seat_no = Column(String(10), nullable=True, comment="좌석 번호 (kind=train, 직접 입력만)")
     start_time = Column(Time, nullable=False, comment="시작 시간")
     end_time = Column(Time, nullable=False, comment="종료 시간")
     latitude = Column(Float, nullable=False, comment="위도")

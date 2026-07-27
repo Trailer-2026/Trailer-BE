@@ -3,11 +3,20 @@
 관광 데이터는 DB가 아니라 실시간 TourAPI(utils.tour_place)에서 온다. 테마 배너 문구는 서버가
 소유하고, '다른 테마' 버튼은 theme 없이 재호출하면 서버가 랜덤 테마를 골라준다.
 """
+import logging
 import random
 
 from core.enums import Theme
-from schemas.place_schema import ThemedPlacesResponse, ThemePlaceCard
-from utils import tour_place
+from core.exceptions.custom import ExternalServiceException
+from schemas.place_schema import (
+    PlaceSearchResponse,
+    PlaceSearchResult,
+    ThemedPlacesResponse,
+    ThemePlaceCard,
+)
+from utils import kakao_local, tour_place
+
+logger = logging.getLogger(__name__)
 
 _PLACES_LIMIT = 3  # 섹션에 내려줄 관광지 수 (홈 화면 카드 3개)
 
@@ -22,6 +31,33 @@ _THEME_TITLE = {
     Theme.CULTURE: "예술과 문화가 흐르는 여행",
     Theme.THEME_PARK: "온종일 즐거운 테마파크",
 }
+
+
+def search_places(query: str) -> PlaceSearchResponse:
+    """카카오 로컬 키워드 검색으로 장소 후보를 만든다(일정 '장소 추가' 검색창용).
+
+    좌표(x=경도, y=위도)가 문자열이라 float 변환하고, 파싱 실패 항목은 건너뛴다.
+    카카오 호출/키 실패는 502(ExternalServiceException)로 변환한다.
+    """
+    try:
+        documents = kakao_local.search_keyword(query)
+    except Exception as e:
+        logger.warning("카카오 장소 검색 실패(query=%s): %s", query, e)
+        raise ExternalServiceException("장소 검색에 실패했습니다.")
+
+    results = []
+    for d in documents:
+        try:
+            lat, lng = float(d["y"]), float(d["x"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        results.append(PlaceSearchResult(
+            name=d.get("place_name") or "",
+            address=d.get("road_address_name") or d.get("address_name") or None,
+            category=d.get("category_group_name") or None,
+            latitude=lat, longitude=lng,
+        ))
+    return PlaceSearchResponse(places=results)
 
 
 def _short_region(addr: str | None) -> str | None:

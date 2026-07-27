@@ -15,9 +15,12 @@ from schemas.travel_schema import (
     HomeTravelCard,
     PastTravelCard,
     PastTravelListResponse,
+    ScheduleCreateRequest,
+    ScheduleUpdateRequest,
     TrainTicketResponse,
     TravelDayGroup,
     TravelDetailResponse,
+    TravelManualCreateRequest,
     TravelResponse,
     TravelScheduleItem,
     TravelTicketsResponse,
@@ -32,6 +35,7 @@ _DEFAULT_TIME = time(9, 0)       # 방문/기차 시각이 비어 있을 때 안
 
 def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
     """선택한 추천 플랜(plan_id)을 사용자의 여행으로 저장한다. 서비스가 트랜잭션을 소유(commit)."""
+    _ensure_no_active_travel(db, user)
     payload = plan_cache.get(plan_id)
     if payload is None:
         raise BadRequestException("추천이 만료되었습니다. 다시 추천받아 주세요.")
@@ -69,6 +73,62 @@ def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
         start_date=travel.start_date, end_date=travel.end_date,
         region=travel.region, status=travel.status, schedule_count=count,
     )
+
+
+def create_manual(db: Session, user, req: TravelManualCreateRequest) -> TravelResponse:
+    """직접 일정 만들기 — 빈 여행 1건 생성. 일정 항목은 add_schedule로 이후 추가한다."""
+    if req.end_date < req.start_date:
+        raise BadRequestException("종료일이 시작일보다 빠를 수 없습니다.")
+    _ensure_no_active_travel(db, user)
+
+    travel = travel_dao.create(
+        db, user_idx=user.user_idx, title=req.title,
+        start_date=req.start_date, end_date=req.end_date,
+        region=req.region, status="PLANNED",
+    )
+    db.commit()
+    return TravelResponse(
+        travel_idx=travel.travel_idx, title=travel.title,
+        start_date=travel.start_date, end_date=travel.end_date,
+        region=travel.region, status=travel.status, schedule_count=0,
+    )
+
+
+def add_schedule(db: Session, user, travel_idx: int, req: ScheduleCreateRequest) -> TravelScheduleItem:
+    """여행에 일정 항목(장소/기차) 1건 추가. 본인 여행이 아니면 404. sequence는 그날 끝에 append."""
+    travel = travel_dao.get_by_idx(db, travel_idx)
+    if travel is None or travel.user_idx != user.user_idx:
+        raise NotFoundException("여행을 찾을 수 없습니다.")
+    if req.day_no > (travel.end_date - travel.start_date).days + 1:
+        raise BadRequestException("여행 기간을 벗어난 일자입니다.")
+
+    fields = _manual_schedule_fields(db, req)
+    sequence = schedule_dao.next_sequence(db, travel_idx, req.day_no)
+    schedule = schedule_dao.create(
+        db, travel_idx=travel_idx, user_idx=user.user_idx,
+        day_no=req.day_no, sequence=sequence, memo=req.memo, **fields,
+    )
+    db.commit()
+    return TravelScheduleItem.model_validate(schedule)
+
+
+def update_schedule(
+    db: Session, user, travel_idx: int, schedule_idx: int, req: ScheduleUpdateRequest,
+) -> TravelScheduleItem:
+    """일정 항목 편집 — 보낸 필드만 반영. 본인 여행의 항목이 아니면 404."""
+    schedule = _owned_schedule(db, user, travel_idx, schedule_idx)
+    for field, value in req.model_dump(exclude_unset=True).items():
+        setattr(schedule, field, value)
+    db.flush()
+    db.commit()
+    return TravelScheduleItem.model_validate(schedule)
+
+
+def delete_schedule(db: Session, user, travel_idx: int, schedule_idx: int) -> None:
+    """일정 항목 소프트 삭제. 본인 여행의 항목이 아니면 404."""
+    schedule = _owned_schedule(db, user, travel_idx, schedule_idx)
+    schedule_dao.soft_delete(db, schedule)
+    db.commit()
 
 
 def current_travel(db: Session, user) -> HomeTravelCard | None:
@@ -168,10 +228,55 @@ def travel_tickets(db: Session, user, travel_idx: int) -> TravelTicketsResponse:
             arr_station=s.arr_station or "",
             dep_time=s.start_time,
             arr_time=s.end_time,
+            car_no=s.car_no,
+            seat_no=s.seat_no,
         )
         for s in trains
     ]
     return TravelTicketsResponse(travel_idx=travel.travel_idx, tickets=tickets)
+
+
+def _ensure_no_active_travel(db: Session, user) -> None:
+    """'예정 여행은 1개만' — 종료 안 된 여행이 이미 있으면 400. 지난(종료) 여행은 세지 않는다."""
+    if travel_dao.get_active_travel(db, user.user_idx, now_kst().date()) is not None:
+        raise BadRequestException("이미 예정된 여행이 있습니다. 기존 여행을 삭제한 뒤 새로 만들어 주세요.")
+
+
+def _owned_schedule(db: Session, user, travel_idx: int, schedule_idx: int):
+    """편집·삭제 대상 일정 항목을 본인 여행 소속으로 검증해 반환. 아니면 404."""
+    schedule = schedule_dao.get_by_idx(db, schedule_idx)
+    if schedule is None or schedule.travel_idx != travel_idx or schedule.user_idx != user.user_idx:
+        raise NotFoundException("일정 항목을 찾을 수 없습니다.")
+    return schedule
+
+
+def _manual_schedule_fields(db: Session, req: ScheduleCreateRequest) -> dict:
+    """ScheduleCreateRequest → schedule_dao.create 인자 dict (kind별 검증·좌표 처리)."""
+    if req.kind == "visit":
+        if not req.title or req.latitude is None or req.longitude is None:
+            raise BadRequestException("장소는 이름과 좌표(위도·경도)가 필요합니다.")
+        return {
+            "kind": "visit", "title": req.title,
+            "start_time": req.start_time, "end_time": req.end_time,
+            "latitude": req.latitude, "longitude": req.longitude, "image_url": req.image_url,
+        }
+
+    # kind == "train"
+    if not (req.train_no and req.train_grade and req.dep_station and req.arr_station):
+        raise BadRequestException("기차는 열차번호·등급·출발역·도착역이 필요합니다.")
+    coord = _station_coords(db, req.dep_station, None)
+    if coord is None:
+        raise BadRequestException("출발역 좌표를 찾을 수 없습니다.")
+    lat, lng = coord
+    return {
+        "kind": "train",
+        "title": f"{req.train_grade} {req.train_no} {req.dep_station}→{req.arr_station}",
+        "train_no": req.train_no, "train_grade": req.train_grade,
+        "dep_station": req.dep_station, "arr_station": req.arr_station,
+        "car_no": req.car_no, "seat_no": req.seat_no,
+        "start_time": req.start_time, "end_time": req.end_time,
+        "latitude": lat, "longitude": lng,
+    }
 
 
 def _travel_title(region: str | None, start: date, end: date, fallback: str | None) -> str:
