@@ -1,21 +1,42 @@
-fastapi==0.110.1
-SQLAlchemy==2.0.36
-uvicorn==0.29.0
-python-multipart==0.0.9
-python-dotenv==1.0.1
-requests==2.31.0
-psycopg2-binary          # 추가됨 (PostgreSQL 필수)
-google-cloud-storage     # 추가됨 (GCP 스토리지 필수)
-aiofiles                 # 추가됨 (정적 파일/ReDoc용)
-pydantic-settings        # 추가됨 (설정 관리용)
-httpx==0.27.0
-pydantic-settings==2.2.1
-PyJWT==2.9.0            # 추가됨 (자체 JWT 발급/검증용)
-firebase-admin          # 추가됨 (FCM 푸시 알림)
+# =============================================================================
+# ⚠️ pip 로 설치되지 않는 시스템 의존성 (아래 목록만으로는 영상 기능이 동작하지 않는다)
+#
+#   - ffmpeg / ffprobe : 영상 인코딩·구간편집·BGM 먹싱·인트로 concat 에 필수.
+#                        코드가 PATH 에서 찾는다(shutil.which). 없으면 502.
+#                        engine=modal 이어도 조각 합치기·후처리는 서버에서 하므로 필요.
+#                        Ubuntu: sudo apt-get install -y ffmpeg
+#   - Chromium         : engine=local 렌더용. pip install 후 별도 다운로드 필요.
+#                        python -m playwright install chromium
+#   - CJK 폰트         : 리눅스에서 한글 라벨이 깨지지 않게 하려면 필요.
+#                        Ubuntu: sudo apt-get install -y fonts-noto-cjk fonts-nanum
+#
+# (Modal 컨테이너는 modal_render.py 의 이미지 정의에서 위 셋을 이미 설치한다.
+#  서버 VM 은 .github/workflows/deploy.yml 이 설치한다.)
+# =============================================================================
 
-# --- services/videoMaker 렌더 엔진 (POST /api/videos/render) ---
+# --- 웹 프레임워크 / API ---
+fastapi==0.110.1
+uvicorn==0.29.0
+python-multipart==0.0.9  # multipart/form-data (사진 업로드 Form/File 파싱에 필수)
+pydantic>=2,<3           # fastapi 경유로도 깔리지만 스키마에서 직접 쓰므로 명시
+pydantic-settings==2.2.1
+aiofiles                 # 정적 파일 응답용 (현재 직접 import 는 없음)
+
+# --- DB ---
+SQLAlchemy==2.0.36
+psycopg2-binary          # PostgreSQL 드라이버 (db.url 이 postgresql+psycopg2://)
+
+# --- 외부 연동 ---
+requests==2.31.0         # TourAPI·열차 API·이미지 다운로드
+httpx==0.27.0            # OAuth(구글/카카오)·Discord 웹훅
+PyJWT==2.9.0             # 자체 JWT 발급/검증
+google-cloud-storage     # GCS 버킷 (릴스 영상·이미지 업로드)
+firebase-admin           # FCM 푸시 알림
+python-dotenv==1.0.1
+
+# --- services/videoMaker 렌더 엔진 (POST /api/videos/render/*) ---
 # [videomaker] python 으로 별도 환경(trailer3d)을 지정하면 아래는 그 환경에만 있으면 된다.
-playwright>=1.50,<2     # local 엔진 (설치 후 `playwright install chromium` 필요)
-Pillow>=10,<13          # 사진 합성·인트로/아웃트로 클립
-modal>=1.5,<2           # Modal T4 클라우드 렌더 엔진 (modal 로그인 필요)
-protobuf<7              # modal(<7 요구)과 firebase-admin 계열 공존을 위한 상한 핀
+playwright>=1.50,<2      # local 엔진 (설치 후 `playwright install chromium` 필요)
+Pillow>=10,<13           # 사진 EXIF/리사이즈·합성·인트로/아웃트로 클립
+modal>=1.5,<2            # Modal T4 클라우드 렌더 엔진 (modal 로그인 필요)
+protobuf<7               # modal(<7 요구)과 firebase-admin 계열 공존을 위한 상한 핀
