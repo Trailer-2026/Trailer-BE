@@ -946,19 +946,24 @@ def _run_render_job(job: dict, command: list[str]) -> None:
     log_tail = stdout[-2000:]
     reels_fields: dict[str, object] = {}
     update(percent=99.0, phase="릴스 등록(버킷 업로드)")
+    video_path = OUTPUT_DIR / output_name
+    # 업로드에 실패했을 때만 쓰이는 폴백 — 로컬 파일이 남아있는 경우의 경로.
+    video_url = f"/api/videos/output/{output_name}"
     try:
-        reels_fields = _register_render_as_reels(
-            OUTPUT_DIR / output_name, user_idx=job["user_idx"]
-        )
+        reels_fields = _register_render_as_reels(video_path, user_idx=job["user_idx"])
+        # GCS 에 올라갔으므로 로컬 사본은 지운다. 안 지우면 output/ 이 무한히
+        # 쌓여 디스크가 찬다(영상 1편이 수십 MB). 실패 시엔 남겨서 받을 수 있게 둔다.
+        video_path.unlink(missing_ok=True)
+        video_url = str(reels_fields["reels_url"])
     except Exception as error:  # 릴스 등록 실패해도 렌더 자체는 성공으로 처리
         logger.exception("렌더 결과 릴스 등록 실패: %s", output_name)
-        log_tail += f"\n[warn] 릴스 등록 실패: {error}"
+        log_tail += f"\n[warn] 릴스 등록 실패: {error} (로컬 파일 보존)"
 
     update(
         status="done",
         phase="완료",
         percent=100.0,
-        video_url=f"/api/videos/output/{output_name}",
+        video_url=video_url,
         elapsed_seconds=round(time.time() - job["started_at"], 1),
         eta_seconds=0.0,
         log_tail=log_tail,

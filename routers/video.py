@@ -68,9 +68,11 @@ def get_bgm_list():
 
 @router.get(
     "/output/{name}",
-    summary="완성 영상 다운로드",
-    description="렌더링이 끝난 mp4 파일을 반환합니다. 렌더 응답의 video_url 이 이 경로를 "
-                "가리킵니다. 존재하지 않으면 404를 반환합니다.",
+    summary="완성 영상 다운로드 (버킷 업로드 실패 시 폴백)",
+    description="서버에 남아 있는 mp4 파일을 반환합니다. 완성 영상은 렌더 직후 GCS 버킷에 "
+                "올라가고 서버 사본은 삭제되므로, 평소에는 이 경로 대신 응답의 "
+                "video_url(=reels_url) GCS URL 을 사용하세요. 버킷 업로드에 실패해 로컬 "
+                "파일이 남은 경우에만 video_url 이 이 경로를 가리킵니다. 파일이 없으면 404.",
     response_class=FileResponse,
 )
 def get_output_video(name: str) -> FileResponse:
