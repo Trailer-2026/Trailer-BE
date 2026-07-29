@@ -106,6 +106,23 @@ def download_file(object_path: str, dest) -> None:
         raise ExternalServiceException("영상 저장소에서 영상을 받지 못했습니다.") from exc
 
 
+def open_object(object_path: str):
+    """버킷 객체를 (읽기 스트림, 크기 bytes)로 연다.
+
+    큰 영상을 메모리에 통째로 올리거나 임시 파일로 떨구지 않고 클라이언트에 그대로
+    흘려보낼 때 쓴다. 반환한 스트림은 호출자가 닫아야 한다.
+    """
+    try:
+        blob = _bucket().blob(object_path)
+        blob.reload()  # size 채우기
+        return blob.open("rb"), int(blob.size or 0)
+    except ExternalServiceException:
+        raise
+    except Exception as exc:
+        logger.exception("GCS 스트림 열기 실패: %s", object_path)
+        raise ExternalServiceException("영상 저장소에서 영상을 받지 못했습니다.") from exc
+
+
 def delete_object(object_path: str) -> None:
     """버킷에서 객체를 삭제한다. 없으면 조용히 넘어간다."""
     try:

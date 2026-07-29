@@ -76,11 +76,19 @@ def get_map_themes_path() -> Path:
 
 
 def get_output_path(name: str) -> Path:
-    """완성 영상 경로를 output/ 밖으로 못 나가게 검증해 반환한다."""
+    """완성 영상 경로를 output/ 밖으로 못 나가게 검증해 반환한다.
+
+    릴스 url 이 GCS 가 아닌 옛 데이터를 다운로드할 때만 쓰인다 (파일명으로 직접
+    받아가던 /api/videos/output/{name} 엔드포인트는 없앴다).
+    """
     candidate = (OUTPUT_DIR / name).resolve()
     if candidate.parent != OUTPUT_DIR.resolve() or not candidate.is_file():
         raise NotFoundException("영상을 찾을 수 없습니다.")
     return candidate
+
+
+# 버킷 영상을 클라이언트로 흘려보낼 때의 조각 크기 (메모리에 통째로 안 올리려고).
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 def _load_own_reels(db: Session, reels_idx: int, user_idx: int):
@@ -93,6 +101,50 @@ def _load_own_reels(db: Session, reels_idx: int, user_idx: int):
     if reels is None or reels.user_idx != user_idx:
         raise NotFoundException("릴스를 찾을 수 없습니다.")
     return reels
+
+
+def _load_ready_reels(db: Session, reels_idx: int, user_idx: int):
+    """영상이 완성된 본인 릴스를 조회한다 (다운로드·편집용). 렌더 중이면 400."""
+    reels = _load_own_reels(db, reels_idx, user_idx)
+    if not reels.url:
+        raise BadRequestException(
+            "아직 렌더링이 끝나지 않은 릴스입니다. "
+            "GET /api/videos/render/{reels_idx} 로 진행률을 확인하세요."
+        )
+    return reels
+
+
+def get_reels_download(
+    db: Session, reels_idx: int, user_idx: int
+) -> tuple[object, str, int | None]:
+    """본인 릴스 영상 다운로드 소스를 (스트림|로컬 경로, 파일명, 크기)로 돌려준다.
+
+    영상은 보통 GCS 버킷에 있으므로 버킷 객체를 열어 조각 단위로 흘려보낸다
+    (서버 디스크에 받아두지 않는다). 버킷 업로드에 실패해 로컬에만 남은 옛 영상은
+    output/ 파일 경로를 돌려주고 크기는 None 이다. 본인 릴스가 아니거나 영상이
+    없으면 404, 아직 렌더 중이면 400.
+    """
+    reels = _load_ready_reels(db, reels_idx, user_idx)
+
+    filename = f"reels_{reels_idx}.mp4"
+    url = reels.url or ""
+    object_path = gcs.object_path_from_url(url)
+    if object_path is None:
+        # 우리 버킷 URL 이 아님 → 렌더 당시 업로드 실패로 로컬에만 남은 경우.
+        return get_output_path(Path(url).name), filename, None
+    if not gcs.object_exists(object_path):
+        raise NotFoundException("영상을 찾을 수 없습니다.")
+
+    stream, size = gcs.open_object(object_path)
+
+    def chunks():
+        try:
+            while chunk := stream.read(DOWNLOAD_CHUNK_BYTES):
+                yield chunk
+        finally:
+            stream.close()
+
+    return chunks(), filename, size
 
 
 # --------------------------------------------------------------------------- #

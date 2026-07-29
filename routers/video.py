@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from core.response import CommonResponse
@@ -67,16 +69,32 @@ def get_bgm_list():
 
 
 @router.get(
-    "/output/{name}",
-    summary="완성 영상 다운로드 (버킷 업로드 실패 시 폴백)",
-    description="서버에 남아 있는 mp4 파일을 반환합니다. 완성 영상은 렌더 직후 GCS 버킷에 "
-                "올라가고 서버 사본은 삭제되므로, 평소에는 이 경로 대신 응답의 "
-                "video_url(=reels_url) GCS URL 을 사용하세요. 버킷 업로드에 실패해 로컬 "
-                "파일이 남은 경우에만 video_url 이 이 경로를 가리킵니다. 파일이 없으면 404.",
+    "/reels/{reels_idx}/download",
+    summary="내 완성 영상 다운로드 (reels_idx)",
+    description="로그인 사용자 본인이 만든 릴스(reels_idx)의 완성 영상을 mp4 파일로 "
+                "내려받습니다. 영상이 어디에 저장돼 있든(GCS 버킷 / 업로드 실패로 로컬에만 "
+                "남은 경우) 서버가 알아서 찾아 reels_{reels_idx}.mp4 이름의 첨부 파일로 "
+                "응답합니다. 편집으로 영상이 교체된 릴스도 항상 최신 영상이 내려갑니다. "
+                "본인 릴스가 아니거나 릴스·영상 파일이 없으면 404(남의 릴스는 존재 여부를 "
+                "알리지 않으려고 403이 아닌 404), 아직 렌더가 끝나지 않은 릴스면 400, "
+                "저장소 접근에 실패하면 502를 반환합니다. "
+                "JWT 인증이 필요하며 토큰이 없거나 유효하지 않으면 401을 반환합니다.",
     response_class=FileResponse,
 )
-def get_output_video(name: str) -> FileResponse:
-    return FileResponse(video_service.get_output_path(name), media_type="video/mp4", filename=name)
+def download_reels_video(
+    reels_idx: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    source, filename, size = video_service.get_reels_download(
+        db, reels_idx, current_user.user_idx
+    )
+    if isinstance(source, Path):
+        return FileResponse(source, media_type="video/mp4", filename=filename)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    if size:
+        headers["Content-Length"] = str(size)
+    return StreamingResponse(source, media_type="video/mp4", headers=headers)
 
 
 @router.post(
