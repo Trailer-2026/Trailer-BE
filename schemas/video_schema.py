@@ -45,7 +45,7 @@ class VideoRenderStatusResponse(BaseModel):
     total_frames: int | None = Field(None, description="전체 프레임 수 (프레임 단계 진입 전엔 null)")
     elapsed_seconds: float = Field(..., description="경과 시간(초)")
     eta_seconds: float | None = Field(None, description="예상 남은 시간(초) — 초반·완료 후엔 null 또는 0")
-    engine: str = Field(..., description="렌더 엔진 (local | modal)")
+    engine: str = Field(..., description='렌더 엔진 — 항상 "modal" (Modal T4 클라우드 전용)')
     theme: str = Field(..., description="지도 계절 테마")
     bgm: str | None = Field(None, description="BGM 파일명 (없으면 null)")
     video_url: str | None = Field(None, description="완성 영상 경로 (status=done 일 때만)")

@@ -2,14 +2,18 @@
 """여행 경로 3D 영상(videoMaker) 서비스.
 
 사진 EXIF·여행 일정(schedule)에서 뽑은 GPS 지점/사진/옵션을 travel_data.json 으로 변환해
-services/videoMaker/render_video.py(로컬 GPU) 또는 modal_render.py(Modal T4 GPU)를
-서브프로세스로 실행하고, 완성된 mp4 파일명을 돌려준다. 여행 렌더는
-travel/schedule/travel_image 를 읽고, 렌더 완료 시 reels 행을 등록한다.
+services/videoMaker/modal_call.py 를 서브프로세스로 실행하고, 완성된 mp4 파일명을
+돌려준다. 여행 렌더는 travel/schedule/travel_image 를 읽고, 렌더 완료 시 reels 행을
+등록한다.
 
-렌더러는 별도 conda 환경(trailer3d)의 의존성(playwright 등)이 필요하므로,
-로컬 엔진이 쓸 파이썬 경로를 properties_dev.ini 의 [videomaker] python 으로
-지정한다(없으면 현재 프로세스 파이썬 — 메인 서버를 trailer3d 환경으로 띄운 경우).
-Modal CLI 경로도 [videomaker] modal 로 지정 가능(없으면 PATH → 파이썬 옆 Scripts 순).
+렌더는 **Modal T4 GPU 전용**이다 (서버 GPU 로 직접 돌리던 local 엔진은 제거됨).
+modal_call.py 가 배포된 Modal 함수를 조각별로 원격 호출하고, 돌아온 조각들을
+서버에서 합쳐(ffmpeg) 최종 mp4 를 만든다. 사전 1회 `modal deploy modal_render.py` 필요.
+
+modal_call.py 를 실행할 파이썬은 properties_dev.ini 의 [videomaker] python 으로
+지정한다(없으면 현재 프로세스 파이썬). 이 파이썬 환경에는 modal 과 playwright 가
+설치돼 있어야 한다 — modal_call.py 가 render_video.py 를 임포트하는데 그 모듈이
+최상위에서 playwright 를 임포트하기 때문이다(Chromium 브라우저 바이너리는 불필요).
 """
 from __future__ import annotations
 
@@ -50,7 +54,6 @@ BGM_DIR = VIDEO_MAKER_DIR / "bgm"
 UPLOADS_DIR = VIDEO_MAKER_DIR / "assets" / "uploads"
 OUTPUT_DIR = VIDEO_MAKER_DIR / "output"
 MAP_THEMES_JS = VIDEO_MAKER_DIR / "map_themes.js"
-RENDER_SCRIPT = VIDEO_MAKER_DIR / "render_video.py"
 # 배포된 Modal 함수를 호출하는 러너 (사전 1회: modal deploy modal_render.py)
 MODAL_CALL_SCRIPT = VIDEO_MAKER_DIR / "modal_call.py"
 
@@ -181,54 +184,36 @@ def recommend_reels(db: Session, exclude: str) -> list[ReelsRecommendResponse]:
 # 렌더링
 # --------------------------------------------------------------------------- #
 def _render_python() -> str:
-    """로컬 엔진(render_video.py)을 실행할 파이썬 경로."""
+    """modal_call.py 를 실행할 파이썬 경로 (modal·playwright 가 설치된 환경)."""
     return Config.read("videomaker", "python", default=sys.executable) or sys.executable
 
 
-def _build_command(
-    travel_data_path: Path,
-    engine: str,
-    quick: bool,
-    theme: str,
-) -> tuple[list[str], str]:
-    """엔진별 렌더 명령을 만든다. 반환: (command, 출력 파일명 파싱용 marker)
+def _build_command(travel_data_path: Path, theme: str) -> list[str]:
+    """Modal 렌더 명령을 만든다.
 
-    화질 기본값은 quality-fast(JPEG q95, 풀해상도) — 무손실 PNG(quality) 대비
-    최종 mp4 화질 차이가 사실상 없고 렌더가 크게 빠르다. local 의 quick 만
-    저해상도 테스트 모드로 남긴다.
+    화질은 항상 quality-fast(JPEG q95, 풀해상도) — 무손실 PNG 대비 최종 mp4
+    화질 차이가 사실상 없고 렌더가 크게 빠르다(modal_call.py 의 기본 --mode).
     """
-    if engine == "modal":
-        # 배포된 함수 원격 호출 (quick 여부와 무관하게 풀해상도 quality-fast).
-        command = [
-            _render_python(),
-            str(MODAL_CALL_SCRIPT),
-            "--travel-data",
-            travel_data_path.relative_to(VIDEO_MAKER_DIR).as_posix(),
-        ]
-    else:
-        command = [
-            _render_python(),
-            str(RENDER_SCRIPT),
-            "--travel-data",
-            str(travel_data_path),
-        ]
-        command.append("--quick" if quick else "--quality-fast")
+    command = [
+        _render_python(),
+        str(MODAL_CALL_SCRIPT),
+        "--travel-data",
+        travel_data_path.relative_to(VIDEO_MAKER_DIR).as_posix(),
+    ]
     if theme != "default":
         command += ["--theme", theme]
     # TRAILER 인트로·아웃트로는 항상 붙인다.
     command += ["--intro", "--outro"]
-    return command, engine
+    return command
 
 
-def _parse_output_name(stdout: str, marker: str) -> str | None:
+def _parse_output_name(stdout: str) -> str | None:
     """렌더 서브프로세스 stdout 에서 완성 파일명을 뽑는다.
 
-    local -> render_video.py 가 "출력 예정 파일: <path>" 를 출력.
-    modal -> modal_render.py 엔트리포인트가 "저장 위치: <path>" 를 출력
-             (컨테이너의 "출력 예정 파일" 은 /app 경로라 로컬 파일이 아님).
+    modal_call.py 가 조각을 합친 뒤 "저장 위치: <path>" 를 출력한다
+    (컨테이너가 찍는 "출력 예정 파일" 은 /app 경로라 로컬 파일이 아니다).
     """
-    pattern = r"저장 위치:\s*(.+)" if marker == "modal" else r"출력 예정 파일:\s*(.+)"
-    match = re.search(pattern, stdout)
+    match = re.search(r"저장 위치:\s*(.+)", stdout)
     if match:
         return Path(match.group(1).strip()).name
     # 폴백: output/ 의 가장 최근 mp4.
@@ -498,22 +483,17 @@ _POSTPROCESS_MARKS = [
 ]
 
 
-def _validate_render_options(engine: str, theme: str) -> tuple[str, str]:
-    """엔진/테마 옵션을 정규화·검증한다 (400 은 여기서 동기적으로 발생)."""
-    engine = (engine or "local").lower().strip()
-    if engine not in {"local", "modal"}:
-        raise BadRequestException(f"알 수 없는 엔진: {engine}")
+def _validate_render_options(theme: str) -> str:
+    """테마 옵션을 정규화·검증한다 (400 은 여기서 동기적으로 발생)."""
     theme = (theme or "default").lower().strip()
     if theme not in ALLOWED_THEMES:
         raise BadRequestException(f"알 수 없는 테마: {theme}")
-    return engine, theme
+    return theme
 
 
 def _spawn_render_job(
     travel_data_path: Path,
     bgm_path: Path | None,
-    quick: bool,
-    engine: str,
     theme: str,
     user_idx: int,
 ) -> dict[str, object]:
@@ -522,7 +502,7 @@ def _spawn_render_job(
     렌더 완료 후 결과 영상을 GCS 버킷(reels/)에 올리고 reels 테이블에
     user_idx(렌더 요청자)를 작성자로 매핑해 등록한다.
     """
-    command, marker = _build_command(travel_data_path, engine, quick, theme)
+    command = _build_command(travel_data_path, theme)
     job = {
         "user_idx": user_idx,
         "reels_idx": None,
@@ -536,7 +516,7 @@ def _spawn_render_job(
         "started_at": time.time(),
         "elapsed_seconds": 0.0,
         "eta_seconds": None,
-        "engine": engine,
+        "engine": "modal",
         "theme": theme,
         "bgm": bgm_path.name if bgm_path else None,
         "video_url": None,
@@ -546,7 +526,7 @@ def _spawn_render_job(
     with _jobs_lock:
         _jobs[job["job_id"]] = job
     threading.Thread(
-        target=_run_render_job, args=(job, command, marker), daemon=True
+        target=_run_render_job, args=(job, command), daemon=True
     ).start()
     return _job_snapshot(job)
 
@@ -684,8 +664,6 @@ def start_render_photos_only(
     *,
     user_idx: int,
     bgm: str = "",
-    quick: bool = False,
-    engine: str = "local",
     theme: str = "default",
     start_name: str = "",
     start_latitude: float | None = None,
@@ -707,7 +685,7 @@ def start_render_photos_only(
     start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 삼아
     첫 사진 지점으로 이동하며 시작한다 (출발지에서는 사진 없이 라벨만 표시).
     """
-    engine, theme = _validate_render_options(engine, theme)
+    theme = _validate_render_options(theme)
 
     # 시작 위치 검증 — 위도/경도는 함께 와야 한다.
     if (start_latitude is None) != (start_longitude is None):
@@ -765,7 +743,7 @@ def start_render_photos_only(
         raise BadRequestException("사진들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
-    return _spawn_render_job(travel_data_path, bgm_path, quick, engine, theme, user_idx)
+    return _spawn_render_job(travel_data_path, bgm_path, theme, user_idx)
 
 
 # --------------------------------------------------------------------------- #
@@ -794,8 +772,6 @@ def start_render_travel(
     travel_idx: int,
     *,
     bgm: str = "",
-    quick: bool = False,
-    engine: str = "local",
     theme: str = "default",
 ) -> dict[str, object]:
     """저장된 여행(travel)의 일정·첨부 이미지만으로 여행 경로 영상 렌더링을 시작한다.
@@ -807,7 +783,7 @@ def start_render_travel(
     404. 이미지 다운로드 실패는 건너뛰며, 렌더 완료 후 결과 영상은 reels 로 자동
     등록되고 요청자(user_idx)와 매핑된다.
     """
-    engine, theme = _validate_render_options(engine, theme)
+    theme = _validate_render_options(theme)
 
     travel = travel_dao.get_by_idx(db, travel_idx)
     if travel is None or travel.user_idx != user.user_idx:
@@ -847,7 +823,7 @@ def start_render_travel(
         raise BadRequestException("일정 지점이 2개 이상이어야 이동 경로를 만들 수 있습니다.")
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
-    return _spawn_render_job(travel_data_path, bgm_path, quick, engine, theme, user.user_idx)
+    return _spawn_render_job(travel_data_path, bgm_path, theme, user.user_idx)
 
 
 def get_render_job(job_id: str) -> dict[str, object]:
@@ -873,7 +849,7 @@ def _job_snapshot(job: dict) -> dict[str, object]:
     return snapshot
 
 
-def _run_render_job(job: dict, command: list[str], marker: str) -> None:
+def _run_render_job(job: dict, command: list[str]) -> None:
     """렌더 서브프로세스를 돌리며 stdout 마커로 job 진행률을 갱신한다 (스레드)."""
 
     def update(**fields) -> None:
@@ -957,7 +933,7 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
         )
         return
 
-    output_name = _parse_output_name(stdout, marker)
+    output_name = _parse_output_name(stdout)
     if output_name is None:
         update(
             status="failed",

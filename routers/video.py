@@ -35,20 +35,8 @@ def _bgm_form():
     )
 
 
-def _quick_form():
-    return Form("false", description='"true"면 저해상도 빠른 렌더')
-
-
-def _engine_form():
-    return Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)")
-
-
 def _theme_form():
     return Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter")
-
-
-def _flag(value: str) -> bool:
-    return value.lower().strip() == "true"
 
 
 def _photo_payloads(photos: list[UploadFile]) -> list[tuple[str, bytes]]:
@@ -114,8 +102,6 @@ def render_video_photos_only(
     start_latitude: float | None = Form(None, description="출발지 위도 (경도와 함께 지정, 생략 시 첫 사진 위치에서 시작)"),
     start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
     bgm: str = _bgm_form(),
-    quick: str = _quick_form(),
-    engine: str = _engine_form(),
     theme: str = _theme_form(),
     photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장)"),
     current_user: User = Depends(get_current_user),
@@ -124,8 +110,6 @@ def render_video_photos_only(
         photos=_photo_payloads(photos),
         user_idx=current_user.user_idx,
         bgm=bgm,
-        quick=_flag(quick),
-        engine=engine,
         theme=theme,
         start_name=start_name,
         start_latitude=start_latitude,
@@ -158,8 +142,6 @@ def render_video_photos_ordered(
     start_latitude: float | None = Form(None, description="출발지 위도 (경도와 함께 지정, 생략 시 첫 사진 위치에서 시작)"),
     start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
     bgm: str = _bgm_form(),
-    quick: str = _quick_form(),
-    engine: str = _engine_form(),
     theme: str = _theme_form(),
     photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장) — 보낸 순서가 곧 영상 순서"),
     current_user: User = Depends(get_current_user),
@@ -168,8 +150,6 @@ def render_video_photos_ordered(
         photos=_photo_payloads(photos),
         user_idx=current_user.user_idx,
         bgm=bgm,
-        quick=_flag(quick),
-        engine=engine,
         theme=theme,
         start_name=start_name,
         start_latitude=start_latitude,
@@ -199,8 +179,6 @@ def render_video_photos_ordered(
 def render_video_from_travel(
     travel_idx: int = Form(..., description="영상을 만들 여행 PK (본인 여행만 가능)"),
     bgm: str = _bgm_form(),
-    quick: str = _quick_form(),
-    engine: str = _engine_form(),
     theme: str = _theme_form(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -210,8 +188,6 @@ def render_video_from_travel(
         current_user,
         travel_idx,
         bgm=bgm,
-        quick=_flag(quick),
-        engine=engine,
         theme=theme,
     )
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
