@@ -494,7 +494,7 @@ _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
 # job dict 에만 두고 상태 응답(_job_snapshot)에서는 빼는 내부 필드.
-_INTERNAL_JOB_KEYS = ("started_at", "user_idx")
+_INTERNAL_JOB_KEYS = ("started_at", "user_idx", "job_dir")
 
 # render_video.py 가 15프레임마다 찍는 "[perf:frame] 000060/000127 ..." 라인.
 _FRAME_PROGRESS_RE = re.compile(r"\[perf:frame\]\s*(\d+)/(\d+)")
@@ -529,6 +529,8 @@ def _spawn_render_job(
     command = _build_command(travel_data_path, theme)
     job = {
         "user_idx": user_idx,
+        # 렌더 입력(업로드 사진·travel_data.json)이 담긴 디렉터리 — 끝나면 지운다.
+        "job_dir": str(travel_data_path.parent),
         "reels_idx": None,
         "reels_url": None,
         "job_id": uuid.uuid4().hex[:12],
@@ -874,7 +876,21 @@ def _job_snapshot(job: dict) -> dict[str, object]:
 
 
 def _run_render_job(job: dict, command: list[str]) -> None:
-    """렌더 서브프로세스를 돌리며 stdout 마커로 job 진행률을 갱신한다 (스레드)."""
+    """렌더를 돌리고, 끝나면 입력 디렉터리를 정리한다 (스레드 진입점).
+
+    성공·실패·예외 어느 쪽이든 uploads/<job> 를 지운다. 안 지우면 업로드된
+    원본 사진이 계속 쌓여 디스크가 찬다(렌더 산출물과 같은 이유).
+    """
+    try:
+        _render_job(job, command)
+    finally:
+        job_dir = job.get("job_dir")
+        if job_dir:
+            shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def _render_job(job: dict, command: list[str]) -> None:
+    """렌더 서브프로세스를 돌리며 stdout 마커로 job 진행률을 갱신한다."""
 
     def update(**fields) -> None:
         with _jobs_lock:
