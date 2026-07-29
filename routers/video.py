@@ -218,17 +218,18 @@ def recommend_reels(
 @router.post(
     "/edit/cut",
     summary="영상 구간 삭제",
-    description="완성 영상에서 [시작, 끝) 구간을 잘라낸 새 영상을 만듭니다. 원본은 보존되며 "
-                "편집본은 새 파일명으로 저장됩니다. 구간이 잘못됐거나 영상 전체를 지우려 하면 "
-                "400, 영상이 없으면 404, ffmpeg 처리 실패 시 502를 반환합니다.",
+    description="완성 영상에서 [시작, 끝) 구간을 잘라낸 새 영상을 만듭니다. 원본 영상은 "
+                "그대로 두고 편집본을 GCS 버킷에 새로 올려 그 URL 을 반환합니다. 구간이 "
+                "잘못됐거나 영상 전체를 지우려 하면 400, 우리 버킷 URL 이 아니어도 400, "
+                "영상이 없으면 404, ffmpeg 처리 실패 시 502를 반환합니다.",
     response_model=CommonResponse[VideoEditResponse],
 )
 def cut_video_section(
-    name: str = Form(..., description="편집할 완성 영상 파일명 (video_url 마지막 경로 요소)"),
+    video_url: str = Form(..., description="편집할 완성 영상의 GCS URL (렌더 응답의 video_url/reels_url)"),
     start_seconds: float = Form(..., description="삭제 구간 시작(초)"),
     end_seconds: float = Form(..., description="삭제 구간 끝(초)"),
 ):
-    result = video_service.cut_video(name, start_seconds, end_seconds)
+    result = video_service.cut_video(video_url, start_seconds, end_seconds)
     return CommonResponse.success_response("구간 삭제 성공", data=result)
 
 
@@ -238,18 +239,19 @@ def cut_video_section(
     description="완성 영상의 at_seconds 시점에 업로드한 이미지를 전체 화면으로 끼워 넣은 새 "
                 "영상을 만듭니다. 본편이 그 시점에서 멈추고 사진이 photo_seconds 초 나온 뒤 "
                 "이어서 재생되므로 영상 길이가 그만큼 늘어납니다(사진은 화면 꽉 채움 후 중앙 "
-                "크롭). 원본은 보존됩니다. 시점·이미지가 잘못되면 400, 영상이 없으면 404, "
-                "ffmpeg 처리 실패 시 502를 반환합니다.",
+                "크롭). 원본 영상은 그대로 두고 편집본을 GCS 버킷에 새로 올려 그 URL 을 "
+                "반환합니다. 시점·이미지가 잘못되면 400, 우리 버킷 URL 이 아니어도 400, "
+                "영상이 없으면 404, ffmpeg 처리 실패 시 502를 반환합니다.",
     response_model=CommonResponse[VideoEditResponse],
 )
 def insert_image_clip(
-    name: str = Form(..., description="편집할 완성 영상 파일명 (video_url 마지막 경로 요소)"),
+    video_url: str = Form(..., description="편집할 완성 영상의 GCS URL (렌더 응답의 video_url/reels_url)"),
     at_seconds: float = Form(..., description="이미지를 끼워 넣을 시점(초), 0 ~ 영상 길이"),
     photo_seconds: float = Form(1.5, description="사진 표시 시간(초), 0.3 ~ 10 (기본 1.5)"),
     image: UploadFile = File(..., description="삽입할 이미지 파일 (jpg/png/webp 등)"),
 ):
     result = video_service.insert_image(
-        name, at_seconds, image.filename or "", image.file.read(), photo_seconds
+        video_url, at_seconds, image.filename or "", image.file.read(), photo_seconds
     )
     return CommonResponse.success_response("이미지 삽입 성공", data=result)
 

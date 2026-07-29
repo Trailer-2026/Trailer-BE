@@ -24,7 +24,7 @@ class ReelsRecommendResponse(BaseModel):
 class VideoEditResponse(BaseModel):
     """완성 영상 편집(구간 삭제 / 이미지 삽입) 결과."""
 
-    video_url: str = Field(..., description="편집된 새 영상 경로 (GET /api/videos/output/{name}) — 원본은 보존")
+    video_url: str = Field(..., description="편집된 새 영상의 GCS 공개 URL — 원본 영상은 그대로 보존")
     duration_seconds: float = Field(..., description="편집 후 영상 길이(초)")
     elapsed_seconds: float = Field(..., description="편집 처리 시간(초)")
 

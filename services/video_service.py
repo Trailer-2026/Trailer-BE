@@ -226,8 +226,14 @@ def _parse_output_name(stdout: str) -> str | None:
 
 # --------------------------------------------------------------------------- #
 # 완성 영상 편집 (ffmpeg 후처리) — 구간 삭제 / 이미지 오버레이
+#
+# 완성 영상은 GCS 버킷에만 있고 서버에는 남지 않으므로(렌더 후 로컬 사본 삭제),
+# 편집은 "버킷에서 내려받기 → ffmpeg 처리 → 결과 재업로드 → 임시파일 삭제" 로
+# 돈다. 원본 객체는 건드리지 않고 새 URL 을 만들어 반환한다.
 # --------------------------------------------------------------------------- #
 EDIT_TIMEOUT_SECONDS = 60 * 5
+# 편집 결과물이 올라갈 버킷 경로 접두어 (렌더 원본 reels/ 와 구분).
+EDIT_OBJECT_PREFIX = "reels/edited"
 # 렌더러와 같은 계열의 인코딩 (정확한 컷을 위해 재인코딩 필수 — 스트림 카피는
 # 키프레임 단위로만 잘려 구간이 밀린다).
 _EDIT_VIDEO_ARGS = [
@@ -266,14 +272,25 @@ def _ffprobe_video(path: Path) -> dict[str, object]:
     }
 
 
-def _edited_output_path(source: Path, tag: str) -> Path:
-    """원본 이름 뒤에 _<tag>N 을 붙인, 아직 없는 출력 경로를 반환한다."""
-    index = 1
-    while True:
-        candidate = OUTPUT_DIR / f"{source.stem}_{tag}{index}.mp4"
-        if not candidate.exists():
-            return candidate
-        index += 1
+def _edit_workspace() -> Path:
+    """편집 임시 파일(원본 사본·결과물)을 담을 새 디렉터리. 끝나면 통째로 지운다."""
+    work_dir = VIDEO_MAKER_DIR / "temp" / f"edit_{uuid.uuid4().hex[:8]}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    return work_dir
+
+
+def _download_source(video_url: str, work_dir: Path) -> Path:
+    """편집할 원본 영상을 버킷에서 내려받는다. 우리 버킷 URL 이 아니면 400."""
+    object_path = gcs.object_path_from_url((video_url or "").strip())
+    if object_path is None:
+        raise BadRequestException(
+            "영상 저장소(GCS)의 영상 URL 이 아닙니다. 렌더 응답의 video_url 을 그대로 보내세요."
+        )
+    if not gcs.object_exists(object_path):
+        raise NotFoundException("영상을 찾을 수 없습니다.")
+    source = work_dir / "source.mp4"
+    gcs.download_file(object_path, source)
+    return source
 
 
 def _run_ffmpeg(args: list[str]) -> None:
@@ -292,71 +309,79 @@ def _run_ffmpeg(args: list[str]) -> None:
         raise ExternalServiceException(f"영상 편집 실패:\n{(result.stderr or '')[-1500:]}")
 
 
-def _edit_result(source_started: float, target: Path) -> dict[str, object]:
+def _edit_result(started: float, target: Path) -> dict[str, object]:
+    """편집 결과물을 버킷에 올리고 응답 필드를 만든다 (target 은 임시 파일)."""
     info = _ffprobe_video(target)
+    video_url = gcs.upload_file(
+        f"{EDIT_OBJECT_PREFIX}/{uuid.uuid4().hex}.mp4", target, "video/mp4"
+    )
     return {
-        "video_url": f"/api/videos/output/{target.name}",
+        "video_url": video_url,
         "duration_seconds": round(float(info["duration"]), 2),
-        "elapsed_seconds": round(time.perf_counter() - source_started, 1),
+        "elapsed_seconds": round(time.perf_counter() - started, 1),
     }
 
 
-def cut_video(name: str, start_seconds: float, end_seconds: float) -> dict[str, object]:
+def cut_video(video_url: str, start_seconds: float, end_seconds: float) -> dict[str, object]:
     """완성 영상에서 [start, end) 구간을 잘라낸 새 영상을 만든다."""
-    source = get_output_path(name)
-    info = _ffprobe_video(source)
-    duration = float(info["duration"])
-    start, end = float(start_seconds), float(end_seconds)
-    if start < 0 or end <= start:
-        raise BadRequestException("삭제 구간이 올바르지 않습니다 (0 ≤ 시작 < 끝).")
-    if start >= duration:
-        raise BadRequestException(f"시작 시각이 영상 길이({duration:.1f}초)를 넘습니다.")
-    end = min(end, duration)
+    work_dir = _edit_workspace()
+    try:
+        source = _download_source(video_url, work_dir)
+        info = _ffprobe_video(source)
+        duration = float(info["duration"])
+        start, end = float(start_seconds), float(end_seconds)
+        if start < 0 or end <= start:
+            raise BadRequestException("삭제 구간이 올바르지 않습니다 (0 ≤ 시작 < 끝).")
+        if start >= duration:
+            raise BadRequestException(f"시작 시각이 영상 길이({duration:.1f}초)를 넘습니다.")
+        end = min(end, duration)
 
-    # 남길 구간 목록: (시작, 끝|None=영상 끝까지). 경계에 붙은 삭제면 한 구간만 남는다.
-    eps = 0.05
-    keep: list[tuple[float, float | None]] = []
-    if start > eps:
-        keep.append((0.0, start))
-    if end < duration - eps:
-        keep.append((end, None))
-    if not keep:
-        raise BadRequestException("영상 전체를 삭제할 수는 없습니다.")
+        # 남길 구간 목록: (시작, 끝|None=영상 끝까지). 경계에 붙은 삭제면 한 구간만 남는다.
+        eps = 0.05
+        keep: list[tuple[float, float | None]] = []
+        if start > eps:
+            keep.append((0.0, start))
+        if end < duration - eps:
+            keep.append((end, None))
+        if not keep:
+            raise BadRequestException("영상 전체를 삭제할 수는 없습니다.")
 
-    # concat 필터 입력은 세그먼트 단위로 [v0][a0][v1][a1]... 처럼 끼워 넣어야 한다.
-    filters: list[str] = []
-    segment_labels: list[str] = []
-    for i, (seg_start, seg_end) in enumerate(keep):
-        rng = f"start={seg_start:.3f}" + (f":end={seg_end:.3f}" if seg_end is not None else "")
-        filters.append(f"[0:v]trim={rng},setpts=PTS-STARTPTS[v{i}]")
-        labels = f"[v{i}]"
+        # concat 필터 입력은 세그먼트 단위로 [v0][a0][v1][a1]... 처럼 끼워 넣어야 한다.
+        filters: list[str] = []
+        segment_labels: list[str] = []
+        for i, (seg_start, seg_end) in enumerate(keep):
+            rng = f"start={seg_start:.3f}" + (f":end={seg_end:.3f}" if seg_end is not None else "")
+            filters.append(f"[0:v]trim={rng},setpts=PTS-STARTPTS[v{i}]")
+            labels = f"[v{i}]"
+            if info["has_audio"]:
+                filters.append(f"[0:a]atrim={rng},asetpts=PTS-STARTPTS[a{i}]")
+                labels += f"[a{i}]"
+            segment_labels.append(labels)
+
+        maps = ["-map", "[v]"]
+        audio_args: list[str] = []
         if info["has_audio"]:
-            filters.append(f"[0:a]atrim={rng},asetpts=PTS-STARTPTS[a{i}]")
-            labels += f"[a{i}]"
-        segment_labels.append(labels)
+            filters.append(f"{''.join(segment_labels)}concat=n={len(keep)}:v=1:a=1[v][a]")
+            maps += ["-map", "[a]"]
+            audio_args = ["-c:a", "aac", "-b:a", "192k"]
+        else:
+            filters.append(f"{''.join(segment_labels)}concat=n={len(keep)}:v=1:a=0[v]")
 
-    maps = ["-map", "[v]"]
-    audio_args: list[str] = []
-    if info["has_audio"]:
-        filters.append(f"{''.join(segment_labels)}concat=n={len(keep)}:v=1:a=1[v][a]")
-        maps += ["-map", "[a]"]
-        audio_args = ["-c:a", "aac", "-b:a", "192k"]
-    else:
-        filters.append(f"{''.join(segment_labels)}concat=n={len(keep)}:v=1:a=0[v]")
-
-    target = _edited_output_path(source, "cut")
-    started = time.perf_counter()
-    _run_ffmpeg([
-        "-i", str(source),
-        "-filter_complex", ";".join(filters),
-        *maps, *_EDIT_VIDEO_ARGS, *audio_args,
-        str(target),
-    ])
-    return _edit_result(started, target)
+        target = work_dir / "cut.mp4"
+        started = time.perf_counter()
+        _run_ffmpeg([
+            "-i", str(source),
+            "-filter_complex", ";".join(filters),
+            *maps, *_EDIT_VIDEO_ARGS, *audio_args,
+            str(target),
+        ])
+        return _edit_result(started, target)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def insert_image(
-    name: str,
+    video_url: str,
     at_seconds: float,
     image_filename: str,
     image_bytes: bytes,
@@ -369,94 +394,93 @@ def insert_image(
     영상 길이가 photo_seconds 만큼 늘어난다. 사진은 화면을 꽉 채우도록
     비율 유지 확대 후 중앙 크롭한다.
     """
-    source = get_output_path(name)
-    info = _ffprobe_video(source)
-    duration = float(info["duration"])
-    at = float(at_seconds)
-    photo = float(photo_seconds)
-    if at < 0 or at > duration:
-        raise BadRequestException(f"삽입 시점은 0 ~ 영상 길이({duration:.1f}초) 사이여야 합니다.")
-    if not 0.3 <= photo <= 10:
-        raise BadRequestException("사진 표시 시간은 0.3 ~ 10초 사이여야 합니다.")
-
-    suffix = Path(image_filename or "").suffix.lower()
-    if suffix not in IMAGE_EXTENSIONS:
-        raise BadRequestException("이미지 파일이 아닙니다 (jpg/png/webp 등).")
-    if not image_bytes:
-        raise BadRequestException("이미지 파일이 비어 있습니다.")
-
-    width, height = int(info["width"]), int(info["height"])
-    fps = str(info["fps"])
-    sample_rate = int(info["sample_rate"])
-    temp_dir = VIDEO_MAKER_DIR / "temp"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    image_path = temp_dir / f"insert_{uuid.uuid4().hex[:8]}{suffix}"
-    image_path.write_bytes(image_bytes)
-
-    # 본편을 at 기준으로 나누고(경계에 붙으면 한쪽만) 사이에 사진 클립을 끼운다.
-    eps = 0.05
-    head = at > eps
-    tail = at < duration - eps
-
-    # 사진 클립: 화면을 꽉 채우게 확대 후 중앙 크롭, 본편과 같은 fps/SAR 로 정규화.
-    filters = [
-        f"[1:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height},setsar=1,fps={fps},"
-        f"trim=duration={photo:.3f},setpts=PTS-STARTPTS[vp]"
-    ]
-    video_labels: list[str] = []
-    audio_labels: list[str] = []
-    has_audio = bool(info["has_audio"])
-    # concat 은 세그먼트 포맷이 같아야 하므로 오디오는 전부 동일 포맷으로 정규화.
-    aformat = f"aformat=sample_fmts=fltp:sample_rates={sample_rate}:channel_layouts=stereo"
-
-    if head:
-        filters.append(f"[0:v]trim=end={at:.3f},setpts=PTS-STARTPTS[v0]")
-        video_labels.append("[v0]")
-        if has_audio:
-            filters.append(f"[0:a]atrim=end={at:.3f},asetpts=PTS-STARTPTS,{aformat}[a0]")
-            audio_labels.append("[a0]")
-    video_labels.append("[vp]")
-    if has_audio:
-        # 사진 구간은 무음 (anullsrc 입력 [2]).
-        filters.append(f"[2:a]atrim=duration={photo:.3f},{aformat}[ap]")
-        audio_labels.append("[ap]")
-    if tail:
-        filters.append(f"[0:v]trim=start={at:.3f},setpts=PTS-STARTPTS[v1]")
-        video_labels.append("[v1]")
-        if has_audio:
-            filters.append(f"[0:a]atrim=start={at:.3f},asetpts=PTS-STARTPTS,{aformat}[a1]")
-            audio_labels.append("[a1]")
-
-    segment_count = len(video_labels)
-    inputs = [
-        "-i", str(source),
-        "-loop", "1", "-t", f"{photo + 0.5:.3f}", "-i", str(image_path),
-    ]
-    maps = ["-map", "[v]"]
-    audio_args: list[str] = []
-    if has_audio:
-        inputs += ["-f", "lavfi", "-t", f"{photo:.3f}", "-i",
-                   f"anullsrc=r={sample_rate}:cl=stereo"]
-        interleaved = "".join(v + a for v, a in zip(video_labels, audio_labels))
-        filters.append(f"{interleaved}concat=n={segment_count}:v=1:a=1[v][a]")
-        maps += ["-map", "[a]"]
-        audio_args = ["-c:a", "aac", "-b:a", "192k"]
-    else:
-        filters.append(f"{''.join(video_labels)}concat=n={segment_count}:v=1:a=0[v]")
-
-    target = _edited_output_path(source, "img")
-    started = time.perf_counter()
+    work_dir = _edit_workspace()
     try:
+        source = _download_source(video_url, work_dir)
+        info = _ffprobe_video(source)
+        duration = float(info["duration"])
+        at = float(at_seconds)
+        photo = float(photo_seconds)
+        if at < 0 or at > duration:
+            raise BadRequestException(f"삽입 시점은 0 ~ 영상 길이({duration:.1f}초) 사이여야 합니다.")
+        if not 0.3 <= photo <= 10:
+            raise BadRequestException("사진 표시 시간은 0.3 ~ 10초 사이여야 합니다.")
+
+        suffix = Path(image_filename or "").suffix.lower()
+        if suffix not in IMAGE_EXTENSIONS:
+            raise BadRequestException("이미지 파일이 아닙니다 (jpg/png/webp 등).")
+        if not image_bytes:
+            raise BadRequestException("이미지 파일이 비어 있습니다.")
+
+        width, height = int(info["width"]), int(info["height"])
+        fps = str(info["fps"])
+        sample_rate = int(info["sample_rate"])
+        image_path = work_dir / f"insert{suffix}"
+        image_path.write_bytes(image_bytes)
+
+        # 본편을 at 기준으로 나누고(경계에 붙으면 한쪽만) 사이에 사진 클립을 끼운다.
+        eps = 0.05
+        head = at > eps
+        tail = at < duration - eps
+
+        # 사진 클립: 화면을 꽉 채우게 확대 후 중앙 크롭, 본편과 같은 fps/SAR 로 정규화.
+        filters = [
+            f"[1:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},setsar=1,fps={fps},"
+            f"trim=duration={photo:.3f},setpts=PTS-STARTPTS[vp]"
+        ]
+        video_labels: list[str] = []
+        audio_labels: list[str] = []
+        has_audio = bool(info["has_audio"])
+        # concat 은 세그먼트 포맷이 같아야 하므로 오디오는 전부 동일 포맷으로 정규화.
+        aformat = f"aformat=sample_fmts=fltp:sample_rates={sample_rate}:channel_layouts=stereo"
+
+        if head:
+            filters.append(f"[0:v]trim=end={at:.3f},setpts=PTS-STARTPTS[v0]")
+            video_labels.append("[v0]")
+            if has_audio:
+                filters.append(f"[0:a]atrim=end={at:.3f},asetpts=PTS-STARTPTS,{aformat}[a0]")
+                audio_labels.append("[a0]")
+        video_labels.append("[vp]")
+        if has_audio:
+            # 사진 구간은 무음 (anullsrc 입력 [2]).
+            filters.append(f"[2:a]atrim=duration={photo:.3f},{aformat}[ap]")
+            audio_labels.append("[ap]")
+        if tail:
+            filters.append(f"[0:v]trim=start={at:.3f},setpts=PTS-STARTPTS[v1]")
+            video_labels.append("[v1]")
+            if has_audio:
+                filters.append(f"[0:a]atrim=start={at:.3f},asetpts=PTS-STARTPTS,{aformat}[a1]")
+                audio_labels.append("[a1]")
+
+        segment_count = len(video_labels)
+        inputs = [
+            "-i", str(source),
+            "-loop", "1", "-t", f"{photo + 0.5:.3f}", "-i", str(image_path),
+        ]
+        maps = ["-map", "[v]"]
+        audio_args: list[str] = []
+        if has_audio:
+            inputs += ["-f", "lavfi", "-t", f"{photo:.3f}", "-i",
+                       f"anullsrc=r={sample_rate}:cl=stereo"]
+            interleaved = "".join(v + a for v, a in zip(video_labels, audio_labels))
+            filters.append(f"{interleaved}concat=n={segment_count}:v=1:a=1[v][a]")
+            maps += ["-map", "[a]"]
+            audio_args = ["-c:a", "aac", "-b:a", "192k"]
+        else:
+            filters.append(f"{''.join(video_labels)}concat=n={segment_count}:v=1:a=0[v]")
+
+        target = work_dir / "insert.mp4"
+        started = time.perf_counter()
         _run_ffmpeg([
             *inputs,
             "-filter_complex", ";".join(filters),
             *maps, *_EDIT_VIDEO_ARGS, *audio_args,
             str(target),
         ])
+        return _edit_result(started, target)
     finally:
-        image_path.unlink(missing_ok=True)
-    return _edit_result(started, target)
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------- #
