@@ -43,3 +43,9 @@ jobs:
 
             df -h / | tail -1
             sudo systemctl restart trailer-be
+
+            # nginx 업로드 한도. 기본 1MB 라서 사진 여러 장 올리면 uvicorn 에 닿기도 전에 413 이 난다.
+            # conf.d 는 nginx.conf 의 http{} 안에서 include 되므로 기존 site 설정은 건드리지 않는다.
+            # 앱 재시작 뒤에 두는 이유: set -e 상태에서 nginx -t 가 깨져도 배포 자체는 이미 끝나 있다.
+            echo 'client_max_body_size 100M;' | sudo tee /etc/nginx/conf.d/upload.conf >/dev/null
+            sudo nginx -t && sudo systemctl reload nginx
