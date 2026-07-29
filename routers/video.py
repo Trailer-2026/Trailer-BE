@@ -239,41 +239,53 @@ def recommend_reels(
 
 @router.post(
     "/edit/cut",
-    summary="영상 구간 삭제",
-    description="완성 영상에서 [시작, 끝) 구간을 잘라낸 새 영상을 만듭니다. 원본 영상은 "
-                "그대로 두고 편집본을 GCS 버킷에 새로 올려 그 URL 을 반환합니다. 구간이 "
-                "잘못됐거나 영상 전체를 지우려 하면 400, 우리 버킷 URL 이 아니어도 400, "
-                "영상이 없으면 404, ffmpeg 처리 실패 시 502를 반환합니다.",
+    summary="릴스 영상 구간 삭제 (reels_idx)",
+    description="등록된 릴스(reels_idx)의 영상에서 [시작, 끝) 구간을 잘라냅니다. 편집본을 "
+                "GCS 버킷에 새로 올린 뒤 릴스의 url 을 그 URL 로 교체하고(릴스 PK 는 그대로) "
+                "편집 전 영상 객체는 버킷에서 삭제합니다. 아직 렌더가 끝나지 않은 릴스거나 "
+                "구간이 잘못됐거나 영상 전체를 "
+                "지우려 하면 400, 본인 릴스가 아니거나 없으면 404, ffmpeg 처리 실패 시 502를 "
+                "반환합니다. JWT 인증이 필요하며 토큰이 없거나 유효하지 않으면 401을 "
+                "반환합니다.",
     response_model=CommonResponse[VideoEditResponse],
 )
 def cut_video_section(
-    video_url: str = Form(..., description="편집할 완성 영상의 GCS URL (렌더 응답의 video_url/reels_url)"),
+    reels_idx: int = Form(..., description="편집할 릴스 PK (본인 릴스만 가능)"),
     start_seconds: float = Form(..., description="삭제 구간 시작(초)"),
     end_seconds: float = Form(..., description="삭제 구간 끝(초)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    result = video_service.cut_video(video_url, start_seconds, end_seconds)
+    result = video_service.cut_video(
+        db, reels_idx, current_user.user_idx, start_seconds, end_seconds
+    )
     return CommonResponse.success_response("구간 삭제 성공", data=result)
 
 
 @router.post(
     "/edit/insert",
-    summary="영상 이미지 삽입",
-    description="완성 영상의 at_seconds 시점에 업로드한 이미지를 전체 화면으로 끼워 넣은 새 "
-                "영상을 만듭니다. 본편이 그 시점에서 멈추고 사진이 photo_seconds 초 나온 뒤 "
-                "이어서 재생되므로 영상 길이가 그만큼 늘어납니다(사진은 화면 꽉 채움 후 중앙 "
-                "크롭). 원본 영상은 그대로 두고 편집본을 GCS 버킷에 새로 올려 그 URL 을 "
-                "반환합니다. 시점·이미지가 잘못되면 400, 우리 버킷 URL 이 아니어도 400, "
-                "영상이 없으면 404, ffmpeg 처리 실패 시 502를 반환합니다.",
+    summary="릴스 영상 이미지 삽입 (reels_idx)",
+    description="등록된 릴스(reels_idx)의 영상 at_seconds 시점에 업로드한 이미지를 전체 "
+                "화면으로 끼워 넣습니다. 본편이 그 시점에서 멈추고 사진이 나온 뒤 이어서 "
+                "재생되며, 사진이 머무는 시간은 영상 렌더링 때 사진 한 장을 보여주는 시간과 "
+                "동일하게 고정입니다(지정 불가, 사진은 화면 꽉 채움 후 중앙 크롭). 편집본을 "
+                "GCS 버킷에 새로 올린 뒤 릴스의 url 을 그 URL 로 교체하고(릴스 PK 는 그대로) "
+                "편집 전 영상 객체는 버킷에서 삭제합니다. 아직 렌더가 끝나지 않은 릴스거나 "
+                "시점·이미지가 잘못되면 400, 본인 "
+                "릴스가 아니거나 없으면 404, ffmpeg 처리 실패 시 502를 반환합니다. JWT "
+                "인증이 필요하며 토큰이 없거나 유효하지 않으면 401을 반환합니다.",
     response_model=CommonResponse[VideoEditResponse],
 )
 def insert_image_clip(
-    video_url: str = Form(..., description="편집할 완성 영상의 GCS URL (렌더 응답의 video_url/reels_url)"),
+    reels_idx: int = Form(..., description="편집할 릴스 PK (본인 릴스만 가능)"),
     at_seconds: float = Form(..., description="이미지를 끼워 넣을 시점(초), 0 ~ 영상 길이"),
-    photo_seconds: float = Form(1.5, description="사진 표시 시간(초), 0.3 ~ 10 (기본 1.5)"),
     image: UploadFile = File(..., description="삽입할 이미지 파일 (jpg/png/webp 등)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     result = video_service.insert_image(
-        video_url, at_seconds, image.filename or "", image.file.read(), photo_seconds
+        db, reels_idx, current_user.user_idx, at_seconds,
+        image.filename or "", image.file.read(),
     )
     return CommonResponse.success_response("이미지 삽입 성공", data=result)
 

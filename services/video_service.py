@@ -290,15 +290,20 @@ def _parse_output_name(stdout: str) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
-# 완성 영상 편집 (ffmpeg 후처리) — 구간 삭제 / 이미지 오버레이
+# 완성 영상 편집 (ffmpeg 후처리) — 구간 삭제 / 이미지 삽입
 #
-# 완성 영상은 GCS 버킷에만 있고 서버에는 남지 않으므로(렌더 후 로컬 사본 삭제),
-# 편집은 "버킷에서 내려받기 → ffmpeg 처리 → 결과 재업로드 → 임시파일 삭제" 로
-# 돈다. 원본 객체는 건드리지 않고 새 URL 을 만들어 반환한다.
+# 편집 대상은 등록된 릴스(reels_idx)다. 완성 영상은 GCS 버킷에만 있고 서버에는
+# 남지 않으므로(렌더 후 로컬 사본 삭제), 편집은 "릴스 URL 로 버킷에서 내려받기 →
+# ffmpeg 처리 → 결과 재업로드 → reels.url 교체 → 이전 객체·임시파일 삭제" 로 돈다.
+# 편집은 서버 CPU(ffmpeg)만 쓴다 — Modal GPU 는 렌더에만 필요하다.
 # --------------------------------------------------------------------------- #
 EDIT_TIMEOUT_SECONDS = 60 * 5
 # 편집 결과물이 올라갈 버킷 경로 접두어 (렌더 원본 reels/ 와 구분).
 EDIT_OBJECT_PREFIX = "reels/edited"
+# 삽입 사진이 화면에 머무는 시간(초). 렌더러가 영상 안에서 사진 한 장을 보여주는
+# 시간과 같은 값이라 삽입 클립만 튀지 않는다 — render_video.QUALITY_FAST_CONFIG 의
+# photo_fade_in(0.4) + photo_hold(1.6) + photo_fade_out(0.4). 그쪽이 바뀌면 같이 고칠 것.
+INSERT_PHOTO_SECONDS = 2.4
 # 렌더러와 같은 계열의 인코딩 (정확한 컷을 위해 재인코딩 필수 — 스트림 카피는
 # 키프레임 단위로만 잘려 구간이 밀린다).
 _EDIT_VIDEO_ARGS = [
@@ -349,7 +354,8 @@ def _download_source(video_url: str, work_dir: Path) -> Path:
     object_path = gcs.object_path_from_url((video_url or "").strip())
     if object_path is None:
         raise BadRequestException(
-            "영상 저장소(GCS)의 영상 URL 이 아닙니다. 렌더 응답의 video_url 을 그대로 보내세요."
+            "영상 저장소(GCS)에 없는 릴스라 편집할 수 없습니다 "
+            "(버킷 업로드에 실패해 로컬에만 남은 영상)."
         )
     if not gcs.object_exists(object_path):
         raise NotFoundException("영상을 찾을 수 없습니다.")
@@ -374,24 +380,50 @@ def _run_ffmpeg(args: list[str]) -> None:
         raise ExternalServiceException(f"영상 편집 실패:\n{(result.stderr or '')[-1500:]}")
 
 
-def _edit_result(started: float, target: Path) -> dict[str, object]:
-    """편집 결과물을 버킷에 올리고 응답 필드를 만든다 (target 은 임시 파일)."""
+def _edit_result(db: Session, reels, started: float, target: Path) -> dict[str, object]:
+    """편집 결과물을 버킷에 올리고 릴스 URL 을 교체한다 (target 은 임시 파일).
+
+    reels.url 이 편집본을 가리키게 바꾸므로 릴스 PK 는 그대로고 영상만 갱신된다.
+    교체에 성공하면 이전 객체는 아무도 참조하지 않으니 버킷에서 지운다(실패해도
+    편집 자체는 성공 — 고아 객체 로그만 남긴다).
+    """
     info = _ffprobe_video(target)
+    # commit 이후엔 인스턴스 속성이 만료돼 재조회가 걸리므로 미리 읽어 둔다.
+    reels_idx, previous_url = reels.reels_idx, reels.url
     video_url = gcs.upload_file(
         f"{EDIT_OBJECT_PREFIX}/{uuid.uuid4().hex}.mp4", target, "video/mp4"
     )
+    try:
+        reels_dao.update_url(db, reels, video_url)
+        db.commit()
+    except Exception:
+        db.rollback()
+        gcs.delete_object(gcs.object_path_from_url(video_url) or video_url)  # 고아 객체 정리
+        raise
+
+    previous_object = gcs.object_path_from_url(previous_url or "")
+    if previous_object:
+        try:
+            gcs.delete_object(previous_object)
+        except Exception:
+            logger.warning("편집 전 영상 객체 삭제 실패(무시): %s", previous_object)
+
     return {
+        "reels_idx": reels_idx,
         "video_url": video_url,
         "duration_seconds": round(float(info["duration"]), 2),
         "elapsed_seconds": round(time.perf_counter() - started, 1),
     }
 
 
-def cut_video(video_url: str, start_seconds: float, end_seconds: float) -> dict[str, object]:
-    """완성 영상에서 [start, end) 구간을 잘라낸 새 영상을 만든다."""
+def cut_video(
+    db: Session, reels_idx: int, user_idx: int, start_seconds: float, end_seconds: float
+) -> dict[str, object]:
+    """릴스 영상에서 [start, end) 구간을 잘라내고 릴스 URL 을 편집본으로 교체한다."""
+    reels = _load_ready_reels(db, reels_idx, user_idx)
     work_dir = _edit_workspace()
     try:
-        source = _download_source(video_url, work_dir)
+        source = _download_source(reels.url, work_dir)
         info = _ffprobe_video(source)
         duration = float(info["duration"])
         start, end = float(start_seconds), float(end_seconds)
@@ -440,36 +472,36 @@ def cut_video(video_url: str, start_seconds: float, end_seconds: float) -> dict[
             *maps, *_EDIT_VIDEO_ARGS, *audio_args,
             str(target),
         ])
-        return _edit_result(started, target)
+        return _edit_result(db, reels, started, target)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def insert_image(
-    video_url: str,
+    db: Session,
+    reels_idx: int,
+    user_idx: int,
     at_seconds: float,
     image_filename: str,
     image_bytes: bytes,
-    photo_seconds: float = 1.5,
 ) -> dict[str, object]:
-    """완성 영상의 at 시점에 이미지를 전체 화면으로 끼워 넣은 새 영상을 만든다.
+    """릴스 영상의 at 시점에 이미지를 전체 화면으로 끼워 넣고 URL 을 교체한다.
 
-    본편 [0, at) 재생 → 사진 photo_seconds 초 → 본편 [at, 끝) 재생.
-    렌더러의 사진 구간처럼 본편이 멈추고 사진이 나온 뒤 이어지는 삽입 방식이라
-    영상 길이가 photo_seconds 만큼 늘어난다. 사진은 화면을 꽉 채우도록
-    비율 유지 확대 후 중앙 크롭한다.
+    본편 [0, at) 재생 → 사진 INSERT_PHOTO_SECONDS 초 → 본편 [at, 끝) 재생.
+    사진이 머무는 시간은 렌더러가 영상 안에서 사진 한 장을 보여주는 시간과 같아
+    (표시 시간은 지정할 수 없다) 삽입 클립만 튀지 않는다. 영상 길이는 그만큼
+    늘어난다. 사진은 화면을 꽉 채우도록 비율 유지 확대 후 중앙 크롭한다.
     """
+    reels = _load_ready_reels(db, reels_idx, user_idx)
     work_dir = _edit_workspace()
     try:
-        source = _download_source(video_url, work_dir)
+        source = _download_source(reels.url, work_dir)
         info = _ffprobe_video(source)
         duration = float(info["duration"])
         at = float(at_seconds)
-        photo = float(photo_seconds)
+        photo = INSERT_PHOTO_SECONDS
         if at < 0 or at > duration:
             raise BadRequestException(f"삽입 시점은 0 ~ 영상 길이({duration:.1f}초) 사이여야 합니다.")
-        if not 0.3 <= photo <= 10:
-            raise BadRequestException("사진 표시 시간은 0.3 ~ 10초 사이여야 합니다.")
 
         suffix = Path(image_filename or "").suffix.lower()
         if suffix not in IMAGE_EXTENSIONS:
@@ -543,7 +575,7 @@ def insert_image(
             *maps, *_EDIT_VIDEO_ARGS, *audio_args,
             str(target),
         ])
-        return _edit_result(started, target)
+        return _edit_result(db, reels, started, target)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
