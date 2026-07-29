@@ -22,6 +22,22 @@ class PlaceBase(BaseModel):
     close_time: str | None = Field(None, description="운영 종료 시각 (HH:MM). 미상이면 null")
 
 
+class PlaceSearchResult(BaseModel):
+    """장소 키워드 검색 결과 1건 — 일정 항목(visit) 추가 시 그대로 채워 보낸다."""
+
+    name: str = Field(..., description="장소명", examples=["감천문화마을"])
+    address: str | None = Field(None, description="도로명(없으면 지번) 주소", examples=["부산 사하구 감내2로 203"])
+    category: str | None = Field(None, description="카테고리(예: 관광명소, 음식점). 없으면 null", examples=["관광명소"])
+    latitude: float = Field(..., description="위도", examples=[35.0975])
+    longitude: float = Field(..., description="경도", examples=[129.0107])
+
+
+class PlaceSearchResponse(BaseModel):
+    """장소 키워드 검색 응답 — 검색어에 대한 후보 목록."""
+
+    places: list[PlaceSearchResult] = Field(..., description="검색 결과(정확도순). 없으면 빈 배열")
+
+
 class ThemePlaceCard(BaseModel):
     """홈 '테마별 여행지' 리스트의 관광지 1곳 — 카드에 보이는 필드만."""
 

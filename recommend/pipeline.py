@@ -11,7 +11,7 @@ from schemas.recommend_schema import Course, DayPlan, RecommendedPlace, SearchCr
 _NUM_COURSES = 3
 # 하루 최대 방문지 수(그 이상은 현실적으로 소화 불가)
 _MAX_PER_DAY = 3
-_LABELS = ["A", "B", "C", "D", "E"]
+_LABELS = ["A", "B", "C"]  # 코스 수(_NUM_COURSES)와 zip이라 그만큼만 쓰인다
 
 
 def working_set(scored: list[ScoredPlace], themes: list[Theme] | None, k: int) -> list[ScoredPlace]:

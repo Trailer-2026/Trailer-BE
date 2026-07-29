@@ -40,6 +40,7 @@ from core.exceptions.custom import (
     NotFoundException,
 )
 from databases.daos import reels_dao, schedule_dao, travel_dao, travel_image_dao
+from schemas.video_schema import ReelsRecommendResponse
 from utils import gcs
 
 logger = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ def get_bgm_path(filename: str) -> Path:
 RECOMMEND_REELS_COUNT = 10
 
 
-def recommend_reels(db: Session, exclude: str) -> list[dict]:
+def recommend_reels(db: Session, exclude: str) -> list[ReelsRecommendResponse]:
     """릴스를 무작위로 최대 10개 추천한다.
 
     exclude(쉼표 구분 reels_idx 목록)에 담긴 릴스는 제외하고 뽑는다 — 프론트가
@@ -165,8 +166,14 @@ def recommend_reels(db: Session, exclude: str) -> list[dict]:
         # 전부 이미 추천된 상태 → 한 바퀴 돌았으니 처음부터 다시
         rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, [])
     return [
-        {"reels_idx": row.reels_idx, "url": row.url, "title": row.title}
-        for row in rows
+        ReelsRecommendResponse(
+            reels_idx=reels.reels_idx,
+            url=reels.url,
+            title=reels.title,
+            nickname=nickname,
+            profile_image=profile_image,
+        )
+        for reels, nickname, profile_image in rows
     ]
 
 
@@ -986,7 +993,8 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
 def _register_render_as_reels(video_path: Path, user_idx: int) -> dict[str, object]:
     """완성 영상을 GCS 버킷(reels/)에 올리고 reels 행을 등록한다.
 
-    작성자는 렌더 요청 시 JWT 에서 뽑은 user_idx 로 매핑한다.
+    작성자는 렌더 요청 시 JWT 에서 뽑은 user_idx 로 매핑한다 (무작위 추천에서
+    프로필 사진을 붙이는 근거).
     """
     from databases.database import SessionLocal
 

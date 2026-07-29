@@ -424,7 +424,7 @@ def _courses_for_route(scored: list, criteria: SearchCriteria, k: int, anchor, r
     return sorted(courses, key=lambda c: c.total_preference_score, reverse=True)
 
 
-def _caps_arrival_only(arr, k: int) -> tuple[int | None, int | None]:
+def _caps_arrival_only(arr) -> tuple[int | None, int | None]:
     """도착일만 제약하고 마지막날은 출발 제약 없는 구간의 (첫날, 마지막날) 상한.
 
     '먼저 묵는 도시'용 — 마지막날은 그 밤을 자고 다음날 아침에 이동하므로 하루 종일 관광 가능(제약 없음).
@@ -493,7 +493,7 @@ def _course_for_overnight(db, dest_scored, criteria, k, dest_anchor, route, memo
         seg_anchor = via_anchor if is_via else dest_anchor
         seg_scored = via_scored if is_via else dest_scored
         if idx == 0:  # 먼저 묵는 도시: 마지막날 출발 제약 없음(자고 다음날 이동)
-            fc, lc = _caps_arrival_only(arr, seg_k)
+            fc, lc = _caps_arrival_only(arr)
             win = _windows_arrival_only(arr, seg_k)
         else:         # 나중 도시: 도착~귀가 표준
             fc, lc = _caps_between(arr, dep, seg_k)
@@ -896,7 +896,10 @@ def _stopover_visits(recs: list, start_dt, end_dt) -> list:
     if start_dt is None:
         return [None] * len(recs)
     start_h = start_dt.hour + start_dt.minute / 60
-    end_h = (end_dt.hour + end_dt.minute / 60) if end_dt is not None else start_h
+    # 다음 출발이 자정을 넘겨 다음날이면 start 기준 24+시로 환산한다(실제 경과시간으로 계산).
+    # 안 하면 end_h<start_h가 돼 심야 경유(예: 23:10 도착~다음날 00:40 출발)에서
+    # arrive>=end_h가 항상 참이 되어 모든 경유지가 방문불가로 걸러진다.
+    end_h = start_h + (end_dt - start_dt).total_seconds() / 3600 if end_dt is not None else start_h
     cursor = start_h
     out = []
     for rec in recs:

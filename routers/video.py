@@ -103,8 +103,9 @@ def get_output_video(name: str) -> FileResponse:
                 "삼아 첫 사진 지점으로 이동하며 시작합니다. 조건을 못 채우면 400을 반환합니다. "
                 "영상 앞뒤에는 TRAILER 인트로·아웃트로가 항상 붙습니다. "
                 "렌더가 끝나면 완성 영상이 GCS 버킷에 올라가고 reels 테이블에 로그인 "
-                "사용자(user_idx)와 연결되어 자동 등록되며, 상태 응답의 reels_idx/reels_url "
-                "로 확인할 수 있습니다. JWT 인증이 필요하며 토큰이 없거나 유효하지 않으면 "
+                "사용자(user_idx)와 연결되어 자동 등록되며(여행 연결은 없음), 상태 응답의 "
+                "reels_idx/reels_url 로 확인할 수 있습니다. JWT 인증이 필요하며 토큰이 "
+                "없거나 유효하지 않으면 "
                 "401을 반환합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
@@ -222,8 +223,10 @@ def render_video_from_travel(
     description="릴스를 무작위로 10개 추천합니다. 재요청 시 이미 받은 reels_idx들을 exclude에 "
                 "쉼표로 구분해 넘기면 그 릴스들을 제외하고 새로 뽑으며, 남은 릴스가 10개 "
                 "미만이면 있는 만큼만 반환합니다. 제외하고 남은 릴스가 하나도 없으면(전부 "
-                "한 번씩 추천됨) exclude를 무시하고 처음부터 다시 추천합니다. exclude 형식이 "
-                "잘못되면 400을 반환합니다.",
+                "한 번씩 추천됨) exclude를 무시하고 처음부터 다시 추천합니다. 각 릴스에는 "
+                "작성자의 닉네임(nickname)·프로필 사진(profile_image)이 함께 내려가며, "
+                "작성자 없는 옛 릴스는 둘 다 null 입니다. exclude 형식이 잘못되면 400을 "
+                "반환합니다.",
     response_model=CommonResponse[list[ReelsRecommendResponse]],
 )
 def recommend_reels(

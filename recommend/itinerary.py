@@ -44,9 +44,11 @@ def build_itinerary(route, course, go_date: str) -> Itinerary:
             ))
         # 당일치기 경유 관광(하차역 근처). 숙박 경유는 stopover_places가 비어 관광이 코스에 들어있다.
         if route.stopover_places:
-            d = _stopover_date(route)
-            dwell = _stopover_arrival(route)  # 체류 시작(하차) 시각 — 방문시각 미상 관광의 정렬 기준
-            depart = _stopover_departure(route)  # 다음(둘째) 열차 출발 시각 — 방문 종료 상한
+            # 2편인 방향(가는편/오는편)의 [하차 다리, 승차 다리]. 하차 도착~승차 출발이 경유 체류 시간대.
+            legs = route.go_trains if len(route.go_trains) >= 2 else route.back_trains
+            d = legs[0].arr_time.strftime("%Y%m%d")  # 경유 관광일(하차역 도착일)
+            dwell = legs[0].arr_time    # 체류 시작(하차) 시각 — 방문시각 미상 관광의 정렬 기준
+            depart = legs[1].dep_time   # 둘째 열차 출발 시각 — 방문 종료 상한
             for sp in route.stopover_places:
                 seg = _visit_seg(_stopover_to_place(sp), d, go)
                 if seg.start_time is None:  # 체류 중 폐점 등으로 방문시각 미상 → 체류 슬롯에 정렬
@@ -103,28 +105,6 @@ def _sort_key(seg, go: datetime) -> datetime:
         return seg.start_time
     d = go + timedelta(days=seg.day_no - 1)
     return datetime(d.year, d.month, d.day, 23, 59, tzinfo=KST)
-
-
-def _stopover_leg(route):
-    """당일치기 경유의 하차 다리(2편인 방향의 첫 열차)."""
-    trains = route.go_trains if len(route.go_trains) >= 2 else route.back_trains
-    return trains[0]
-
-
-def _stopover_date(route) -> str:
-    """당일치기 경유 관광이 일어나는 날(하차역 도착일) YYYYMMDD."""
-    return _stopover_leg(route).arr_time.strftime("%Y%m%d")
-
-
-def _stopover_arrival(route):
-    """당일치기 경유 체류 시작(하차) 시각 dt."""
-    return _stopover_leg(route).arr_time
-
-
-def _stopover_departure(route):
-    """당일치기 경유의 승차 다리(2편인 방향의 둘째 열차) 출발 시각 dt — 경유 관광 종료 상한."""
-    trains = route.go_trains if len(route.go_trains) >= 2 else route.back_trains
-    return trains[1].dep_time
 
 
 def _visit_seg(place: RecommendedPlace, date_ymd: str | None, go: datetime) -> ItinerarySegment:

@@ -2,10 +2,26 @@ from fastapi import APIRouter, Query
 
 from core.enums import Theme
 from core.response import CommonResponse
-from schemas.place_schema import ThemedPlacesResponse
+from schemas.place_schema import PlaceSearchResponse, ThemedPlacesResponse
 from services import place_service
 
 router = APIRouter(prefix="/api/places", tags=["Place"])
+
+
+@router.get(
+    "/search",
+    summary="장소 키워드 검색",
+    description="키워드로 장소를 검색합니다(직접 일정 만들기 > 장소 추가 검색창용). "
+                "카카오 로컬 검색 기반이라 관광지뿐 아니라 공항·상호 등 일반 장소도 찾습니다. "
+                "결과의 name/address/latitude/longitude를 그대로 일정 항목 추가(visit)에 씁니다.\n\n"
+                "- 502: 장소 검색 서비스(카카오) 호출 실패",
+    response_model=CommonResponse[PlaceSearchResponse],
+)
+def search_places(
+    query: str = Query(..., min_length=1, description="검색어(장소명/주소)"),
+):
+    result = place_service.search_places(query)
+    return CommonResponse.success_response("장소 검색 성공", data=result)
 
 
 @router.get(

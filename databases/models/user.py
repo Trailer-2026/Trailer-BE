@@ -14,4 +14,5 @@ class User(BaseModel):
     provider = Column(String(20), nullable=False, comment="소셜 제공자 (google | kakao)")
     provider_id = Column(String(100), nullable=False, comment="소셜 고유 ID (google sub / kakao id)")
     email = Column(String(255), nullable=True, comment="이메일")
+    profile_image = Column(String(500), nullable=True, comment="프로필 사진 URL")
     alarm = Column(Boolean, nullable=True, comment="알림 설정")
