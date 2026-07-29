@@ -22,9 +22,10 @@ class ReelsRecommendResponse(BaseModel):
 
 
 class VideoEditResponse(BaseModel):
-    """완성 영상 편집(구간 삭제 / 이미지 삽입) 결과."""
+    """릴스 영상 편집(구간 삭제 / 이미지 삽입) 결과."""
 
-    video_url: str = Field(..., description="편집된 새 영상 경로 (GET /api/videos/output/{name}) — 원본은 보존")
+    reels_idx: int = Field(..., description="편집한 릴스 PK (PK 는 그대로, 영상만 교체됨)")
+    video_url: str = Field(..., description="편집된 새 영상의 GCS 공개 URL — 릴스의 url 이 이 값으로 갱신됨")
     duration_seconds: float = Field(..., description="편집 후 영상 길이(초)")
     elapsed_seconds: float = Field(..., description="편집 처리 시간(초)")
 
@@ -33,23 +34,31 @@ class VideoRenderStatusResponse(BaseModel):
     """여행 경로 3D 영상 렌더 작업 상태 (시작 응답·진행률 폴링 공용).
 
     렌더 시작 API(POST /render/photos-only·photos-ordered·travel)가 이 형태로
-    job_id 를 반환하고, GET /render/{job_id} 를 폴링하면 percent/eta 가
-    갱신되다가 status=done 에서 video_url 이 채워진다.
+    reels_idx 를 반환하고, GET /render/{reels_idx} 를 폴링하면 percent/eta 가
+    갱신되다가 status=done 에서 video_url 이 채워진다. 릴스 행은 렌더 시작 시점에
+    미리 만들어지므로(그 전엔 영상이 없어 추천 피드에 뜨지 않는다) 진행률 조회·
+    다운로드·편집이 모두 같은 reels_idx 로 돈다.
     """
 
-    job_id: str = Field(..., description="렌더 작업 ID (진행률 조회에 사용)")
-    status: str = Field(..., description="작업 상태: running | done | failed")
+    reels_idx: int = Field(..., description="릴스 PK — 진행률 조회·다운로드·편집 공용 키")
+    status: str = Field(
+        ...,
+        description="작업 상태: running | done | failed | unknown"
+                    "(unknown = 서버 재시작으로 진행 정보가 사라진 미완료 릴스)",
+    )
     phase: str = Field(..., description="현재 단계 (렌더 준비 중 / 프레임 렌더링 / 후처리 / 완료)")
     percent: float = Field(..., description="진행률 0~100")
     frame: int = Field(..., description="렌더링된 프레임 번호 (프레임 단계에서만 증가)")
     total_frames: int | None = Field(None, description="전체 프레임 수 (프레임 단계 진입 전엔 null)")
     elapsed_seconds: float = Field(..., description="경과 시간(초)")
     eta_seconds: float | None = Field(None, description="예상 남은 시간(초) — 초반·완료 후엔 null 또는 0")
-    engine: str = Field(..., description="렌더 엔진 (local | modal)")
-    theme: str = Field(..., description="지도 계절 테마")
+    engine: str = Field(..., description='렌더 엔진 — 항상 "modal" (Modal T4 클라우드 전용)')
+    theme: str = Field(..., description="지도 계절 테마 (진행 정보가 없는 unknown 상태면 빈 문자열)")
     bgm: str | None = Field(None, description="BGM 파일명 (없으면 null)")
-    video_url: str | None = Field(None, description="완성 영상 경로 (status=done 일 때만)")
-    reels_idx: int | None = Field(None, description="자동 등록된 릴스 PK (렌더 완료 시)")
+    video_url: str | None = Field(
+        None,
+        description="완성 영상 URL (status=done 일 때만) — reels_url 과 같은 GCS 공개 URL",
+    )
     reels_url: str | None = Field(None, description="GCS 버킷 공개 영상 URL (렌더 완료 시)")
-    error: str | None = Field(None, description="실패 사유 (status=failed 일 때만)")
+    error: str | None = Field(None, description="실패 사유 (status=failed/unknown 일 때만)")
     log_tail: str = Field("", description="렌더 로그 끝부분 (종료 후 디버깅용)")
