@@ -40,7 +40,10 @@ import modal
 
 HERE = Path(__file__).resolve().parent
 APP_NAME = "trailer-videomaker-render"
-MAX_CHUNKS = 5
+# 영상 1편이 쓰는 최대 GPU 컨테이너 수. Modal 계정의 동시 GPU 한도를 이 값으로
+# 나눈 만큼이 '동시에 만들 수 있는 영상 편수'다. 값을 올리면 편당 렌더는 빨라지지만
+# 동시 처리 인원이 줄고, 내리면 그 반대(편당 대기 시간 ↑, 동시 인원 ↑).
+MAX_CHUNKS = 2
 
 
 def load_travel_data_json(path: Path) -> str:

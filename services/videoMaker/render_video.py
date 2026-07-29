@@ -18,7 +18,7 @@ from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
@@ -1275,12 +1275,28 @@ def write_optional_frame(path: Path, png_bytes: bytes, save_frames: bool) -> Non
 
 
 def fit_photo_cover(photo: Image.Image, config: RenderConfig) -> Image.Image:
-    return ImageOps.fit(
-        photo.convert("RGB"),
-        (config.width, config.height),
-        method=Image.Resampling.LANCZOS,
-        centering=(0.5, 0.5),
+    """사진을 프레임(세로 9:16)에 맞춘다 — 가로/세로/정사각형 모두 자동 대응.
+
+    EXIF 회전을 먼저 보정하고, 비율이 프레임과 비슷하면 살짝 잘라 꽉 채운다
+    (cover). 가로 사진처럼 비율 차이가 크면 크롭으로 내용이 왕창 잘리므로,
+    원본이 전부 보이게 축소하고(contain) 빈 영역은 같은 사진을 확대·블러·
+    어둡게 깐 배경으로 채운다 (릴스식 blur-fill).
+    """
+    target = (config.width, config.height)
+    image = (ImageOps.exif_transpose(photo) or photo).convert("RGB")
+    ratio_gap = (image.width / image.height) / (target[0] / target[1])
+    if 0.8 <= ratio_gap <= 1.25:
+        return ImageOps.fit(image, target, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+
+    background = ImageOps.fit(image, target, method=Image.Resampling.BILINEAR)
+    background = background.filter(ImageFilter.GaussianBlur(radius=40))
+    background = ImageEnhance.Brightness(background).enhance(0.55)
+    foreground = ImageOps.contain(image, target, method=Image.Resampling.LANCZOS)
+    background.paste(
+        foreground,
+        ((target[0] - foreground.width) // 2, (target[1] - foreground.height) // 2),
     )
+    return background
 
 
 def cleanup_temp() -> None:
@@ -1300,8 +1316,7 @@ def save_photo_frames(
     photo_path: Path,
 ) -> int:
     map_image = Image.open(last_map_frame).convert("RGB")
-    photo = Image.open(photo_path).convert("RGB")
-    photo = ImageOps.fit(photo, (config.width, config.height), method=Image.Resampling.LANCZOS)
+    photo = fit_photo_cover(Image.open(photo_path), config)
     fade_frames = max(1, round(config.fade_seconds * config.fps))
     hold_frames = max(1, round(config.photo_seconds * config.fps))
     black_frames = max(1, round(config.black_fade_seconds * config.fps))
@@ -1340,8 +1355,7 @@ def emit_photo_frames(
 ) -> int:
     started = time.perf_counter()
     map_image = Image.open(io.BytesIO(last_map_png)).convert("RGB")
-    photo = Image.open(photo_path).convert("RGB")
-    photo = ImageOps.fit(photo, (config.width, config.height), method=Image.Resampling.LANCZOS)
+    photo = fit_photo_cover(Image.open(photo_path), config)
     fade_frames = max(1, round(config.fade_seconds * config.fps))
     hold_frames = max(1, round(config.photo_seconds * config.fps))
     black_frames = max(1, round(config.black_fade_seconds * config.fps))
