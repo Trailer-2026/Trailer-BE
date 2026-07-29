@@ -2,14 +2,18 @@
 """여행 경로 3D 영상(videoMaker) 서비스.
 
 사진 EXIF·여행 일정(schedule)에서 뽑은 GPS 지점/사진/옵션을 travel_data.json 으로 변환해
-services/videoMaker/render_video.py(로컬 GPU) 또는 modal_render.py(Modal T4 GPU)를
-서브프로세스로 실행하고, 완성된 mp4 파일명을 돌려준다. 여행 렌더는
-travel/schedule/travel_image 를 읽고, 렌더 완료 시 reels 행을 등록한다.
+services/videoMaker/modal_call.py 를 서브프로세스로 실행하고, 완성된 mp4 파일명을
+돌려준다. 여행 렌더는 travel/schedule/travel_image 를 읽고, 렌더 완료 시 reels 행을
+등록한다.
 
-렌더러는 별도 conda 환경(trailer3d)의 의존성(playwright 등)이 필요하므로,
-로컬 엔진이 쓸 파이썬 경로를 properties_dev.ini 의 [videomaker] python 으로
-지정한다(없으면 현재 프로세스 파이썬 — 메인 서버를 trailer3d 환경으로 띄운 경우).
-Modal CLI 경로도 [videomaker] modal 로 지정 가능(없으면 PATH → 파이썬 옆 Scripts 순).
+렌더는 **Modal T4 GPU 전용**이다 (서버 GPU 로 직접 돌리던 local 엔진은 제거됨).
+modal_call.py 가 배포된 Modal 함수를 조각별로 원격 호출하고, 돌아온 조각들을
+서버에서 합쳐(ffmpeg) 최종 mp4 를 만든다. 사전 1회 `modal deploy modal_render.py` 필요.
+
+modal_call.py 를 실행할 파이썬은 properties_dev.ini 의 [videomaker] python 으로
+지정한다(없으면 현재 프로세스 파이썬). 이 파이썬 환경에는 modal 과 playwright 가
+설치돼 있어야 한다 — modal_call.py 가 render_video.py 를 임포트하는데 그 모듈이
+최상위에서 playwright 를 임포트하기 때문이다(Chromium 브라우저 바이너리는 불필요).
 """
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ from pathlib import Path
 
 import requests
 from PIL import Image
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import Config
@@ -50,7 +55,6 @@ BGM_DIR = VIDEO_MAKER_DIR / "bgm"
 UPLOADS_DIR = VIDEO_MAKER_DIR / "assets" / "uploads"
 OUTPUT_DIR = VIDEO_MAKER_DIR / "output"
 MAP_THEMES_JS = VIDEO_MAKER_DIR / "map_themes.js"
-RENDER_SCRIPT = VIDEO_MAKER_DIR / "render_video.py"
 # 배포된 Modal 함수를 호출하는 러너 (사전 1회: modal deploy modal_render.py)
 MODAL_CALL_SCRIPT = VIDEO_MAKER_DIR / "modal_call.py"
 
@@ -72,11 +76,75 @@ def get_map_themes_path() -> Path:
 
 
 def get_output_path(name: str) -> Path:
-    """완성 영상 경로를 output/ 밖으로 못 나가게 검증해 반환한다."""
+    """완성 영상 경로를 output/ 밖으로 못 나가게 검증해 반환한다.
+
+    릴스 url 이 GCS 가 아닌 옛 데이터를 다운로드할 때만 쓰인다 (파일명으로 직접
+    받아가던 /api/videos/output/{name} 엔드포인트는 없앴다).
+    """
     candidate = (OUTPUT_DIR / name).resolve()
     if candidate.parent != OUTPUT_DIR.resolve() or not candidate.is_file():
         raise NotFoundException("영상을 찾을 수 없습니다.")
     return candidate
+
+
+# 버킷 영상을 클라이언트로 흘려보낼 때의 조각 크기 (메모리에 통째로 안 올리려고).
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+def _load_own_reels(db: Session, reels_idx: int, user_idx: int):
+    """본인 릴스를 조회한다 (진행률·다운로드·편집 공용). 없거나 남의 릴스면 404.
+
+    남의 릴스는 403 이 아니라 404 로 답한다 — 존재 여부 자체를 알리지 않는다.
+    렌더가 아직 안 끝난 행도 그대로 돌려준다(진행률 조회가 그 행을 봐야 한다).
+    """
+    reels = reels_dao.get_by_idx(db, reels_idx)
+    if reels is None or reels.user_idx != user_idx:
+        raise NotFoundException("릴스를 찾을 수 없습니다.")
+    return reels
+
+
+def _load_ready_reels(db: Session, reels_idx: int, user_idx: int):
+    """영상이 완성된 본인 릴스를 조회한다 (다운로드·편집용). 렌더 중이면 400."""
+    reels = _load_own_reels(db, reels_idx, user_idx)
+    if not reels.url:
+        raise BadRequestException(
+            "아직 렌더링이 끝나지 않은 릴스입니다. "
+            "GET /api/videos/render/{reels_idx} 로 진행률을 확인하세요."
+        )
+    return reels
+
+
+def get_reels_download(
+    db: Session, reels_idx: int, user_idx: int
+) -> tuple[object, str, int | None]:
+    """본인 릴스 영상 다운로드 소스를 (스트림|로컬 경로, 파일명, 크기)로 돌려준다.
+
+    영상은 보통 GCS 버킷에 있으므로 버킷 객체를 열어 조각 단위로 흘려보낸다
+    (서버 디스크에 받아두지 않는다). 버킷 업로드에 실패해 로컬에만 남은 옛 영상은
+    output/ 파일 경로를 돌려주고 크기는 None 이다. 본인 릴스가 아니거나 영상이
+    없으면 404, 아직 렌더 중이면 400.
+    """
+    reels = _load_ready_reels(db, reels_idx, user_idx)
+
+    filename = f"reels_{reels_idx}.mp4"
+    url = reels.url or ""
+    object_path = gcs.object_path_from_url(url)
+    if object_path is None:
+        # 우리 버킷 URL 이 아님 → 렌더 당시 업로드 실패로 로컬에만 남은 경우.
+        return get_output_path(Path(url).name), filename, None
+    if not gcs.object_exists(object_path):
+        raise NotFoundException("영상을 찾을 수 없습니다.")
+
+    stream, size = gcs.open_object(object_path)
+
+    def chunks():
+        try:
+            while chunk := stream.read(DOWNLOAD_CHUNK_BYTES):
+                yield chunk
+        finally:
+            stream.close()
+
+    return chunks(), filename, size
 
 
 # --------------------------------------------------------------------------- #
@@ -181,54 +249,36 @@ def recommend_reels(db: Session, exclude: str) -> list[ReelsRecommendResponse]:
 # 렌더링
 # --------------------------------------------------------------------------- #
 def _render_python() -> str:
-    """로컬 엔진(render_video.py)을 실행할 파이썬 경로."""
+    """modal_call.py 를 실행할 파이썬 경로 (modal·playwright 가 설치된 환경)."""
     return Config.read("videomaker", "python", default=sys.executable) or sys.executable
 
 
-def _build_command(
-    travel_data_path: Path,
-    engine: str,
-    quick: bool,
-    theme: str,
-) -> tuple[list[str], str]:
-    """엔진별 렌더 명령을 만든다. 반환: (command, 출력 파일명 파싱용 marker)
+def _build_command(travel_data_path: Path, theme: str) -> list[str]:
+    """Modal 렌더 명령을 만든다.
 
-    화질 기본값은 quality-fast(JPEG q95, 풀해상도) — 무손실 PNG(quality) 대비
-    최종 mp4 화질 차이가 사실상 없고 렌더가 크게 빠르다. local 의 quick 만
-    저해상도 테스트 모드로 남긴다.
+    화질은 항상 quality-fast(JPEG q95, 풀해상도) — 무손실 PNG 대비 최종 mp4
+    화질 차이가 사실상 없고 렌더가 크게 빠르다(modal_call.py 의 기본 --mode).
     """
-    if engine == "modal":
-        # 배포된 함수 원격 호출 (quick 여부와 무관하게 풀해상도 quality-fast).
-        command = [
-            _render_python(),
-            str(MODAL_CALL_SCRIPT),
-            "--travel-data",
-            travel_data_path.relative_to(VIDEO_MAKER_DIR).as_posix(),
-        ]
-    else:
-        command = [
-            _render_python(),
-            str(RENDER_SCRIPT),
-            "--travel-data",
-            str(travel_data_path),
-        ]
-        command.append("--quick" if quick else "--quality-fast")
+    command = [
+        _render_python(),
+        str(MODAL_CALL_SCRIPT),
+        "--travel-data",
+        travel_data_path.relative_to(VIDEO_MAKER_DIR).as_posix(),
+    ]
     if theme != "default":
         command += ["--theme", theme]
     # TRAILER 인트로·아웃트로는 항상 붙인다.
     command += ["--intro", "--outro"]
-    return command, engine
+    return command
 
 
-def _parse_output_name(stdout: str, marker: str) -> str | None:
+def _parse_output_name(stdout: str) -> str | None:
     """렌더 서브프로세스 stdout 에서 완성 파일명을 뽑는다.
 
-    local -> render_video.py 가 "출력 예정 파일: <path>" 를 출력.
-    modal -> modal_render.py 엔트리포인트가 "저장 위치: <path>" 를 출력
-             (컨테이너의 "출력 예정 파일" 은 /app 경로라 로컬 파일이 아님).
+    modal_call.py 가 조각을 합친 뒤 "저장 위치: <path>" 를 출력한다
+    (컨테이너가 찍는 "출력 예정 파일" 은 /app 경로라 로컬 파일이 아니다).
     """
-    pattern = r"저장 위치:\s*(.+)" if marker == "modal" else r"출력 예정 파일:\s*(.+)"
-    match = re.search(pattern, stdout)
+    match = re.search(r"저장 위치:\s*(.+)", stdout)
     if match:
         return Path(match.group(1).strip()).name
     # 폴백: output/ 의 가장 최근 mp4.
@@ -240,9 +290,20 @@ def _parse_output_name(stdout: str, marker: str) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
-# 완성 영상 편집 (ffmpeg 후처리) — 구간 삭제 / 이미지 오버레이
+# 완성 영상 편집 (ffmpeg 후처리) — 구간 삭제 / 이미지 삽입
+#
+# 편집 대상은 등록된 릴스(reels_idx)다. 완성 영상은 GCS 버킷에만 있고 서버에는
+# 남지 않으므로(렌더 후 로컬 사본 삭제), 편집은 "릴스 URL 로 버킷에서 내려받기 →
+# ffmpeg 처리 → 결과 재업로드 → reels.url 교체 → 이전 객체·임시파일 삭제" 로 돈다.
+# 편집은 서버 CPU(ffmpeg)만 쓴다 — Modal GPU 는 렌더에만 필요하다.
 # --------------------------------------------------------------------------- #
 EDIT_TIMEOUT_SECONDS = 60 * 5
+# 편집 결과물이 올라갈 버킷 경로 접두어 (렌더 원본 reels/ 와 구분).
+EDIT_OBJECT_PREFIX = "reels/edited"
+# 삽입 사진이 화면에 머무는 시간(초). 렌더러가 영상 안에서 사진 한 장을 보여주는
+# 시간과 같은 값이라 삽입 클립만 튀지 않는다 — render_video.QUALITY_FAST_CONFIG 의
+# photo_fade_in(0.4) + photo_hold(1.6) + photo_fade_out(0.4). 그쪽이 바뀌면 같이 고칠 것.
+INSERT_PHOTO_SECONDS = 2.4
 # 렌더러와 같은 계열의 인코딩 (정확한 컷을 위해 재인코딩 필수 — 스트림 카피는
 # 키프레임 단위로만 잘려 구간이 밀린다).
 _EDIT_VIDEO_ARGS = [
@@ -281,14 +342,26 @@ def _ffprobe_video(path: Path) -> dict[str, object]:
     }
 
 
-def _edited_output_path(source: Path, tag: str) -> Path:
-    """원본 이름 뒤에 _<tag>N 을 붙인, 아직 없는 출력 경로를 반환한다."""
-    index = 1
-    while True:
-        candidate = OUTPUT_DIR / f"{source.stem}_{tag}{index}.mp4"
-        if not candidate.exists():
-            return candidate
-        index += 1
+def _edit_workspace() -> Path:
+    """편집 임시 파일(원본 사본·결과물)을 담을 새 디렉터리. 끝나면 통째로 지운다."""
+    work_dir = VIDEO_MAKER_DIR / "temp" / f"edit_{uuid.uuid4().hex[:8]}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    return work_dir
+
+
+def _download_source(video_url: str, work_dir: Path) -> Path:
+    """편집할 원본 영상을 버킷에서 내려받는다. 우리 버킷 URL 이 아니면 400."""
+    object_path = gcs.object_path_from_url((video_url or "").strip())
+    if object_path is None:
+        raise BadRequestException(
+            "영상 저장소(GCS)에 없는 릴스라 편집할 수 없습니다 "
+            "(버킷 업로드에 실패해 로컬에만 남은 영상)."
+        )
+    if not gcs.object_exists(object_path):
+        raise NotFoundException("영상을 찾을 수 없습니다.")
+    source = work_dir / "source.mp4"
+    gcs.download_file(object_path, source)
+    return source
 
 
 def _run_ffmpeg(args: list[str]) -> None:
@@ -307,185 +380,227 @@ def _run_ffmpeg(args: list[str]) -> None:
         raise ExternalServiceException(f"영상 편집 실패:\n{(result.stderr or '')[-1500:]}")
 
 
-def _edit_result(source_started: float, target: Path) -> dict[str, object]:
+def _edit_result(db: Session, reels, started: float, target: Path) -> dict[str, object]:
+    """편집 결과물을 버킷에 올리고 릴스 URL 을 교체한다 (target 은 임시 파일).
+
+    reels.url 이 편집본을 가리키게 바꾸므로 릴스 PK 는 그대로고 영상만 갱신된다.
+    교체에 성공하면 이전 객체는 아무도 참조하지 않으니 버킷에서 지운다(실패해도
+    편집 자체는 성공 — 고아 객체 로그만 남긴다).
+    """
     info = _ffprobe_video(target)
+    # commit 이후엔 인스턴스 속성이 만료돼 재조회가 걸리므로 미리 읽어 둔다.
+    reels_idx, previous_url = reels.reels_idx, reels.url
+    video_url = gcs.upload_file(
+        f"{EDIT_OBJECT_PREFIX}/{uuid.uuid4().hex}.mp4", target, "video/mp4"
+    )
+    try:
+        reels_dao.update_url(db, reels, video_url)
+        db.commit()
+    except Exception:
+        db.rollback()
+        gcs.delete_object(gcs.object_path_from_url(video_url) or video_url)  # 고아 객체 정리
+        raise
+
+    previous_object = gcs.object_path_from_url(previous_url or "")
+    if previous_object:
+        try:
+            gcs.delete_object(previous_object)
+        except Exception:
+            logger.warning("편집 전 영상 객체 삭제 실패(무시): %s", previous_object)
+
     return {
-        "video_url": f"/api/videos/output/{target.name}",
+        "reels_idx": reels_idx,
+        "video_url": video_url,
         "duration_seconds": round(float(info["duration"]), 2),
-        "elapsed_seconds": round(time.perf_counter() - source_started, 1),
+        "elapsed_seconds": round(time.perf_counter() - started, 1),
     }
 
 
-def cut_video(name: str, start_seconds: float, end_seconds: float) -> dict[str, object]:
-    """완성 영상에서 [start, end) 구간을 잘라낸 새 영상을 만든다."""
-    source = get_output_path(name)
-    info = _ffprobe_video(source)
-    duration = float(info["duration"])
-    start, end = float(start_seconds), float(end_seconds)
-    if start < 0 or end <= start:
-        raise BadRequestException("삭제 구간이 올바르지 않습니다 (0 ≤ 시작 < 끝).")
-    if start >= duration:
-        raise BadRequestException(f"시작 시각이 영상 길이({duration:.1f}초)를 넘습니다.")
-    end = min(end, duration)
+def cut_video(
+    db: Session, reels_idx: int, user_idx: int, start_seconds: float, end_seconds: float
+) -> dict[str, object]:
+    """릴스 영상에서 [start, end) 구간을 잘라내고 릴스 URL 을 편집본으로 교체한다."""
+    reels = _load_ready_reels(db, reels_idx, user_idx)
+    work_dir = _edit_workspace()
+    try:
+        source = _download_source(reels.url, work_dir)
+        info = _ffprobe_video(source)
+        duration = float(info["duration"])
+        start, end = float(start_seconds), float(end_seconds)
+        if start < 0 or end <= start:
+            raise BadRequestException("삭제 구간이 올바르지 않습니다 (0 ≤ 시작 < 끝).")
+        if start >= duration:
+            raise BadRequestException(f"시작 시각이 영상 길이({duration:.1f}초)를 넘습니다.")
+        end = min(end, duration)
 
-    # 남길 구간 목록: (시작, 끝|None=영상 끝까지). 경계에 붙은 삭제면 한 구간만 남는다.
-    eps = 0.05
-    keep: list[tuple[float, float | None]] = []
-    if start > eps:
-        keep.append((0.0, start))
-    if end < duration - eps:
-        keep.append((end, None))
-    if not keep:
-        raise BadRequestException("영상 전체를 삭제할 수는 없습니다.")
+        # 남길 구간 목록: (시작, 끝|None=영상 끝까지). 경계에 붙은 삭제면 한 구간만 남는다.
+        eps = 0.05
+        keep: list[tuple[float, float | None]] = []
+        if start > eps:
+            keep.append((0.0, start))
+        if end < duration - eps:
+            keep.append((end, None))
+        if not keep:
+            raise BadRequestException("영상 전체를 삭제할 수는 없습니다.")
 
-    # concat 필터 입력은 세그먼트 단위로 [v0][a0][v1][a1]... 처럼 끼워 넣어야 한다.
-    filters: list[str] = []
-    segment_labels: list[str] = []
-    for i, (seg_start, seg_end) in enumerate(keep):
-        rng = f"start={seg_start:.3f}" + (f":end={seg_end:.3f}" if seg_end is not None else "")
-        filters.append(f"[0:v]trim={rng},setpts=PTS-STARTPTS[v{i}]")
-        labels = f"[v{i}]"
+        # concat 필터 입력은 세그먼트 단위로 [v0][a0][v1][a1]... 처럼 끼워 넣어야 한다.
+        filters: list[str] = []
+        segment_labels: list[str] = []
+        for i, (seg_start, seg_end) in enumerate(keep):
+            rng = f"start={seg_start:.3f}" + (f":end={seg_end:.3f}" if seg_end is not None else "")
+            filters.append(f"[0:v]trim={rng},setpts=PTS-STARTPTS[v{i}]")
+            labels = f"[v{i}]"
+            if info["has_audio"]:
+                filters.append(f"[0:a]atrim={rng},asetpts=PTS-STARTPTS[a{i}]")
+                labels += f"[a{i}]"
+            segment_labels.append(labels)
+
+        maps = ["-map", "[v]"]
+        audio_args: list[str] = []
         if info["has_audio"]:
-            filters.append(f"[0:a]atrim={rng},asetpts=PTS-STARTPTS[a{i}]")
-            labels += f"[a{i}]"
-        segment_labels.append(labels)
+            filters.append(f"{''.join(segment_labels)}concat=n={len(keep)}:v=1:a=1[v][a]")
+            maps += ["-map", "[a]"]
+            audio_args = ["-c:a", "aac", "-b:a", "192k"]
+        else:
+            filters.append(f"{''.join(segment_labels)}concat=n={len(keep)}:v=1:a=0[v]")
 
-    maps = ["-map", "[v]"]
-    audio_args: list[str] = []
-    if info["has_audio"]:
-        filters.append(f"{''.join(segment_labels)}concat=n={len(keep)}:v=1:a=1[v][a]")
-        maps += ["-map", "[a]"]
-        audio_args = ["-c:a", "aac", "-b:a", "192k"]
-    else:
-        filters.append(f"{''.join(segment_labels)}concat=n={len(keep)}:v=1:a=0[v]")
-
-    target = _edited_output_path(source, "cut")
-    started = time.perf_counter()
-    _run_ffmpeg([
-        "-i", str(source),
-        "-filter_complex", ";".join(filters),
-        *maps, *_EDIT_VIDEO_ARGS, *audio_args,
-        str(target),
-    ])
-    return _edit_result(started, target)
+        target = work_dir / "cut.mp4"
+        started = time.perf_counter()
+        _run_ffmpeg([
+            "-i", str(source),
+            "-filter_complex", ";".join(filters),
+            *maps, *_EDIT_VIDEO_ARGS, *audio_args,
+            str(target),
+        ])
+        return _edit_result(db, reels, started, target)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def insert_image(
-    name: str,
+    db: Session,
+    reels_idx: int,
+    user_idx: int,
     at_seconds: float,
     image_filename: str,
     image_bytes: bytes,
-    photo_seconds: float = 1.5,
 ) -> dict[str, object]:
-    """완성 영상의 at 시점에 이미지를 전체 화면으로 끼워 넣은 새 영상을 만든다.
+    """릴스 영상의 at 시점에 이미지를 전체 화면으로 끼워 넣고 URL 을 교체한다.
 
-    본편 [0, at) 재생 → 사진 photo_seconds 초 → 본편 [at, 끝) 재생.
-    렌더러의 사진 구간처럼 본편이 멈추고 사진이 나온 뒤 이어지는 삽입 방식이라
-    영상 길이가 photo_seconds 만큼 늘어난다. 사진은 화면을 꽉 채우도록
-    비율 유지 확대 후 중앙 크롭한다.
+    본편 [0, at) 재생 → 사진 INSERT_PHOTO_SECONDS 초 → 본편 [at, 끝) 재생.
+    사진이 머무는 시간은 렌더러가 영상 안에서 사진 한 장을 보여주는 시간과 같아
+    (표시 시간은 지정할 수 없다) 삽입 클립만 튀지 않는다. 영상 길이는 그만큼
+    늘어난다. 사진은 화면을 꽉 채우도록 비율 유지 확대 후 중앙 크롭한다.
     """
-    source = get_output_path(name)
-    info = _ffprobe_video(source)
-    duration = float(info["duration"])
-    at = float(at_seconds)
-    photo = float(photo_seconds)
-    if at < 0 or at > duration:
-        raise BadRequestException(f"삽입 시점은 0 ~ 영상 길이({duration:.1f}초) 사이여야 합니다.")
-    if not 0.3 <= photo <= 10:
-        raise BadRequestException("사진 표시 시간은 0.3 ~ 10초 사이여야 합니다.")
-
-    suffix = Path(image_filename or "").suffix.lower()
-    if suffix not in IMAGE_EXTENSIONS:
-        raise BadRequestException("이미지 파일이 아닙니다 (jpg/png/webp 등).")
-    if not image_bytes:
-        raise BadRequestException("이미지 파일이 비어 있습니다.")
-
-    width, height = int(info["width"]), int(info["height"])
-    fps = str(info["fps"])
-    sample_rate = int(info["sample_rate"])
-    temp_dir = VIDEO_MAKER_DIR / "temp"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    image_path = temp_dir / f"insert_{uuid.uuid4().hex[:8]}{suffix}"
-    image_path.write_bytes(image_bytes)
-
-    # 본편을 at 기준으로 나누고(경계에 붙으면 한쪽만) 사이에 사진 클립을 끼운다.
-    eps = 0.05
-    head = at > eps
-    tail = at < duration - eps
-
-    # 사진 클립: 화면을 꽉 채우게 확대 후 중앙 크롭, 본편과 같은 fps/SAR 로 정규화.
-    filters = [
-        f"[1:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height},setsar=1,fps={fps},"
-        f"trim=duration={photo:.3f},setpts=PTS-STARTPTS[vp]"
-    ]
-    video_labels: list[str] = []
-    audio_labels: list[str] = []
-    has_audio = bool(info["has_audio"])
-    # concat 은 세그먼트 포맷이 같아야 하므로 오디오는 전부 동일 포맷으로 정규화.
-    aformat = f"aformat=sample_fmts=fltp:sample_rates={sample_rate}:channel_layouts=stereo"
-
-    if head:
-        filters.append(f"[0:v]trim=end={at:.3f},setpts=PTS-STARTPTS[v0]")
-        video_labels.append("[v0]")
-        if has_audio:
-            filters.append(f"[0:a]atrim=end={at:.3f},asetpts=PTS-STARTPTS,{aformat}[a0]")
-            audio_labels.append("[a0]")
-    video_labels.append("[vp]")
-    if has_audio:
-        # 사진 구간은 무음 (anullsrc 입력 [2]).
-        filters.append(f"[2:a]atrim=duration={photo:.3f},{aformat}[ap]")
-        audio_labels.append("[ap]")
-    if tail:
-        filters.append(f"[0:v]trim=start={at:.3f},setpts=PTS-STARTPTS[v1]")
-        video_labels.append("[v1]")
-        if has_audio:
-            filters.append(f"[0:a]atrim=start={at:.3f},asetpts=PTS-STARTPTS,{aformat}[a1]")
-            audio_labels.append("[a1]")
-
-    segment_count = len(video_labels)
-    inputs = [
-        "-i", str(source),
-        "-loop", "1", "-t", f"{photo + 0.5:.3f}", "-i", str(image_path),
-    ]
-    maps = ["-map", "[v]"]
-    audio_args: list[str] = []
-    if has_audio:
-        inputs += ["-f", "lavfi", "-t", f"{photo:.3f}", "-i",
-                   f"anullsrc=r={sample_rate}:cl=stereo"]
-        interleaved = "".join(v + a for v, a in zip(video_labels, audio_labels))
-        filters.append(f"{interleaved}concat=n={segment_count}:v=1:a=1[v][a]")
-        maps += ["-map", "[a]"]
-        audio_args = ["-c:a", "aac", "-b:a", "192k"]
-    else:
-        filters.append(f"{''.join(video_labels)}concat=n={segment_count}:v=1:a=0[v]")
-
-    target = _edited_output_path(source, "img")
-    started = time.perf_counter()
+    reels = _load_ready_reels(db, reels_idx, user_idx)
+    work_dir = _edit_workspace()
     try:
+        source = _download_source(reels.url, work_dir)
+        info = _ffprobe_video(source)
+        duration = float(info["duration"])
+        at = float(at_seconds)
+        photo = INSERT_PHOTO_SECONDS
+        if at < 0 or at > duration:
+            raise BadRequestException(f"삽입 시점은 0 ~ 영상 길이({duration:.1f}초) 사이여야 합니다.")
+
+        suffix = Path(image_filename or "").suffix.lower()
+        if suffix not in IMAGE_EXTENSIONS:
+            raise BadRequestException("이미지 파일이 아닙니다 (jpg/png/webp 등).")
+        if not image_bytes:
+            raise BadRequestException("이미지 파일이 비어 있습니다.")
+
+        width, height = int(info["width"]), int(info["height"])
+        fps = str(info["fps"])
+        sample_rate = int(info["sample_rate"])
+        image_path = work_dir / f"insert{suffix}"
+        image_path.write_bytes(image_bytes)
+
+        # 본편을 at 기준으로 나누고(경계에 붙으면 한쪽만) 사이에 사진 클립을 끼운다.
+        eps = 0.05
+        head = at > eps
+        tail = at < duration - eps
+
+        # 사진 클립: 화면을 꽉 채우게 확대 후 중앙 크롭, 본편과 같은 fps/SAR 로 정규화.
+        filters = [
+            f"[1:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},setsar=1,fps={fps},"
+            f"trim=duration={photo:.3f},setpts=PTS-STARTPTS[vp]"
+        ]
+        video_labels: list[str] = []
+        audio_labels: list[str] = []
+        has_audio = bool(info["has_audio"])
+        # concat 은 세그먼트 포맷이 같아야 하므로 오디오는 전부 동일 포맷으로 정규화.
+        aformat = f"aformat=sample_fmts=fltp:sample_rates={sample_rate}:channel_layouts=stereo"
+
+        if head:
+            filters.append(f"[0:v]trim=end={at:.3f},setpts=PTS-STARTPTS[v0]")
+            video_labels.append("[v0]")
+            if has_audio:
+                filters.append(f"[0:a]atrim=end={at:.3f},asetpts=PTS-STARTPTS,{aformat}[a0]")
+                audio_labels.append("[a0]")
+        video_labels.append("[vp]")
+        if has_audio:
+            # 사진 구간은 무음 (anullsrc 입력 [2]).
+            filters.append(f"[2:a]atrim=duration={photo:.3f},{aformat}[ap]")
+            audio_labels.append("[ap]")
+        if tail:
+            filters.append(f"[0:v]trim=start={at:.3f},setpts=PTS-STARTPTS[v1]")
+            video_labels.append("[v1]")
+            if has_audio:
+                filters.append(f"[0:a]atrim=start={at:.3f},asetpts=PTS-STARTPTS,{aformat}[a1]")
+                audio_labels.append("[a1]")
+
+        segment_count = len(video_labels)
+        inputs = [
+            "-i", str(source),
+            "-loop", "1", "-t", f"{photo + 0.5:.3f}", "-i", str(image_path),
+        ]
+        maps = ["-map", "[v]"]
+        audio_args: list[str] = []
+        if has_audio:
+            inputs += ["-f", "lavfi", "-t", f"{photo:.3f}", "-i",
+                       f"anullsrc=r={sample_rate}:cl=stereo"]
+            interleaved = "".join(v + a for v, a in zip(video_labels, audio_labels))
+            filters.append(f"{interleaved}concat=n={segment_count}:v=1:a=1[v][a]")
+            maps += ["-map", "[a]"]
+            audio_args = ["-c:a", "aac", "-b:a", "192k"]
+        else:
+            filters.append(f"{''.join(video_labels)}concat=n={segment_count}:v=1:a=0[v]")
+
+        target = work_dir / "insert.mp4"
+        started = time.perf_counter()
         _run_ffmpeg([
             *inputs,
             "-filter_complex", ";".join(filters),
             *maps, *_EDIT_VIDEO_ARGS, *audio_args,
             str(target),
         ])
+        return _edit_result(db, reels, started, target)
     finally:
-        image_path.unlink(missing_ok=True)
-    return _edit_result(started, target)
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------- #
 # 렌더 작업(job) 관리 — 진행률 조회를 위해 비동기로 돌린다.
 #
-# 렌더 시작 API 는 job_id 를 즉시 반환하고, 렌더 서브프로세스는 데몬 스레드에서
-# stdout 을 한 줄씩 읽으며 진행률을 갱신한다. 클라이언트는 GET /render/{job_id}
-# 로 폴링한다. 레지스트리는 인메모리라 서버 재시작(--reload 포함) 시 사라진다.
+# 렌더 시작 API 는 **렌더 시작 시점에 만들어 둔 릴스의 reels_idx** 를 즉시 반환하고,
+# 렌더 서브프로세스는 데몬 스레드에서 stdout 을 한 줄씩 읽으며 진행률을 갱신한다.
+# 클라이언트는 GET /render/{reels_idx} 로 폴링한다 — 진행률 조회·완료 후 영상
+# 다운로드·편집이 모두 같은 키(reels_idx)로 돈다(별도 job_id 없음).
+#
+# 진행률 레지스트리는 인메모리라 서버 재시작(--reload 포함) 시 사라진다. 그 때는
+# 릴스 행만 보고 상태를 만들어 답한다(_status_from_reels).
 # --------------------------------------------------------------------------- #
-_jobs: dict[str, dict] = {}
+_jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()
 
+# 렌더가 끝나기 전 릴스 행의 url 자리표. url 은 NOT NULL 이라 NULL 을 못 쓴다.
+# 이 값인 행은 "렌더 중"이라 추천 피드에서 빠지고(reels_dao.get_random_reels)
+# 다운로드·편집도 거부한다(_require_ready).
+PENDING_REELS_URL = ""
+
 # job dict 에만 두고 상태 응답(_job_snapshot)에서는 빼는 내부 필드.
-_INTERNAL_JOB_KEYS = ("started_at", "user_idx")
+_INTERNAL_JOB_KEYS = ("started_at", "user_idx", "job_dir")
 
 # render_video.py 가 15프레임마다 찍는 "[perf:frame] 000060/000127 ..." 라인.
 _FRAME_PROGRESS_RE = re.compile(r"\[perf:frame\]\s*(\d+)/(\d+)")
@@ -498,36 +613,38 @@ _POSTPROCESS_MARKS = [
 ]
 
 
-def _validate_render_options(engine: str, theme: str) -> tuple[str, str]:
-    """엔진/테마 옵션을 정규화·검증한다 (400 은 여기서 동기적으로 발생)."""
-    engine = (engine or "local").lower().strip()
-    if engine not in {"local", "modal"}:
-        raise BadRequestException(f"알 수 없는 엔진: {engine}")
+def _validate_render_options(theme: str) -> str:
+    """테마 옵션을 정규화·검증한다 (400 은 여기서 동기적으로 발생)."""
     theme = (theme or "default").lower().strip()
     if theme not in ALLOWED_THEMES:
         raise BadRequestException(f"알 수 없는 테마: {theme}")
-    return engine, theme
+    return theme
 
 
 def _spawn_render_job(
+    db: Session,
     travel_data_path: Path,
     bgm_path: Path | None,
-    quick: bool,
-    engine: str,
     theme: str,
     user_idx: int,
 ) -> dict[str, object]:
-    """렌더 서브프로세스를 백그라운드 스레드로 띄우고 job 상태를 반환한다.
+    """릴스 행을 먼저 등록하고, 렌더 서브프로세스를 백그라운드 스레드로 띄운다.
 
-    렌더 완료 후 결과 영상을 GCS 버킷(reels/)에 올리고 reels 테이블에
-    user_idx(렌더 요청자)를 작성자로 매핑해 등록한다.
+    릴스는 url 이 PENDING_REELS_URL 인 "렌더 중" 상태로 먼저 만들어지고, 그
+    reels_idx 가 곧 진행률 조회 키다(작성자는 렌더 요청자 user_idx). 렌더가 끝나면
+    결과 영상을 GCS 버킷(reels/)에 올려 url 을 채우고, 실패하면 그 행을 DB 에서
+    지운다(_discard_pending_reels) — 영상 없는 릴스가 남지 않게.
     """
-    command, marker = _build_command(travel_data_path, engine, quick, theme)
+    reels = reels_dao.create(db, user_idx=user_idx, url=PENDING_REELS_URL, title=None)
+    db.commit()
+
+    command = _build_command(travel_data_path, theme)
     job = {
         "user_idx": user_idx,
-        "reels_idx": None,
+        # 렌더 입력(업로드 사진·travel_data.json)이 담긴 디렉터리 — 끝나면 지운다.
+        "job_dir": str(travel_data_path.parent),
+        "reels_idx": reels.reels_idx,
         "reels_url": None,
-        "job_id": uuid.uuid4().hex[:12],
         "status": "running",
         "phase": "렌더 준비 중",
         "percent": 0.0,
@@ -536,7 +653,7 @@ def _spawn_render_job(
         "started_at": time.time(),
         "elapsed_seconds": 0.0,
         "eta_seconds": None,
-        "engine": engine,
+        "engine": "modal",
         "theme": theme,
         "bgm": bgm_path.name if bgm_path else None,
         "video_url": None,
@@ -544,9 +661,9 @@ def _spawn_render_job(
         "log_tail": "",
     }
     with _jobs_lock:
-        _jobs[job["job_id"]] = job
+        _jobs[job["reels_idx"]] = job
     threading.Thread(
-        target=_run_render_job, args=(job, command, marker), daemon=True
+        target=_run_render_job, args=(job, command), daemon=True
     ).start()
     return _job_snapshot(job)
 
@@ -680,12 +797,11 @@ def _write_travel_data(
 
 
 def start_render_photos_only(
+    db: Session,
     photos: list[tuple[str, bytes]],
     *,
     user_idx: int,
     bgm: str = "",
-    quick: bool = False,
-    engine: str = "local",
     theme: str = "default",
     start_name: str = "",
     start_latitude: float | None = None,
@@ -694,8 +810,9 @@ def start_render_photos_only(
 ) -> dict[str, object]:
     """사진들의 EXIF(GPS·촬영시각)만으로 여행 경로 영상 렌더링을 시작한다.
 
-    렌더 완료 후 자동 등록되는 릴스 행의 작성자는 user_idx(JWT 인증 사용자)로
-    매핑한다.
+    시작과 동시에 작성자가 user_idx(JWT 인증 사용자)인 릴스 행이 "렌더 중" 상태로
+    만들어지고, 그 reels_idx 로 진행률을 조회한다(렌더가 끝나면 같은 행의 url 이
+    채워진다).
 
     sort_by_time=True(기본)면 촬영 시각 순으로, False 면 촬영 시각을 무시하고
     업로드한 순서 그대로(사용자 지정 순서) 지점을 이동하며 각 지점에서 해당
@@ -707,7 +824,7 @@ def start_render_photos_only(
     start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 삼아
     첫 사진 지점으로 이동하며 시작한다 (출발지에서는 사진 없이 라벨만 표시).
     """
-    engine, theme = _validate_render_options(engine, theme)
+    theme = _validate_render_options(theme)
 
     # 시작 위치 검증 — 위도/경도는 함께 와야 한다.
     if (start_latitude is None) != (start_longitude is None):
@@ -765,7 +882,7 @@ def start_render_photos_only(
         raise BadRequestException("사진들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
-    return _spawn_render_job(travel_data_path, bgm_path, quick, engine, theme, user_idx)
+    return _spawn_render_job(db, travel_data_path, bgm_path, theme, user_idx)
 
 
 # --------------------------------------------------------------------------- #
@@ -794,8 +911,6 @@ def start_render_travel(
     travel_idx: int,
     *,
     bgm: str = "",
-    quick: bool = False,
-    engine: str = "local",
     theme: str = "default",
 ) -> dict[str, object]:
     """저장된 여행(travel)의 일정·첨부 이미지만으로 여행 경로 영상 렌더링을 시작한다.
@@ -804,10 +919,10 @@ def start_render_travel(
     첨부된 travel_image 이미지들을 해당 지점에서 보여준다. 직전 지점 기준
     PHOTO_CLUSTER_KM(1km) 미만인 연속 스케줄은 별도 지점 없이 직전 지점에 사진만
     합친다(기차 일정은 출발역 좌표가 경유 지점이 된다). 본인 여행이 아니거나 없으면
-    404. 이미지 다운로드 실패는 건너뛰며, 렌더 완료 후 결과 영상은 reels 로 자동
-    등록되고 요청자(user_idx)와 매핑된다.
+    404. 이미지 다운로드 실패는 건너뛴다. 시작과 동시에 요청자(user_idx)의 릴스 행이
+    "렌더 중" 상태로 만들어지고, 그 reels_idx 로 진행률을 조회한다.
     """
-    engine, theme = _validate_render_options(engine, theme)
+    theme = _validate_render_options(theme)
 
     travel = travel_dao.get_by_idx(db, travel_idx)
     if travel is None or travel.user_idx != user.user_idx:
@@ -847,16 +962,47 @@ def start_render_travel(
         raise BadRequestException("일정 지점이 2개 이상이어야 이동 경로를 만들 수 있습니다.")
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
-    return _spawn_render_job(travel_data_path, bgm_path, quick, engine, theme, user.user_idx)
+    return _spawn_render_job(db, travel_data_path, bgm_path, theme, user.user_idx)
 
 
-def get_render_job(job_id: str) -> dict[str, object]:
-    """렌더 작업의 현재 상태를 반환한다 (진행률·경과·예상 남은 시간 포함)."""
+def get_render_job(db: Session, reels_idx: int, user_idx: int) -> dict[str, object]:
+    """본인 릴스의 렌더 상태를 반환한다 (진행률·경과·예상 남은 시간 포함).
+
+    인메모리 레지스트리를 먼저 본다 — 렌더가 실패하면 자리표 릴스 행이 삭제되므로
+    행부터 찾으면 실패 사유 대신 404 가 나가버린다. 레지스트리에 없으면(서버 재시작
+    등) 릴스 행만 보고 만든 상태를 돌려준다. 본인 릴스가 아니거나 없으면 404.
+    """
     with _jobs_lock:
-        job = _jobs.get(job_id)
-    if job is None:
-        raise NotFoundException("렌더 작업을 찾을 수 없습니다.")
-    return _job_snapshot(job)
+        job = _jobs.get(reels_idx)
+    if job is not None and job["user_idx"] == user_idx:
+        return _job_snapshot(job)
+    return _status_from_reels(_load_own_reels(db, reels_idx, user_idx))
+
+
+def _status_from_reels(reels) -> dict[str, object]:
+    """인메모리 진행 정보가 없을 때 릴스 행만으로 만든 상태 응답.
+
+    url 이 채워져 있으면 렌더가 끝난 릴스이고, 비어 있으면 렌더 중이던 작업의
+    진행 정보를 서버 재시작으로 잃은 것이다(status=unknown).
+    """
+    done = bool(reels.url)
+    return {
+        "reels_idx": reels.reels_idx,
+        "status": "done" if done else "unknown",
+        "phase": "완료" if done else "진행 상태 없음",
+        "percent": 100.0 if done else 0.0,
+        "frame": 0,
+        "total_frames": None,
+        "elapsed_seconds": 0.0,
+        "eta_seconds": 0.0 if done else None,
+        "engine": "modal",
+        "theme": "",
+        "bgm": None,
+        "video_url": reels.url or None,
+        "reels_url": reels.url or None,
+        "error": None if done else "렌더 진행 상태를 알 수 없습니다 (서버가 재시작되었을 수 있습니다).",
+        "log_tail": "",
+    }
 
 
 def _job_snapshot(job: dict) -> dict[str, object]:
@@ -873,8 +1019,30 @@ def _job_snapshot(job: dict) -> dict[str, object]:
     return snapshot
 
 
-def _run_render_job(job: dict, command: list[str], marker: str) -> None:
-    """렌더 서브프로세스를 돌리며 stdout 마커로 job 진행률을 갱신한다 (스레드)."""
+def _run_render_job(job: dict, command: list[str]) -> None:
+    """렌더를 돌리고, 끝나면 입력 디렉터리·미완성 릴스를 정리한다 (스레드 진입점).
+
+    성공·실패·예외 어느 쪽이든 uploads/<job> 를 지운다. 안 지우면 업로드된
+    원본 사진이 계속 쌓여 디스크가 찬다(렌더 산출물과 같은 이유). 끝내 done 이
+    되지 못했으면 시작할 때 만들어 둔 릴스 행도 소프트 삭제한다 — 영상 없는
+    자리표 행이 DB 에 남지 않게.
+    """
+    try:
+        _render_job(job, command)
+    except Exception as error:  # 예상 못 한 예외도 job 상태에 남긴다
+        logger.exception("렌더 작업 처리 중 오류 (reels_idx=%s)", job.get("reels_idx"))
+        with _jobs_lock:
+            job.update(status="failed", error=f"렌더 처리 중 오류: {error}")
+    finally:
+        job_dir = job.get("job_dir")
+        if job_dir:
+            shutil.rmtree(job_dir, ignore_errors=True)
+        if job.get("status") != "done":
+            _discard_pending_reels(job["reels_idx"])
+
+
+def _render_job(job: dict, command: list[str]) -> None:
+    """렌더 서브프로세스를 돌리며 stdout 마커로 job 진행률을 갱신한다."""
 
     def update(**fields) -> None:
         with _jobs_lock:
@@ -957,7 +1125,7 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
         )
         return
 
-    output_name = _parse_output_name(stdout, marker)
+    output_name = _parse_output_name(stdout)
     if output_name is None:
         update(
             status="failed",
@@ -968,45 +1136,91 @@ def _run_render_job(job: dict, command: list[str], marker: str) -> None:
         return
 
     log_tail = stdout[-2000:]
-    reels_fields: dict[str, object] = {}
-    update(percent=99.0, phase="릴스 등록(버킷 업로드)")
+    update(percent=99.0, phase="영상 업로드(버킷)")
+    video_path = OUTPUT_DIR / output_name
     try:
-        reels_fields = _register_render_as_reels(
-            OUTPUT_DIR / output_name, user_idx=job["user_idx"]
+        video_url = _publish_reels_video(job["reels_idx"], video_path)
+        # GCS 에 올라갔으므로 로컬 사본은 지운다. 안 지우면 output/ 이 무한히
+        # 쌓여 디스크가 찬다(영상 1편이 수십 MB). 실패 시엔 남겨서 받을 수 있게 둔다.
+        video_path.unlink(missing_ok=True)
+    except Exception as error:
+        # 영상은 만들었지만 내려줄 방법이 없다(URL 없음) → 실패로 처리해서
+        # 자리표 릴스 행이 정리되게 한다. mp4 는 서버에 남겨 회수할 수 있게 둔다.
+        logger.exception("렌더 결과 업로드 실패: %s", output_name)
+        update(
+            status="failed",
+            error=f"영상 저장에 실패했습니다: {error}",
+            elapsed_seconds=round(time.time() - job["started_at"], 1),
+            log_tail=log_tail + f"\n[warn] 영상은 서버에 보존: output/{output_name}",
         )
-    except Exception as error:  # 릴스 등록 실패해도 렌더 자체는 성공으로 처리
-        logger.exception("렌더 결과 릴스 등록 실패: %s", output_name)
-        log_tail += f"\n[warn] 릴스 등록 실패: {error}"
+        return
 
     update(
         status="done",
         phase="완료",
         percent=100.0,
-        video_url=f"/api/videos/output/{output_name}",
+        video_url=video_url,
+        reels_url=video_url,
         elapsed_seconds=round(time.time() - job["started_at"], 1),
         eta_seconds=0.0,
         log_tail=log_tail,
-        **reels_fields,
     )
 
 
-def _register_render_as_reels(video_path: Path, user_idx: int) -> dict[str, object]:
-    """완성 영상을 GCS 버킷(reels/)에 올리고 reels 행을 등록한다.
+def _publish_reels_video(reels_idx: int, video_path: Path) -> str:
+    """완성 영상을 GCS 버킷(reels/)에 올리고 대기 중인 릴스의 url 을 채운다 → 공개 URL.
 
-    작성자는 렌더 요청 시 JWT 에서 뽑은 user_idx 로 매핑한다 (무작위 추천에서
-    프로필 사진을 붙이는 근거).
+    행은 렌더 시작 때 이미 만들어져 있으므로(작성자 매핑도 그 때 끝) 여기서는
+    url 만 채운다. 렌더 스레드에서 도므로 요청 세션이 아닌 새 세션을 쓴다.
     """
     from databases.database import SessionLocal
 
     url = gcs.upload_file(f"reels/{uuid.uuid4().hex}.mp4", video_path, "video/mp4")
     db = SessionLocal()
     try:
-        row = reels_dao.create(db, user_idx=user_idx, url=url, title=None)
+        reels = reels_dao.get_by_idx(db, reels_idx)
+        if reels is None:
+            raise NotFoundException(f"릴스(reels_idx={reels_idx})가 사라졌습니다.")
+        reels_dao.update_url(db, reels, url)
         db.commit()
-        return {"reels_idx": row.reels_idx, "reels_url": url}
+        return url
     except Exception:
         db.rollback()
         gcs.delete_object(gcs.object_path_from_url(url) or url)  # 고아 객체 정리
         raise
+    finally:
+        db.close()
+
+
+def _discard_pending_reels(reels_idx: int) -> None:
+    """렌더가 끝내 완료되지 못했을 때 자리표 릴스 행을 DB 에서 삭제한다.
+
+    영상이 없는 자리표 행은 사용자 컨텐츠가 아니라 reels_idx 를 미리 발급하려고
+    만든 행이라 흔적을 남기지 않고 하드 삭제한다(소프트 삭제 불변식의 의도적 예외).
+    누군가 렌더 중인 릴스에 댓글·좋아요를 남겨 FK 가 걸리면 지울 수 없으니 그 때만
+    소프트 삭제로 물러선다. 이미 url 이 채워졌다면(완료 후 다른 이유로 실패 처리된
+    경우) 손대지 않는다. 정리에 실패해도 렌더 결과 보고에는 영향이 없어 로그만 남긴다.
+    """
+    from databases.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        reels = reels_dao.get_by_idx(db, reels_idx)
+        if reels is None or reels.url:
+            return
+        try:
+            reels_dao.hard_delete(db, reels)
+            db.commit()
+            return
+        except IntegrityError:  # 댓글·좋아요가 참조 중 → 행을 못 지운다
+            db.rollback()
+        reels = reels_dao.get_by_idx(db, reels_idx)
+        if reels is not None and not reels.url:
+            reels_dao.soft_delete(db, reels)
+            db.commit()
+            logger.info("자리표 릴스 하드 삭제 불가(참조 존재) → 소프트 삭제: reels_idx=%s", reels_idx)
+    except Exception:
+        db.rollback()
+        logger.warning("미완성 릴스 정리 실패(무시): reels_idx=%s", reels_idx)
     finally:
         db.close()
