@@ -84,19 +84,18 @@ def get_output_video(name: str) -> FileResponse:
     summary="사진만으로 영상 렌더링 시작 (여행 ID 없이)",
     description="여행 ID나 좌표 입력 없이, 업로드한 사진들의 EXIF 메타데이터에서 GPS 좌표와 "
                 "촬영 시각을 추출해 촬영 시각 순서대로 지점을 이동하며 각 지점에서 해당 사진을 "
-                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률은 "
-                "GET /api/videos/render/{job_id} 로 폴링). "
+                "보여주는 영상 렌더링을 시작하고 reels_idx 를 즉시 반환합니다(진행률은 "
+                "GET /api/videos/render/{reels_idx} 로 폴링). 릴스 행은 렌더 시작 시점에 "
+                "로그인 사용자(user_idx)와 연결해 미리 만들어지고(영상이 없는 동안은 추천 "
+                "피드에 뜨지 않음), 렌더가 끝나면 그 행의 url 에 GCS 영상 주소가 채워집니다. "
+                "렌더에 실패하면 그 릴스 행은 삭제됩니다. "
                 "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
                 "GPS 없는 사진은 자동 제외됩니다. 지점 기준 1km 미만인 연속 사진들은 카메라 "
                 "이동 없이 첫 사진 위치에 고정해 순서대로 보여주고, 1km 이상 떨어진 사진이 "
                 "나오면 그 위치로 이동합니다. start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 "
                 "삼아 첫 사진 지점으로 이동하며 시작합니다. 조건을 못 채우면 400을 반환합니다. "
-                "영상 앞뒤에는 TRAILER 인트로·아웃트로가 항상 붙습니다. "
-                "렌더가 끝나면 완성 영상이 GCS 버킷에 올라가고 reels 테이블에 로그인 "
-                "사용자(user_idx)와 연결되어 자동 등록되며(여행 연결은 없음), 상태 응답의 "
-                "reels_idx/reels_url 로 확인할 수 있습니다. JWT 인증이 필요하며 토큰이 "
-                "없거나 유효하지 않으면 "
-                "401을 반환합니다.",
+                "영상 앞뒤에는 TRAILER 인트로·아웃트로가 항상 붙습니다. JWT 인증이 필요하며 "
+                "토큰이 없거나 유효하지 않으면 401을 반환합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
 def render_video_photos_only(
@@ -106,9 +105,11 @@ def render_video_photos_only(
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
     photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장)"),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     job = video_service.start_render_photos_only(
+        db,
         photos=_photo_payloads(photos),
         user_idx=current_user.user_idx,
         bgm=bgm,
@@ -125,18 +126,18 @@ def render_video_photos_only(
     summary="사진 순서 지정 영상 렌더링 시작 (업로드 순서대로)",
     description="POST /render/photos-only 와 같지만 촬영 시각을 무시하고, 업로드한 사진 "
                 "순서 그대로(사용자가 지정한 순서) 지점을 이동하며 각 지점에서 해당 사진을 "
-                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률은 "
-                "GET /api/videos/render/{job_id} 로 폴링). EXIF 에서는 GPS 좌표만 사용합니다. "
+                "보여주는 영상 렌더링을 시작하고 reels_idx 를 즉시 반환합니다(진행률은 "
+                "GET /api/videos/render/{reels_idx} 로 폴링). EXIF 에서는 GPS 좌표만 사용합니다. "
                 "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
                 "GPS 없는 사진은 자동 제외되어 순서에서 빠집니다. 직전 지점 기준 1km 미만인 "
                 "연속 사진들은 카메라 이동 없이 그 지점에 고정해 순서대로 보여주고, 1km 이상 "
                 "떨어진 사진이 나오면 그 위치로 이동합니다. start_latitude/longitude 를 주면 "
                 "그 위치(예: 서울역)를 출발지로 삼아 첫 사진 지점으로 이동하며 시작합니다. "
                 "조건을 못 채우면 400을 반환합니다. 영상 앞뒤에는 TRAILER 인트로·아웃트로가 "
-                "항상 붙습니다. 렌더가 끝나면 완성 영상이 GCS 버킷에 "
-                "올라가고 reels 테이블에 로그인 사용자(user_idx)와 연결되어 자동 등록되며, "
-                "상태 응답의 reels_idx/reels_url 로 확인할 수 있습니다. JWT 인증이 필요하며 "
-                "토큰이 없거나 유효하지 않으면 401을 반환합니다.",
+                "항상 붙습니다. 릴스 행은 렌더 시작 시점에 로그인 사용자(user_idx)와 연결해 "
+                "미리 만들어지고, 렌더가 끝나면 그 행의 url 에 GCS 영상 주소가 채워집니다"
+                "(실패 시 릴스 행 삭제). JWT 인증이 필요하며 토큰이 없거나 유효하지 않으면 "
+                "401을 반환합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
 def render_video_photos_ordered(
@@ -146,9 +147,11 @@ def render_video_photos_ordered(
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
     photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장) — 보낸 순서가 곧 영상 순서"),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     job = video_service.start_render_photos_only(
+        db,
         photos=_photo_payloads(photos),
         user_idx=current_user.user_idx,
         bgm=bgm,
@@ -167,15 +170,16 @@ def render_video_photos_ordered(
     description="저장된 여행(travel_idx)의 일정(schedule)을 타임라인 순(day_no, sequence)으로 "
                 "따라가며 각 일정의 좌표로 이동 경로를 만들고, 일정에 첨부된 여행 "
                 "이미지(travel_image)를 해당 지점에서 보여주는 영상 렌더링을 시작하고 "
-                "job_id 를 즉시 반환합니다(진행률은 GET /api/videos/render/{job_id} 로 폴링). 직전 지점 "
+                "reels_idx 를 즉시 반환합니다(진행률은 GET /api/videos/render/{reels_idx} 로 "
+                "폴링). 직전 지점 "
                 "기준 1km 미만인 연속 일정은 별도 지점 없이 한 지점으로 묶여 사진만 이어서 "
                 "나오고, 기차 일정은 출발역 좌표가 경유 지점이 됩니다. 이미지 다운로드에 "
                 "실패한 이미지는 건너뜁니다. 본인 여행이 아니거나 없으면 404, 여행에 일정이 "
                 "없거나 지점이 2개 미만이면 400을 반환합니다. 영상 앞뒤에는 TRAILER "
-                "인트로·아웃트로가 항상 붙습니다. 렌더가 끝나면 완성 영상이 GCS 버킷에 "
-                "올라가고 reels 테이블에 로그인 사용자(user_idx)와 연결되어 자동 등록되며, "
-                "상태 응답의 reels_idx/reels_url 로 확인할 수 있습니다. JWT 인증이 필요하며 "
-                "토큰이 없거나 유효하지 않으면 401을 반환합니다.",
+                "인트로·아웃트로가 항상 붙습니다. 릴스 행은 렌더 시작 시점에 로그인 "
+                "사용자(user_idx)와 연결해 미리 만들어지고, 렌더가 끝나면 그 행의 url 에 GCS "
+                "영상 주소가 채워집니다(실패 시 릴스 행 삭제). JWT 인증이 필요하며 토큰이 "
+                "없거나 유효하지 않으면 401을 반환합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
 def render_video_from_travel(
@@ -257,14 +261,21 @@ def insert_image_clip(
 
 
 @router.get(
-    "/render/{job_id}",
-    summary="영상 렌더링 진행률 조회",
-    description="렌더 작업의 진행률(percent), 현재 단계, 경과/예상 남은 시간을 반환합니다. "
-                "status 가 done 이면 video_url 로 영상을 받을 수 있고, failed 면 error 에 "
-                "사유가 담깁니다. 존재하지 않는 job_id 면 404를 반환합니다. "
-                "작업 목록은 서버 메모리에만 유지되므로 서버 재시작 시 사라집니다.",
+    "/render/{reels_idx}",
+    summary="영상 렌더링 진행률 조회 (reels_idx)",
+    description="렌더 시작 응답으로 받은 reels_idx 로 진행률(percent), 현재 단계, 경과/예상 "
+                "남은 시간을 조회합니다. status 가 done 이면 video_url(=reels_url)로 영상을 "
+                "받을 수 있고, failed 면 error 에 사유가 담기며 그 릴스 행은 삭제됩니다. "
+                "진행 정보는 서버 메모리에만 유지되므로 렌더 도중 서버가 재시작되면 "
+                "status=unknown 으로 응답합니다(완료된 릴스는 재시작 후에도 done). 본인 "
+                "릴스가 아니거나 없으면 404. JWT 인증이 필요하며 토큰이 없거나 유효하지 "
+                "않으면 401을 반환합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
-def get_render_status(job_id: str):
-    status = video_service.get_render_job(job_id)
+def get_render_status(
+    reels_idx: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    status = video_service.get_render_job(db, reels_idx, current_user.user_idx)
     return CommonResponse.success_response("렌더링 상태 조회 성공", data=status)

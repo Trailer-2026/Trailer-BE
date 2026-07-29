@@ -21,6 +21,32 @@ def create(db: Session, *, user_idx: int | None, url: str, title: str | None) ->
     return reels
 
 
+def update_url(db: Session, reels: Reels, url: str) -> Reels:
+    """릴스 영상 URL 교체 (렌더 완료·편집본 갱신, flush만 — commit은 서비스가)."""
+    reels.url = url
+    db.flush()
+    return reels
+
+
+def soft_delete(db: Session, reels: Reels) -> None:
+    """릴스 소프트 삭제 (flush만 — commit은 서비스가)."""
+    reels.deleted_at = func.now()
+    db.flush()
+
+
+def hard_delete(db: Session, reels: Reels) -> None:
+    """릴스 행을 실제로 지운다 (flush만 — commit은 서비스가).
+
+    렌더 실패로 영상이 끝내 없는 자리표 행 전용이다 — 사용자 컨텐츠가 아니라
+    렌더 시작 때 PK 를 발급하려고 미리 만든 행이라 흔적을 남길 이유가 없다
+    (소프트 삭제 불변식의 의도적 예외, station·train_stop 과 같은 성격).
+    comment/like 가 그 릴스를 참조하고 있으면 FK 위반으로 실패하므로 호출부에서
+    소프트 삭제로 물러설 것.
+    """
+    db.delete(reels)
+    db.flush()
+
+
 def get_random_reels(
     db: Session, count: int, exclude_idxs: list[int]
 ) -> list[tuple[Reels, str | None, str | None]]:
@@ -28,6 +54,7 @@ def get_random_reels(
 
     작성자 없는(사진만 렌더 시절)·탈퇴한 작성자의 릴스도 나오도록 User 는 outer join —
     그런 릴스는 닉네임·프로필이 None (탈퇴 조건은 ON 절에 둬야 릴스가 통째로 빠지지 않는다).
+    url 이 빈 문자열인 행은 렌더가 아직 안 끝난 자리표라 피드에서 제외한다.
     """
     query = (
         db.query(Reels, User.nickname, User.profile_image)
@@ -35,7 +62,7 @@ def get_random_reels(
             User,
             (User.user_idx == Reels.user_idx) & User.deleted_at.is_(None),
         )
-        .filter(Reels.deleted_at.is_(None))
+        .filter(Reels.deleted_at.is_(None), Reels.url != "")
     )
     if exclude_idxs:
         query = query.filter(Reels.reels_idx.notin_(exclude_idxs))

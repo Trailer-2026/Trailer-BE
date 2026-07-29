@@ -35,6 +35,7 @@ from pathlib import Path
 
 import requests
 from PIL import Image
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import Config
@@ -80,6 +81,18 @@ def get_output_path(name: str) -> Path:
     if candidate.parent != OUTPUT_DIR.resolve() or not candidate.is_file():
         raise NotFoundException("영상을 찾을 수 없습니다.")
     return candidate
+
+
+def _load_own_reels(db: Session, reels_idx: int, user_idx: int):
+    """본인 릴스를 조회한다 (진행률·다운로드·편집 공용). 없거나 남의 릴스면 404.
+
+    남의 릴스는 403 이 아니라 404 로 답한다 — 존재 여부 자체를 알리지 않는다.
+    렌더가 아직 안 끝난 행도 그대로 돌려준다(진행률 조회가 그 행을 봐야 한다).
+    """
+    reels = reels_dao.get_by_idx(db, reels_idx)
+    if reels is None or reels.user_idx != user_idx:
+        raise NotFoundException("릴스를 찾을 수 없습니다.")
+    return reels
 
 
 # --------------------------------------------------------------------------- #
@@ -486,12 +499,21 @@ def insert_image(
 # --------------------------------------------------------------------------- #
 # 렌더 작업(job) 관리 — 진행률 조회를 위해 비동기로 돌린다.
 #
-# 렌더 시작 API 는 job_id 를 즉시 반환하고, 렌더 서브프로세스는 데몬 스레드에서
-# stdout 을 한 줄씩 읽으며 진행률을 갱신한다. 클라이언트는 GET /render/{job_id}
-# 로 폴링한다. 레지스트리는 인메모리라 서버 재시작(--reload 포함) 시 사라진다.
+# 렌더 시작 API 는 **렌더 시작 시점에 만들어 둔 릴스의 reels_idx** 를 즉시 반환하고,
+# 렌더 서브프로세스는 데몬 스레드에서 stdout 을 한 줄씩 읽으며 진행률을 갱신한다.
+# 클라이언트는 GET /render/{reels_idx} 로 폴링한다 — 진행률 조회·완료 후 영상
+# 다운로드·편집이 모두 같은 키(reels_idx)로 돈다(별도 job_id 없음).
+#
+# 진행률 레지스트리는 인메모리라 서버 재시작(--reload 포함) 시 사라진다. 그 때는
+# 릴스 행만 보고 상태를 만들어 답한다(_status_from_reels).
 # --------------------------------------------------------------------------- #
-_jobs: dict[str, dict] = {}
+_jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()
+
+# 렌더가 끝나기 전 릴스 행의 url 자리표. url 은 NOT NULL 이라 NULL 을 못 쓴다.
+# 이 값인 행은 "렌더 중"이라 추천 피드에서 빠지고(reels_dao.get_random_reels)
+# 다운로드·편집도 거부한다(_require_ready).
+PENDING_REELS_URL = ""
 
 # job dict 에만 두고 상태 응답(_job_snapshot)에서는 빼는 내부 필드.
 _INTERNAL_JOB_KEYS = ("started_at", "user_idx", "job_dir")
@@ -516,24 +538,29 @@ def _validate_render_options(theme: str) -> str:
 
 
 def _spawn_render_job(
+    db: Session,
     travel_data_path: Path,
     bgm_path: Path | None,
     theme: str,
     user_idx: int,
 ) -> dict[str, object]:
-    """렌더 서브프로세스를 백그라운드 스레드로 띄우고 job 상태를 반환한다.
+    """릴스 행을 먼저 등록하고, 렌더 서브프로세스를 백그라운드 스레드로 띄운다.
 
-    렌더 완료 후 결과 영상을 GCS 버킷(reels/)에 올리고 reels 테이블에
-    user_idx(렌더 요청자)를 작성자로 매핑해 등록한다.
+    릴스는 url 이 PENDING_REELS_URL 인 "렌더 중" 상태로 먼저 만들어지고, 그
+    reels_idx 가 곧 진행률 조회 키다(작성자는 렌더 요청자 user_idx). 렌더가 끝나면
+    결과 영상을 GCS 버킷(reels/)에 올려 url 을 채우고, 실패하면 그 행을 DB 에서
+    지운다(_discard_pending_reels) — 영상 없는 릴스가 남지 않게.
     """
+    reels = reels_dao.create(db, user_idx=user_idx, url=PENDING_REELS_URL, title=None)
+    db.commit()
+
     command = _build_command(travel_data_path, theme)
     job = {
         "user_idx": user_idx,
         # 렌더 입력(업로드 사진·travel_data.json)이 담긴 디렉터리 — 끝나면 지운다.
         "job_dir": str(travel_data_path.parent),
-        "reels_idx": None,
+        "reels_idx": reels.reels_idx,
         "reels_url": None,
-        "job_id": uuid.uuid4().hex[:12],
         "status": "running",
         "phase": "렌더 준비 중",
         "percent": 0.0,
@@ -550,7 +577,7 @@ def _spawn_render_job(
         "log_tail": "",
     }
     with _jobs_lock:
-        _jobs[job["job_id"]] = job
+        _jobs[job["reels_idx"]] = job
     threading.Thread(
         target=_run_render_job, args=(job, command), daemon=True
     ).start()
@@ -686,6 +713,7 @@ def _write_travel_data(
 
 
 def start_render_photos_only(
+    db: Session,
     photos: list[tuple[str, bytes]],
     *,
     user_idx: int,
@@ -698,8 +726,9 @@ def start_render_photos_only(
 ) -> dict[str, object]:
     """사진들의 EXIF(GPS·촬영시각)만으로 여행 경로 영상 렌더링을 시작한다.
 
-    렌더 완료 후 자동 등록되는 릴스 행의 작성자는 user_idx(JWT 인증 사용자)로
-    매핑한다.
+    시작과 동시에 작성자가 user_idx(JWT 인증 사용자)인 릴스 행이 "렌더 중" 상태로
+    만들어지고, 그 reels_idx 로 진행률을 조회한다(렌더가 끝나면 같은 행의 url 이
+    채워진다).
 
     sort_by_time=True(기본)면 촬영 시각 순으로, False 면 촬영 시각을 무시하고
     업로드한 순서 그대로(사용자 지정 순서) 지점을 이동하며 각 지점에서 해당
@@ -769,7 +798,7 @@ def start_render_photos_only(
         raise BadRequestException("사진들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
-    return _spawn_render_job(travel_data_path, bgm_path, theme, user_idx)
+    return _spawn_render_job(db, travel_data_path, bgm_path, theme, user_idx)
 
 
 # --------------------------------------------------------------------------- #
@@ -806,8 +835,8 @@ def start_render_travel(
     첨부된 travel_image 이미지들을 해당 지점에서 보여준다. 직전 지점 기준
     PHOTO_CLUSTER_KM(1km) 미만인 연속 스케줄은 별도 지점 없이 직전 지점에 사진만
     합친다(기차 일정은 출발역 좌표가 경유 지점이 된다). 본인 여행이 아니거나 없으면
-    404. 이미지 다운로드 실패는 건너뛰며, 렌더 완료 후 결과 영상은 reels 로 자동
-    등록되고 요청자(user_idx)와 매핑된다.
+    404. 이미지 다운로드 실패는 건너뛴다. 시작과 동시에 요청자(user_idx)의 릴스 행이
+    "렌더 중" 상태로 만들어지고, 그 reels_idx 로 진행률을 조회한다.
     """
     theme = _validate_render_options(theme)
 
@@ -849,16 +878,47 @@ def start_render_travel(
         raise BadRequestException("일정 지점이 2개 이상이어야 이동 경로를 만들 수 있습니다.")
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
-    return _spawn_render_job(travel_data_path, bgm_path, theme, user.user_idx)
+    return _spawn_render_job(db, travel_data_path, bgm_path, theme, user.user_idx)
 
 
-def get_render_job(job_id: str) -> dict[str, object]:
-    """렌더 작업의 현재 상태를 반환한다 (진행률·경과·예상 남은 시간 포함)."""
+def get_render_job(db: Session, reels_idx: int, user_idx: int) -> dict[str, object]:
+    """본인 릴스의 렌더 상태를 반환한다 (진행률·경과·예상 남은 시간 포함).
+
+    인메모리 레지스트리를 먼저 본다 — 렌더가 실패하면 자리표 릴스 행이 삭제되므로
+    행부터 찾으면 실패 사유 대신 404 가 나가버린다. 레지스트리에 없으면(서버 재시작
+    등) 릴스 행만 보고 만든 상태를 돌려준다. 본인 릴스가 아니거나 없으면 404.
+    """
     with _jobs_lock:
-        job = _jobs.get(job_id)
-    if job is None:
-        raise NotFoundException("렌더 작업을 찾을 수 없습니다.")
-    return _job_snapshot(job)
+        job = _jobs.get(reels_idx)
+    if job is not None and job["user_idx"] == user_idx:
+        return _job_snapshot(job)
+    return _status_from_reels(_load_own_reels(db, reels_idx, user_idx))
+
+
+def _status_from_reels(reels) -> dict[str, object]:
+    """인메모리 진행 정보가 없을 때 릴스 행만으로 만든 상태 응답.
+
+    url 이 채워져 있으면 렌더가 끝난 릴스이고, 비어 있으면 렌더 중이던 작업의
+    진행 정보를 서버 재시작으로 잃은 것이다(status=unknown).
+    """
+    done = bool(reels.url)
+    return {
+        "reels_idx": reels.reels_idx,
+        "status": "done" if done else "unknown",
+        "phase": "완료" if done else "진행 상태 없음",
+        "percent": 100.0 if done else 0.0,
+        "frame": 0,
+        "total_frames": None,
+        "elapsed_seconds": 0.0,
+        "eta_seconds": 0.0 if done else None,
+        "engine": "modal",
+        "theme": "",
+        "bgm": None,
+        "video_url": reels.url or None,
+        "reels_url": reels.url or None,
+        "error": None if done else "렌더 진행 상태를 알 수 없습니다 (서버가 재시작되었을 수 있습니다).",
+        "log_tail": "",
+    }
 
 
 def _job_snapshot(job: dict) -> dict[str, object]:
@@ -876,17 +936,25 @@ def _job_snapshot(job: dict) -> dict[str, object]:
 
 
 def _run_render_job(job: dict, command: list[str]) -> None:
-    """렌더를 돌리고, 끝나면 입력 디렉터리를 정리한다 (스레드 진입점).
+    """렌더를 돌리고, 끝나면 입력 디렉터리·미완성 릴스를 정리한다 (스레드 진입점).
 
     성공·실패·예외 어느 쪽이든 uploads/<job> 를 지운다. 안 지우면 업로드된
-    원본 사진이 계속 쌓여 디스크가 찬다(렌더 산출물과 같은 이유).
+    원본 사진이 계속 쌓여 디스크가 찬다(렌더 산출물과 같은 이유). 끝내 done 이
+    되지 못했으면 시작할 때 만들어 둔 릴스 행도 소프트 삭제한다 — 영상 없는
+    자리표 행이 DB 에 남지 않게.
     """
     try:
         _render_job(job, command)
+    except Exception as error:  # 예상 못 한 예외도 job 상태에 남긴다
+        logger.exception("렌더 작업 처리 중 오류 (reels_idx=%s)", job.get("reels_idx"))
+        with _jobs_lock:
+            job.update(status="failed", error=f"렌더 처리 중 오류: {error}")
     finally:
         job_dir = job.get("job_dir")
         if job_dir:
             shutil.rmtree(job_dir, ignore_errors=True)
+        if job.get("status") != "done":
+            _discard_pending_reels(job["reels_idx"])
 
 
 def _render_job(job: dict, command: list[str]) -> None:
@@ -984,50 +1052,91 @@ def _render_job(job: dict, command: list[str]) -> None:
         return
 
     log_tail = stdout[-2000:]
-    reels_fields: dict[str, object] = {}
-    update(percent=99.0, phase="릴스 등록(버킷 업로드)")
+    update(percent=99.0, phase="영상 업로드(버킷)")
     video_path = OUTPUT_DIR / output_name
-    # 업로드에 실패했을 때만 쓰이는 폴백 — 로컬 파일이 남아있는 경우의 경로.
-    video_url = f"/api/videos/output/{output_name}"
     try:
-        reels_fields = _register_render_as_reels(video_path, user_idx=job["user_idx"])
+        video_url = _publish_reels_video(job["reels_idx"], video_path)
         # GCS 에 올라갔으므로 로컬 사본은 지운다. 안 지우면 output/ 이 무한히
         # 쌓여 디스크가 찬다(영상 1편이 수십 MB). 실패 시엔 남겨서 받을 수 있게 둔다.
         video_path.unlink(missing_ok=True)
-        video_url = str(reels_fields["reels_url"])
-    except Exception as error:  # 릴스 등록 실패해도 렌더 자체는 성공으로 처리
-        logger.exception("렌더 결과 릴스 등록 실패: %s", output_name)
-        log_tail += f"\n[warn] 릴스 등록 실패: {error} (로컬 파일 보존)"
+    except Exception as error:
+        # 영상은 만들었지만 내려줄 방법이 없다(URL 없음) → 실패로 처리해서
+        # 자리표 릴스 행이 정리되게 한다. mp4 는 서버에 남겨 회수할 수 있게 둔다.
+        logger.exception("렌더 결과 업로드 실패: %s", output_name)
+        update(
+            status="failed",
+            error=f"영상 저장에 실패했습니다: {error}",
+            elapsed_seconds=round(time.time() - job["started_at"], 1),
+            log_tail=log_tail + f"\n[warn] 영상은 서버에 보존: output/{output_name}",
+        )
+        return
 
     update(
         status="done",
         phase="완료",
         percent=100.0,
         video_url=video_url,
+        reels_url=video_url,
         elapsed_seconds=round(time.time() - job["started_at"], 1),
         eta_seconds=0.0,
         log_tail=log_tail,
-        **reels_fields,
     )
 
 
-def _register_render_as_reels(video_path: Path, user_idx: int) -> dict[str, object]:
-    """완성 영상을 GCS 버킷(reels/)에 올리고 reels 행을 등록한다.
+def _publish_reels_video(reels_idx: int, video_path: Path) -> str:
+    """완성 영상을 GCS 버킷(reels/)에 올리고 대기 중인 릴스의 url 을 채운다 → 공개 URL.
 
-    작성자는 렌더 요청 시 JWT 에서 뽑은 user_idx 로 매핑한다 (무작위 추천에서
-    프로필 사진을 붙이는 근거).
+    행은 렌더 시작 때 이미 만들어져 있으므로(작성자 매핑도 그 때 끝) 여기서는
+    url 만 채운다. 렌더 스레드에서 도므로 요청 세션이 아닌 새 세션을 쓴다.
     """
     from databases.database import SessionLocal
 
     url = gcs.upload_file(f"reels/{uuid.uuid4().hex}.mp4", video_path, "video/mp4")
     db = SessionLocal()
     try:
-        row = reels_dao.create(db, user_idx=user_idx, url=url, title=None)
+        reels = reels_dao.get_by_idx(db, reels_idx)
+        if reels is None:
+            raise NotFoundException(f"릴스(reels_idx={reels_idx})가 사라졌습니다.")
+        reels_dao.update_url(db, reels, url)
         db.commit()
-        return {"reels_idx": row.reels_idx, "reels_url": url}
+        return url
     except Exception:
         db.rollback()
         gcs.delete_object(gcs.object_path_from_url(url) or url)  # 고아 객체 정리
         raise
+    finally:
+        db.close()
+
+
+def _discard_pending_reels(reels_idx: int) -> None:
+    """렌더가 끝내 완료되지 못했을 때 자리표 릴스 행을 DB 에서 삭제한다.
+
+    영상이 없는 자리표 행은 사용자 컨텐츠가 아니라 reels_idx 를 미리 발급하려고
+    만든 행이라 흔적을 남기지 않고 하드 삭제한다(소프트 삭제 불변식의 의도적 예외).
+    누군가 렌더 중인 릴스에 댓글·좋아요를 남겨 FK 가 걸리면 지울 수 없으니 그 때만
+    소프트 삭제로 물러선다. 이미 url 이 채워졌다면(완료 후 다른 이유로 실패 처리된
+    경우) 손대지 않는다. 정리에 실패해도 렌더 결과 보고에는 영향이 없어 로그만 남긴다.
+    """
+    from databases.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        reels = reels_dao.get_by_idx(db, reels_idx)
+        if reels is None or reels.url:
+            return
+        try:
+            reels_dao.hard_delete(db, reels)
+            db.commit()
+            return
+        except IntegrityError:  # 댓글·좋아요가 참조 중 → 행을 못 지운다
+            db.rollback()
+        reels = reels_dao.get_by_idx(db, reels_idx)
+        if reels is not None and not reels.url:
+            reels_dao.soft_delete(db, reels)
+            db.commit()
+            logger.info("자리표 릴스 하드 삭제 불가(참조 존재) → 소프트 삭제: reels_idx=%s", reels_idx)
+    except Exception:
+        db.rollback()
+        logger.warning("미완성 릴스 정리 실패(무시): reels_idx=%s", reels_idx)
     finally:
         db.close()
