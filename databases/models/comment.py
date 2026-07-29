@@ -24,4 +24,3 @@ class Comment(BaseModel):
         comment="FK 부모 댓글 (답글이면 세팅, 최상위면 NULL)",
     )
     content = Column(Text, nullable=False, comment="내용")
-    # ponytail: travel_idx는 reels 조인으로 나오므로 뺐다.

@@ -8,6 +8,7 @@ from core.security import get_current_user
 from databases.database import get_db
 from databases.models.user import User
 from schemas.video_schema import (
+    BgmTrackResponse,
     ReelsRecommendResponse,
     VideoEditResponse,
     VideoRenderStatusResponse,
@@ -15,6 +16,43 @@ from schemas.video_schema import (
 from services import video_service
 
 router = APIRouter(prefix="/api/videos", tags=["Video"])
+
+# Swagger 표기용 실제 BGM 파일명 — 서버 시작 시 bgm/ 폴더에서 읽는다.
+# enum 을 스키마에만 얹으면 Swagger UI 는 드롭다운으로 보여주되(빈 값 = 무음),
+# 서버 검증은 느슨한 매칭(곡명만 보내도 인식) 그대로 유지된다.
+_BGM_NAMES = [track["file"] for track in video_service.list_bgm()]
+_BGM_CHOICES = ["", *_BGM_NAMES]
+_BGM_FILES = ", ".join(_BGM_NAMES) or "(없음)"
+
+
+# 렌더 시작 엔드포인트들이 공유하는 폼 필드 — 문구·enum 을 한 곳에서만 관리한다.
+def _bgm_form():
+    return Form(
+        "",
+        description="BGM 파일명 또는 곡명 (빈 값이면 무음, 곡명만 보내도 매칭, 없으면 404). "
+                    f"사용 가능: {_BGM_FILES}",
+        json_schema_extra={"enum": _BGM_CHOICES},
+    )
+
+
+def _quick_form():
+    return Form("false", description='"true"면 저해상도 빠른 렌더')
+
+
+def _engine_form():
+    return Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)")
+
+
+def _theme_form():
+    return Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter")
+
+
+def _flag(value: str) -> bool:
+    return value.lower().strip() == "true"
+
+
+def _photo_payloads(photos: list[UploadFile]) -> list[tuple[str, bytes]]:
+    return [(upload.filename or "", upload.file.read()) for upload in photos]
 
 
 @router.get("/assets/map_themes.js", include_in_schema=False)
@@ -29,6 +67,18 @@ def get_map_themes() -> FileResponse:
 
 
 @router.get(
+    "/bgm",
+    summary="BGM 목록 조회",
+    description="영상에 입힐 수 있는 BGM 트랙 목록을 반환합니다. file 값을 렌더 요청의 "
+                "bgm 필드에 그대로 넣으면 됩니다.",
+    response_model=CommonResponse[list[BgmTrackResponse]],
+)
+def get_bgm_list():
+    tracks = video_service.list_bgm()
+    return CommonResponse.success_response("BGM 목록 조회 성공", data=tracks)
+
+
+@router.get(
     "/output/{name}",
     summary="완성 영상 다운로드",
     description="렌더링이 끝난 mp4 파일을 반환합니다. 렌더 응답의 video_url 이 이 경로를 "
@@ -40,62 +90,22 @@ def get_output_video(name: str) -> FileResponse:
 
 
 @router.post(
-    "/render",
-    summary="좌표 직접 입력으로 영상 렌더링 시작",
-    description="GPS 지점 목록(points)과 지점별 사진, BGM/테마/조명/인트로·아웃트로 옵션을 "
-                "받아 세로형(1080x1920) 3D 지도 여행 영상 렌더링을 시작하고 job_id 를 즉시 "
-                "반환합니다(multipart/form-data). 진행률·완료 여부는 "
-                "GET /api/videos/render/{job_id} 로 폴링하세요. engine=local 은 서버 GPU, "
-                "engine=modal 은 Modal T4 클라우드에서 렌더링합니다.",
-    response_model=CommonResponse[VideoRenderStatusResponse],
-)
-def render_video(
-    points: str = Form(..., description='GPS 지점 JSON 배열 문자열: [{"latitude","longitude","name"}, ...] (최소 2개)'),
-    bgm: str = Form("", description="BGM 파일명 (GET /api/videos/bgm 의 file 값, 빈 값이면 무음)"),
-    quick: str = Form("false", description='"true"면 저해상도 빠른 렌더 (local: 540x960/15fps, modal: JPEG q95)'),
-    engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
-    theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
-    light_preset: str = Form("", description="시간대 조명: dawn|day|dusk|night (빈 값 = 테마 기본)"),
-    intro: str = Form("false", description='"true"면 TRAILER 인트로 클립을 앞에 붙임'),
-    outro: str = Form("false", description='"true"면 TRAILER 아웃트로 클립을 뒤에 붙임'),
-    photo_points: str = Form("[]", description="photos 각 파일이 속한 지점 인덱스 JSON 배열 (photos와 개수 일치)"),
-    # fastapi 0.110 에서는 `list[UploadFile] | None = None` 이 422 를 내므로
-    # File([]) 기본값으로 선언해야 파일 없이도 빈 리스트로 들어온다.
-    photos: list[UploadFile] = File([], description="지점별 첨부 사진 파일들 (없으면 생략)"),
-):
-    photo_payloads = [
-        (upload.filename or "", upload.file.read()) for upload in (photos or [])
-    ]
-    job = video_service.start_render(
-        points_json=points,
-        photo_points_json=photo_points,
-        photos=photo_payloads,
-        bgm=bgm,
-        quick=quick.lower().strip() == "true",
-        engine=engine,
-        theme=theme,
-        light_preset=light_preset,
-        intro=intro.lower().strip() == "true",
-        outro=outro.lower().strip() == "true",
-    )
-    return CommonResponse.success_response("영상 렌더링 시작", data=job)
-
-
-@router.post(
     "/render/photos-only",
     summary="사진만으로 영상 렌더링 시작 (여행 ID 없이)",
     description="여행 ID나 좌표 입력 없이, 업로드한 사진들의 EXIF 메타데이터에서 GPS 좌표와 "
                 "촬영 시각을 추출해 촬영 시각 순서대로 지점을 이동하며 각 지점에서 해당 사진을 "
-                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률 폴링은 "
-                "POST /render 와 동일). "
+                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률은 "
+                "GET /api/videos/render/{job_id} 로 폴링). "
                 "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
                 "GPS 없는 사진은 자동 제외됩니다. 지점 기준 1km 미만인 연속 사진들은 카메라 "
                 "이동 없이 첫 사진 위치에 고정해 순서대로 보여주고, 1km 이상 떨어진 사진이 "
                 "나오면 그 위치로 이동합니다. start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 "
                 "삼아 첫 사진 지점으로 이동하며 시작합니다. 조건을 못 채우면 400을 반환합니다. "
-                "렌더가 끝나면 완성 영상이 GCS 버킷에 올라가고 reels 테이블에 로그인한 "
-                "사용자를 작성자로 자동 등록되며(여행 연결은 없음), 상태 응답의 "
-                "reels_idx/reels_url 로 확인할 수 있습니다. 로그인이 필요하며 토큰이 없으면 "
+                "영상 앞뒤에는 TRAILER 인트로·아웃트로가 항상 붙습니다. "
+                "렌더가 끝나면 완성 영상이 GCS 버킷에 올라가고 reels 테이블에 로그인 "
+                "사용자(user_idx)와 연결되어 자동 등록되며(여행 연결은 없음), 상태 응답의 "
+                "reels_idx/reels_url 로 확인할 수 있습니다. JWT 인증이 필요하며 토큰이 "
+                "없거나 유효하지 않으면 "
                 "401을 반환합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
@@ -103,32 +113,106 @@ def render_video_photos_only(
     start_name: str = Form("", description="출발지 라벨 (예: 서울역, 기본 '출발')"),
     start_latitude: float | None = Form(None, description="출발지 위도 (경도와 함께 지정, 생략 시 첫 사진 위치에서 시작)"),
     start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
-    bgm: str = Form("", description="BGM 파일명 (GET /api/videos/bgm 의 file 값, 빈 값이면 무음)"),
-    quick: str = Form("false", description='"true"면 저해상도 빠른 렌더'),
-    engine: str = Form("local", description="렌더 엔진: local(서버 GPU) | modal(Modal T4 클라우드)"),
-    theme: str = Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter"),
-    light_preset: str = Form("", description="시간대 조명: dawn|day|dusk|night (빈 값 = 테마 기본)"),
-    intro: str = Form("false", description='"true"면 TRAILER 인트로 클립을 앞에 붙임'),
-    outro: str = Form("false", description='"true"면 TRAILER 아웃트로 클립을 뒤에 붙임'),
+    bgm: str = _bgm_form(),
+    quick: str = _quick_form(),
+    engine: str = _engine_form(),
+    theme: str = _theme_form(),
     photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장)"),
     current_user: User = Depends(get_current_user),
 ):
-    photo_payloads = [
-        (upload.filename or "", upload.file.read()) for upload in photos
-    ]
     job = video_service.start_render_photos_only(
-        photos=photo_payloads,
+        photos=_photo_payloads(photos),
         user_idx=current_user.user_idx,
         bgm=bgm,
-        quick=quick.lower().strip() == "true",
+        quick=_flag(quick),
         engine=engine,
         theme=theme,
-        light_preset=light_preset,
-        intro=intro.lower().strip() == "true",
-        outro=outro.lower().strip() == "true",
         start_name=start_name,
         start_latitude=start_latitude,
         start_longitude=start_longitude,
+    )
+    return CommonResponse.success_response("영상 렌더링 시작", data=job)
+
+
+@router.post(
+    "/render/photos-ordered",
+    summary="사진 순서 지정 영상 렌더링 시작 (업로드 순서대로)",
+    description="POST /render/photos-only 와 같지만 촬영 시각을 무시하고, 업로드한 사진 "
+                "순서 그대로(사용자가 지정한 순서) 지점을 이동하며 각 지점에서 해당 사진을 "
+                "보여주는 영상 렌더링을 시작하고 job_id 를 즉시 반환합니다(진행률은 "
+                "GET /api/videos/render/{job_id} 로 폴링). EXIF 에서는 GPS 좌표만 사용합니다. "
+                "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
+                "GPS 없는 사진은 자동 제외되어 순서에서 빠집니다. 직전 지점 기준 1km 미만인 "
+                "연속 사진들은 카메라 이동 없이 그 지점에 고정해 순서대로 보여주고, 1km 이상 "
+                "떨어진 사진이 나오면 그 위치로 이동합니다. start_latitude/longitude 를 주면 "
+                "그 위치(예: 서울역)를 출발지로 삼아 첫 사진 지점으로 이동하며 시작합니다. "
+                "조건을 못 채우면 400을 반환합니다. 영상 앞뒤에는 TRAILER 인트로·아웃트로가 "
+                "항상 붙습니다. 렌더가 끝나면 완성 영상이 GCS 버킷에 "
+                "올라가고 reels 테이블에 로그인 사용자(user_idx)와 연결되어 자동 등록되며, "
+                "상태 응답의 reels_idx/reels_url 로 확인할 수 있습니다. JWT 인증이 필요하며 "
+                "토큰이 없거나 유효하지 않으면 401을 반환합니다.",
+    response_model=CommonResponse[VideoRenderStatusResponse],
+)
+def render_video_photos_ordered(
+    start_name: str = Form("", description="출발지 라벨 (예: 서울역, 기본 '출발')"),
+    start_latitude: float | None = Form(None, description="출발지 위도 (경도와 함께 지정, 생략 시 첫 사진 위치에서 시작)"),
+    start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
+    bgm: str = _bgm_form(),
+    quick: str = _quick_form(),
+    engine: str = _engine_form(),
+    theme: str = _theme_form(),
+    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장) — 보낸 순서가 곧 영상 순서"),
+    current_user: User = Depends(get_current_user),
+):
+    job = video_service.start_render_photos_only(
+        photos=_photo_payloads(photos),
+        user_idx=current_user.user_idx,
+        bgm=bgm,
+        quick=_flag(quick),
+        engine=engine,
+        theme=theme,
+        start_name=start_name,
+        start_latitude=start_latitude,
+        start_longitude=start_longitude,
+        sort_by_time=False,
+    )
+    return CommonResponse.success_response("영상 렌더링 시작", data=job)
+
+
+@router.post(
+    "/render/travel",
+    summary="여행 일정으로 영상 렌더링 시작 (travel_idx)",
+    description="저장된 여행(travel_idx)의 일정(schedule)을 타임라인 순(day_no, sequence)으로 "
+                "따라가며 각 일정의 좌표로 이동 경로를 만들고, 일정에 첨부된 여행 "
+                "이미지(travel_image)를 해당 지점에서 보여주는 영상 렌더링을 시작하고 "
+                "job_id 를 즉시 반환합니다(진행률은 GET /api/videos/render/{job_id} 로 폴링). 직전 지점 "
+                "기준 1km 미만인 연속 일정은 별도 지점 없이 한 지점으로 묶여 사진만 이어서 "
+                "나오고, 기차 일정은 출발역 좌표가 경유 지점이 됩니다. 이미지 다운로드에 "
+                "실패한 이미지는 건너뜁니다. 본인 여행이 아니거나 없으면 404, 여행에 일정이 "
+                "없거나 지점이 2개 미만이면 400을 반환합니다. 영상 앞뒤에는 TRAILER "
+                "인트로·아웃트로가 항상 붙습니다. 렌더가 끝나면 완성 영상이 GCS 버킷에 "
+                "올라가고 reels 테이블에 로그인 사용자(user_idx)와 연결되어 자동 등록되며, "
+                "상태 응답의 reels_idx/reels_url 로 확인할 수 있습니다. JWT 인증이 필요하며 "
+                "토큰이 없거나 유효하지 않으면 401을 반환합니다.",
+    response_model=CommonResponse[VideoRenderStatusResponse],
+)
+def render_video_from_travel(
+    travel_idx: int = Form(..., description="영상을 만들 여행 PK (본인 여행만 가능)"),
+    bgm: str = _bgm_form(),
+    quick: str = _quick_form(),
+    engine: str = _engine_form(),
+    theme: str = _theme_form(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = video_service.start_render_travel(
+        db,
+        current_user,
+        travel_idx,
+        bgm=bgm,
+        quick=_flag(quick),
+        engine=engine,
+        theme=theme,
     )
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
 
