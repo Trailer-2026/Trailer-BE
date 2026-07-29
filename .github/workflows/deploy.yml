@@ -30,4 +30,16 @@ jobs:
             echo "DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}" >> config/properties_dev.ini
             
             .venv/bin/pip install -r requirements.txt
+
+            # 영상 기능의 시스템 의존성 (pip 로 안 깔린다). 이미 있으면 건너뛴다.
+            #  - ffmpeg/ffprobe: 인코딩·구간편집·BGM 먹싱·조각 concat (엔진 무관 필수)
+            #  - CJK 폰트: 렌더 이미지의 한글 라벨 깨짐 방지
+            if ! command -v ffmpeg >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y ffmpeg fonts-noto-cjk fonts-nanum
+            fi
+
+            # engine=local 렌더용 Chromium (playwright 버전이 바뀌면 재다운로드된다)
+            .venv/bin/python -m playwright install chromium
+
             sudo systemctl restart trailer-be

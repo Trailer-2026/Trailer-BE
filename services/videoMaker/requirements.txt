@@ -1,5 +1,8 @@
 # 렌더러(render_video.py) 전용 의존성 — 설치 후 `playwright install chromium` 필요.
 # 빌더는 메인 앱(routers/video.py)으로 통합됨: 루트 requirements.txt 를 사용.
+#
+# ⚠️ pip 외 시스템 의존성: ffmpeg/ffprobe 가 PATH 에 있어야 한다(인코딩·BGM 먹싱·
+#    인트로 concat). 리눅스에서 한글 라벨을 쓰려면 CJK 폰트(fonts-noto-cjk)도 필요.
 playwright>=1.50,<2
 python-dotenv>=1.0,<2
 Pillow>=10,<13
