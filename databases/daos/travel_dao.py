@@ -1,5 +1,6 @@
 from datetime import date
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from databases.models.travel import Travel
@@ -38,6 +39,22 @@ def get_for_update(db: Session, travel_idx: int) -> Travel | None:
         Travel.travel_idx == travel_idx,
         Travel.deleted_at.is_(None),
     ).with_for_update().first()
+
+
+def update_title(db: Session, travel: Travel, title: str) -> Travel:
+    """여행 제목 수정. flush만 하고 commit은 서비스가 한다."""
+    travel.title = title
+    db.flush()
+    return travel
+
+
+def soft_delete(db: Session, travel: Travel) -> None:
+    """여행 소프트 삭제 (deleted_at 세팅). flush만, commit은 서비스.
+
+    일정(schedule) 정리는 schedule_dao.soft_delete_by_travel이 맡는다 — DAO는 자기 테이블만 건드린다.
+    """
+    travel.deleted_at = func.now()
+    db.flush()
 
 
 def list_by_user(db: Session, user_idx: int) -> list[Travel]:

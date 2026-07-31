@@ -20,6 +20,8 @@ from schemas.travel_schema import (
     TrainTicketResponse,
     TravelDayGroup,
     TravelDetailResponse,
+    TravelCard,
+    TravelListResponse,
     TravelManualCreateRequest,
     TravelResponse,
     TravelScheduleItem,
@@ -145,6 +147,39 @@ def delete_schedule(db: Session, user, travel_idx: int, schedule_idx: int) -> No
     db.commit()
 
 
+def rename_travel(db: Session, user, travel_idx: int, title: str) -> TravelResponse:
+    """여행 제목 변경. 본인 여행이 아니면 404.
+
+    빈 값·공백이면 생성(create_manual) 때와 같이 지역·기간으로 자동 생성한다 — '이름 지우기'를
+    빈 제목으로 두는 대신 기본 제목으로 되돌리는 쪽이 화면에 빈 칸이 남지 않는다.
+    """
+    travel = _owned_travel(db, user, travel_idx)
+    new_title = (title or "").strip() or _travel_title(
+        travel.region, travel.start_date, travel.end_date, None
+    )
+    travel_dao.update_title(db, travel, new_title)
+    db.commit()
+    return TravelResponse(
+        travel_idx=travel.travel_idx, title=travel.title,
+        start_date=travel.start_date, end_date=travel.end_date, region=travel.region,
+        # status 컬럼은 항상 PLANNED라 조회와 같은 규칙(기간·오늘 KST)으로 계산해 돌려준다.
+        status=_effective_status(travel.start_date, travel.end_date, now_kst().date()),
+        schedule_count=schedule_dao.count_by_travel(db, travel_idx),
+    )
+
+
+def delete_travel(db: Session, user, travel_idx: int) -> None:
+    """여행 소프트 삭제 — 그 여행의 일정 항목도 함께 삭제한다. 본인 여행이 아니면 404.
+
+    삭제하면 get_active_travel에서도 빠지므로 '예정 여행 1개' 제약이 풀려 새 여행을 만들 수 있다.
+    좋아요(travel_like)는 FK 하드 행이라 남기지만, 목록·상세가 모두 여행 기준이라 노출되지 않는다.
+    """
+    travel = _owned_travel(db, user, travel_idx)
+    schedule_dao.soft_delete_by_travel(db, travel_idx)
+    travel_dao.soft_delete(db, travel)
+    db.commit()
+
+
 def current_travel(db: Session, user) -> HomeTravelCard | None:
     """홈 화면 여행 카드 1건 — 진행 중 우선, 없으면 가장 가까운 예정, 둘 다 없으면 None.
 
@@ -164,6 +199,35 @@ def current_travel(db: Session, user) -> HomeTravelCard | None:
         status=_effective_status(chosen.start_date, chosen.end_date, today),
         cover_image_url=schedule_dao.cover_image(db, chosen.travel_idx),
     )
+
+
+def all_travels(db: Session, user) -> TravelListResponse:
+    """전체 여행 목록 — 예정·진행 중·지난 여행을 한 번에. 각 카드의 status는 날짜로 계산한다.
+
+    정렬은 화면 순서 그대로다: 아직 안 끝난 여행(진행 중·예정)을 시작일 오름차순으로 위에 두고
+    (진행 중이 start_date가 가장 이르므로 자연히 맨 위), 그 뒤에 지난 여행을 최근 종료순으로 붙인다.
+    썸네일·좋아요는 past_travels와 같이 각 1쿼리로 일괄 조회한다(N+1 회피).
+    """
+    today = now_kst().date()
+    travels = travel_dao.list_by_user(db, user.user_idx)
+    idxs = [t.travel_idx for t in travels]
+    covers = schedule_dao.cover_images(db, idxs)
+    liked = travel_like_dao.liked_travel_idxs(db, user.user_idx, idxs)
+
+    upcoming = sorted((t for t in travels if t.end_date >= today), key=lambda t: t.start_date)
+    past = sorted((t for t in travels if t.end_date < today), key=lambda t: t.end_date, reverse=True)
+
+    cards = [
+        TravelCard(
+            travel_idx=t.travel_idx, title=t.title,
+            start_date=t.start_date, end_date=t.end_date,
+            status=_effective_status(t.start_date, t.end_date, today),
+            cover_image_url=covers.get(t.travel_idx),
+            liked=t.travel_idx in liked,
+        )
+        for t in upcoming + past
+    ]
+    return TravelListResponse(travels=cards, total=len(cards))
 
 
 def past_travels(db: Session, user) -> PastTravelListResponse:
@@ -259,6 +323,14 @@ def _ensure_no_active_travel(db: Session, user) -> None:
     user_dao.lock_by_idx(db, user.user_idx)
     if travel_dao.get_active_travel(db, user.user_idx, now_kst().date()) is not None:
         raise BadRequestException("이미 예정된 여행이 있습니다. 기존 여행을 삭제한 뒤 새로 만들어 주세요.")
+
+
+def _owned_travel(db: Session, user, travel_idx: int):
+    """수정·삭제 대상 여행을 본인 것으로 검증해 반환. 없거나 남의 여행이면 404(403 아님)."""
+    travel = travel_dao.get_by_idx(db, travel_idx)
+    if travel is None or travel.user_idx != user.user_idx:
+        raise NotFoundException("여행을 찾을 수 없습니다.")
+    return travel
 
 
 def _owned_schedule(db: Session, user, travel_idx: int, schedule_idx: int):

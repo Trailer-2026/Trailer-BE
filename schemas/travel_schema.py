@@ -80,6 +80,16 @@ class ScheduleUpdateRequest(BaseModel):
     seat_no: str | None = Field(None, max_length=10, description="좌석 번호 (train)")
 
 
+class TravelUpdateRequest(BaseModel):
+    """여행 수정 요청 — 현재는 제목만 바꾼다(기간·지역 편집은 지원하지 않는다)."""
+
+    title: str = Field(
+        ..., max_length=100,
+        description="바꿀 여행 제목(빈 값·공백이면 지역·기간으로 자동 생성)",
+        examples=["부산 뚜벅이 여행"],
+    )
+
+
 class TravelResponse(BaseModel):
     """저장된 여행 요약."""
 
@@ -127,6 +137,36 @@ class PastTravelListResponse(BaseModel):
         ..., description="지난 여행 카드 목록 (종료일 내림차순). 지난 여행이 없으면 빈 배열",
     )
     total: int = Field(..., description="지난 여행 총 건수", examples=[3])
+
+
+class TravelCard(BaseModel):
+    """전체 여행 목록의 카드 하나 — 예정·진행 중·지난 여행을 status로 구분한다.
+
+    PastTravelCard와 필드는 같지만 status가 COMPLETED로 고정되지 않는다.
+    """
+
+    travel_idx: int = Field(..., description="여행 PK (카드 탭 시 상세 이동용)", examples=[12])
+    title: str = Field(..., description="여행 제목", examples=["부산 2박 3일 여행"])
+    start_date: date = Field(..., description="여행 시작일", examples=["2026-08-01"])
+    end_date: date = Field(..., description="여행 종료일", examples=["2026-08-03"])
+    status: str = Field(
+        ..., description="PLANNED | ONGOING | COMPLETED (여행 기간·오늘 KST 기준 계산)",
+        examples=["PLANNED"],
+    )
+    cover_image_url: str | None = Field(
+        None, description="카드 썸네일 — 여행 첫 일정 대표 이미지. 없으면 null",
+        examples=["http://tong.visitkorea.or.kr/cms/resource/87/2754987_image2_1.jpg"],
+    )
+    liked: bool = Field(..., description="내가 좋아요(하트)를 누른 여행인지 여부", examples=[False])
+
+
+class TravelListResponse(BaseModel):
+    """전체 여행 목록 — 진행 중·예정을 임박한 순으로 먼저, 그 뒤 지난 여행을 최근 종료순으로."""
+
+    travels: list[TravelCard] = Field(
+        ..., description="여행 카드 목록. 여행이 하나도 없으면 빈 배열",
+    )
+    total: int = Field(..., description="여행 총 건수", examples=[4])
 
 
 class TravelLikeResponse(BaseModel):

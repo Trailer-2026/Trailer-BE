@@ -13,10 +13,12 @@ from schemas.travel_schema import (
     TravelCreateRequest,
     TravelDetailResponse,
     TravelLikeResponse,
+    TravelListResponse,
     TravelManualCreateRequest,
     TravelResponse,
     TravelScheduleItem,
     TravelTicketsResponse,
+    TravelUpdateRequest,
 )
 from services import travel_like_service, travel_service
 
@@ -59,6 +61,26 @@ def create_manual_travel(
 ):
     result = travel_service.create_manual(db, current_user, req)
     return CommonResponse.success_response("여행 생성 성공", data=result)
+
+
+@router.get(
+    "",
+    summary="전체 여행 목록 조회",
+    description="로그인한 사용자의 여행을 예정·진행 중·지난 구분 없이 한 번에 반환합니다. "
+                "카드마다 status(PLANNED | ONGOING | COMPLETED)가 담겨 프론트가 섹션을 나눌 수 있습니다. "
+                "status는 여행 기간과 오늘(KST)로 계산됩니다 — 시작 전 PLANNED, 기간 내 ONGOING, 종료 후 COMPLETED. "
+                "정렬은 아직 끝나지 않은 여행(진행 중·예정)이 임박한 순으로 먼저 오고, 그 뒤에 지난 여행이 "
+                "최근 종료순으로 붙습니다. 카드 썸네일은 여행의 첫 일정 대표 이미지이고, liked는 내가 하트를 "
+                "누른 여행인지 여부입니다. 여행이 없으면 빈 배열을 반환합니다.\n\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[TravelListResponse],
+)
+def get_travels(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = travel_service.all_travels(db, current_user)
+    return CommonResponse.success_response("전체 여행 조회 성공", data=result)
 
 
 @router.get(
@@ -140,6 +162,43 @@ def get_travel_tickets(
 ):
     result = travel_service.travel_tickets(db, current_user, travel_idx)
     return CommonResponse.success_response("승차권 조회 성공", data=result)
+
+
+@router.patch(
+    "/{travel_idx}",
+    summary="여행 이름 변경",
+    description="여행 제목을 변경합니다. 제목을 빈 값·공백으로 보내면 생성 때와 같이 지역·기간으로 "
+                "자동 생성됩니다('부산 2박 3일 여행' 형태). 변경 후 갱신된 여행 요약을 반환합니다.\n\n"
+                "- 404: 존재하지 않거나 본인 여행이 아님\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[TravelResponse],
+)
+def rename_travel(
+    travel_idx: int,
+    req: TravelUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = travel_service.rename_travel(db, current_user, travel_idx, req.title)
+    return CommonResponse.success_response("여행 이름 변경 성공", data=result)
+
+
+@router.delete(
+    "/{travel_idx}",
+    summary="여행 삭제",
+    description="여행 1건을 삭제합니다(소프트 삭제). 그 여행의 일정 항목도 함께 삭제됩니다. "
+                "예정 여행을 삭제하면 '예정 여행은 1개만' 제약이 풀려 새 여행을 만들 수 있습니다.\n\n"
+                "- 404: 존재하지 않거나 본인 여행이 아님\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[None],
+)
+def delete_travel(
+    travel_idx: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    travel_service.delete_travel(db, current_user, travel_idx)
+    return CommonResponse.success_response("여행 삭제 성공")
 
 
 @router.post(
