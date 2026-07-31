@@ -33,6 +33,7 @@ from utils.timezone import now_kst
 _LODGING_CHECKIN = time(21, 0)   # 마지막 방문 종료를 못 구할 때 체크인 기본값
 _LODGING_CHECKOUT = time(9, 0)   # 다음날 첫 일정 시작을 못 구할 때 체크아웃 기본값
 _DEFAULT_TIME = time(9, 0)       # 방문/기차 시각이 비어 있을 때 안전 기본값
+_TITLE_MAX = 100                 # travel.title 컬럼 길이 — 자동 생성 제목이 넘으면 INSERT가 깨진다
 # 편집 시 null로 지우면 안 되는 NOT NULL 컬럼(schedule) — 명시적 null 요청을 400으로 막는다.
 _NON_NULL_EDIT_FIELDS = ("title", "start_time", "end_time", "latitude", "longitude")
 
@@ -399,15 +400,17 @@ def _travel_title(region: str | None, start: date, end: date, fallback: str | No
     """여행 제목 = '<지역> N박 N일 여행'. 지역은 도착역명이라 끝의 '역' 접미사를 뗀다(부산역→부산).
 
     지역명이 없으면 플랜 제목(fallback)→'여행' 순으로 대체한다. 당일 여행이면 'N박' 없이 표기.
+
+    지역명·플랜 제목은 길이 제한이 느슨해(요청 region은 100자까지) 그대로 쓰면 title 컬럼
+    (varchar 100)을 넘겨 저장이 깨진다. 기간 표기는 남기고 지역명 쪽을 잘라 한도에 맞춘다.
     """
     place = region.removesuffix("역") if region else None
     if not place:
-        return fallback or "여행"
+        return (fallback or "여행")[:_TITLE_MAX]
     days = (end - start).days + 1
     nights = days - 1
-    if nights <= 0:
-        return f"{place} 당일 여행"
-    return f"{place} {nights}박 {days}일 여행"
+    suffix = " 당일 여행" if nights <= 0 else f" {nights}박 {days}일 여행"
+    return f"{place[:_TITLE_MAX - len(suffix)]}{suffix}"
 
 
 def _effective_status(start: date, end: date, today: date) -> str:
