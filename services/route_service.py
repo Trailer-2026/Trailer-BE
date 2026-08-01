@@ -180,6 +180,47 @@ def _prefetch_segments(dep, arr, groups, stops, go_date, back_date) -> None:
         list(ex.map(lambda p: _safe_fetch(*p), pairs))
 
 
+def _direct_missing(a: Station, b: Station, ymd: str, nail_pass: bool) -> bool:
+    """a→b 직통이 없는가(= _journey 환승 탐색이 실제로 돌 구간인가).
+
+    _leg_options가 보는 것과 같은 필터(_legs)를 쓴다 — 내일로에서 SRT만 있는 구간처럼
+    '원본엔 열차가 있으나 조건상 없는' 경우까지 같게 판정해야 한다.
+    이미 _prefetch_segments가 데운 조회라 lru_cache 히트다(판별 비용 0).
+    """
+    if not a.nat_code or not b.nat_code:
+        return False
+    try:
+        return not _legs(a.nat_code, b.nat_code, ymd, nail_pass)
+    except Exception:
+        return False  # 조회 자체가 실패하면 환승 탐색도 못 하므로 데울 필요 없다
+
+
+def _prefetch_transfer_legs(pairs, groups: list[list[Station]], nail_pass: bool) -> None:
+    """경유 다리 중 '직통이 없는' 구간에 한해 거점 환승 다리까지 병렬로 데운다.
+
+    _prefetch_segments는 dep↔후보·후보↔arr 같은 **직통 후보 구간만** 데운다. 경유 다리에 환승을
+    허용한 뒤로는 직통이 없는 구간에서 _journey가 '후보↔거점' 구간을 조회하는데 그게 캐시에 없어,
+    _stopovers_for 안에서 순차 API 콜(콜당 수 초)로 터진다.
+
+    후보×거점 전 조합을 데우면 낭비가 크므로(대부분의 중간역은 직통이 있어 환승을 안 탄다),
+    직통이 비어 있어 실제로 환승 탐색이 돌 구간만 골라 그 앞뒤 다리를 데운다.
+    """
+    members = {s.station_idx: s for g in groups for s in g}.values()  # 전 그룹 거점역 중복 제거
+    need = set()
+    for a, b, ymd in pairs:
+        if not _direct_missing(a, b, ymd, nail_pass):
+            continue
+        for m in members:
+            if not m.nat_code or m.station_idx in (a.station_idx, b.station_idx):
+                continue
+            need.add((a.nat_code, m.nat_code, ymd))  # 하차 다리(후보→거점) — 여태 미적재였던 쪽
+            need.add((m.nat_code, b.nat_code, ymd))  # 승차 다리(거점→도착)
+    if not need:
+        return
+    with ThreadPoolExecutor(max_workers=min(16, len(need))) as ex:
+        list(ex.map(lambda p: _safe_fetch(*p), need))
+
+
 def _earliest(trains: tuple, not_before: datetime) -> dict | None:
     # not_before(직전 열차 도착 + 환승/체류 최소간격) 이후 출발하는 가장 이른 열차 1편.
     # 경로를 늘 "가능한 한 빨리" 잇기 위해 최소 대기 열차를 고른다.
@@ -591,8 +632,24 @@ def recommend(
         with ThreadPoolExecutor(max_workers=max(1, min(16, len(extra)))) as ex:
             list(ex.map(lambda p: _safe_fetch(*p), extra))
 
+    def _warm_via_transfers(targets: list[Station]) -> None:
+        """경유 다리로 실제 조회될 구간을 모아, 그중 직통이 없는 곳의 환승 다리를 데운다.
+
+        _stopovers_for와 **같은 거점 집합**(_via_groups)을 써야 한다 — 출발·도착 클러스터는
+        경유에서 제외되므로 그쪽까지 데우면 쓰지도 않을 조회를 하는 셈이다.
+        """
+        pairs = []
+        for c in targets:
+            # 당일치기: 가는편(dep→c→arr) / 오는편(arr→c→dep) 네 구간
+            pairs += [(dep, c, go_date), (c, arr, go_date), (arr, c, back_date), (c, dep, back_date)]
+            if overnight:  # 숙박 경유는 날짜 넘는 다리가 따로 있다
+                pairs.append((c, arr, (go + timedelta(days=via_nights)).strftime("%Y%m%d")))
+                pairs.append((arr, c, (back - timedelta(days=via_nights)).strftime("%Y%m%d")))
+        _prefetch_transfer_legs(pairs, _via_groups(groups, dep, arr), nail_pass)
+
     if overnight:
         _prefetch_overnight([via] if via is not None else stops)
+    _warm_via_transfers(prefetch_stops)  # 직통 조회가 캐시에 찬 뒤라야 판별이 공짜다
 
     # 오는편(공통): 도착→출발, 직통 or 환승
     back_picks, back_via, _ = _journey(arr, dep, back_date, back_start, groups, nail_pass)
@@ -655,9 +712,10 @@ def recommend(
                               nights=via_nights if overnight else 0)
         fallback = _candidate_stops(all_stations, dep, arr)
         if fallback:
-            _prefetch_segments(dep, arr, [], fallback, go_date, back_date)  # 거점은 이미 warm
+            _prefetch_segments(dep, arr, [], fallback, go_date, back_date)  # 거점↔dep/arr은 이미 warm
             if overnight:
                 _prefetch_overnight(fallback)
+            _warm_via_transfers(fallback)  # 후보↔거점(환승 다리)까지 데운 뒤라야 순차 콜이 안 터진다
             stopovers = _stopovers_for(fallback)
         if stopovers:
             miss = f"{miss} 대신 가는 길의 다른 역 경유를 추천합니다."
