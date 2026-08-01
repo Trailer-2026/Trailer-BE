@@ -343,15 +343,23 @@ def _via_hours_ok(route: RouteCandidate) -> bool:
 
 
 def _via_miss_note(dep: Station, arr: Station, via: Station, ymd: str, start: datetime,
-                   groups: list[list[Station]], nail_pass: bool, kind: str) -> str:
+                   groups: list[list[Station]], nail_pass: bool, kind: str, nights: int = 0) -> str:
     """지정 경유가 성립하지 않은 이유를 구간별로 구분한 안내 문구.
 
     "체류 조건에 맞는 열차가 없다"로 뭉뚱그리면 실제 원인(구간 열차 자체가 없음)을 알 수 없어
     어느 쪽 다리가 끊겼는지 짚어준다. 조회는 전부 lru_cache 히트라 추가 API 콜이 없다.
+
+    각 다리는 **실제 탐색과 같은 날짜·시각**으로 조회해야 진단이 맞는다. 숙박 경유(nights>=1)의
+    둘째 다리는 _stopover_overnight과 동일하게 go_date+nights의 _NEXT_DAY_START 이후를 본다
+    — go_date로 보면 요일별 운행 차이 때문에 엉뚱한 구간을 원인으로 지목할 수 있다.
     """
     if not _leg_options(dep, via, ymd, start, groups, nail_pass):
         return f"{dep.station_name}→{via.station_name} 구간에 운행 열차가 없어 {via.station_name} 경유를 제외했습니다."
-    if not _leg_options(via, arr, ymd, start, groups, nail_pass):
+    ymd2, start2 = ymd, start
+    if nights >= 1:
+        ymd2 = (_parse_date(ymd) + timedelta(days=nights)).strftime("%Y%m%d")
+        start2 = _start_dt(_parse_date(ymd2), _NEXT_DAY_START)
+    if not _leg_options(via, arr, ymd2, start2, groups, nail_pass):
         return f"{via.station_name}→{arr.station_name} 구간에 운행 열차가 없어 {via.station_name} 경유를 제외했습니다."
     return f"{via.station_name} 경유는 {kind}에 맞는 연결편이 없어 제외했습니다."
 
@@ -643,7 +651,8 @@ def recommend(
         # 지정 경유 실패 — 원인을 구간별로 구분해 안내하고, 경유 카드가 0장이 되지 않도록
         # 자동 중간역 경유로 폴백한다(예전엔 여기서 직통만 남아 세 카드가 전부 같은 직통이 됐다).
         kind = f"{via_nights}박 숙박 경유" if overnight else "2~6시간 체류 조건"
-        miss = _via_miss_note(dep, arr, via, go_date, go_start, _via_groups(groups, dep, arr), nail_pass, kind)
+        miss = _via_miss_note(dep, arr, via, go_date, go_start, _via_groups(groups, dep, arr), nail_pass, kind,
+                              nights=via_nights if overnight else 0)
         fallback = _candidate_stops(all_stations, dep, arr)
         if fallback:
             _prefetch_segments(dep, arr, [], fallback, go_date, back_date)  # 거점은 이미 warm
