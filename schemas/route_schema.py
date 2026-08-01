@@ -52,6 +52,10 @@ class RouteCandidate(BaseModel):
     path: str = Field(..., description="경로 (예: 서울→대전→부산)")
     via_station_idx: int | None = Field(None, description="경유역 station_idx. 직통이면 null")
     via_nights: int = Field(0, description="경유역에서 묵는 박 수. 0=당일치기 경유(같은 날 2~6h 체류), 1+=경유역 숙박 후 다음날 이동")
+    # 경유 다리에 환승이 끼면 go_trains[0]/[1]이 더 이상 경유 도착/출발이 아니다.
+    # 체류 시간대는 위치가 아니라 이 두 값으로만 판단해야 한다(route_service._assemble_stopover가 채움).
+    via_arr_time: datetime | None = Field(None, description="경유역 도착 시각(체류 시작). 경유가 아니면 null")
+    via_dep_time: datetime | None = Field(None, description="경유역 출발 시각(체류 종료). 경유가 아니면 null")
     go_trains: list[RouteTrain] = Field(..., description="가는 편 탑승 열차(경유는 2편)")
     stay_minutes: int | None = Field(None, description="경유지 체류시간(분). 직통이면 null")
     back_trains: list[RouteTrain] = Field(..., description="오는 편 탑승 열차")
@@ -65,3 +69,9 @@ class RouteCandidate(BaseModel):
                     "(지정·자동 경유 공통), 직통이거나 숙박 경유(관광이 코스 날에 편입)면 빈 목록.",
     )
     note: str | None = Field(None, description="비고(예: 직통 열차 없음)")
+    # note에 이미 포함된 문장을 그대로 담는다(중복 표기가 아니라 '지울 수 있게' 하는 핸들).
+    # 당일치기/숙박 경유는 따로 조회해 합치므로, 한쪽에서 남긴 '경유 제외' 안내가 다른 쪽에서
+    # 성립한 경유와 모순될 수 있다. 그때 recommend_service가 이 값으로 해당 문장만 잘라낸다.
+    via_miss_note: str | None = Field(
+        None, description="지정 경유가 성립하지 않은 사유(main에만). note에서 이 문장만 떼어내기 위한 핸들",
+    )

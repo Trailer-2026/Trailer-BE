@@ -446,16 +446,13 @@ def _windows_arrival_only(arr, k: int) -> list[tuple[float, float]] | None:
 def _overnight_segments(route) -> list:
     """숙박 경유 경로 → 도시 구간 [(is_via, 도착dt, 출발dt)] (도착시각순 = 방문 순서).
 
-    가는편 숙박(go_trains 2편): 경유 먼저(leg1 도착~leg2 출발) → 목적지(leg2 도착~귀가 출발).
-    오는편 숙박(back_trains 2편): 목적지 먼저(가는 도착~목적지 출발) → 경유(도착~귀가 출발).
+    목적지 구간은 방향과 무관하게 '가는편 마지막 열차 도착 ~ 오는편 첫 열차 출발'이고,
+    경유 구간은 route_service가 실어 보낸 체류 시간대다. 정렬로 방문 순서가 정해지므로
+    가는편 숙박(경유 먼저)·오는편 숙박(목적지 먼저)을 따로 분기할 필요가 없다.
     """
     go, back = route.go_trains, route.back_trains
-    if len(go) >= 2:   # 가는편 숙박: 출발→[경유]→(숙박)→목적지
-        via = (True, go[0].arr_time, go[1].dep_time)
-        dest = (False, go[-1].arr_time, back[0].dep_time)
-    else:              # 오는편 숙박: 출발→목적지→[경유]→(숙박)→귀가
-        dest = (False, go[0].arr_time, back[0].dep_time)
-        via = (True, back[0].arr_time, back[1].dep_time)
+    dest = (False, go[-1].arr_time, back[0].dep_time)
+    via = (True, route.via_arr_time, route.via_dep_time)
     return sorted([via, dest], key=lambda s: s[1])  # 도착 이른 구간이 앞
 
 
@@ -470,6 +467,8 @@ def _course_for_overnight(db, dest_scored, criteria, k, dest_anchor, route, memo
     """
     if route.via_nights < 1 or route.via_station_idx is None:
         return None
+    if route.via_arr_time is None or route.via_dep_time is None:
+        return None  # 체류 시간대를 모르면 구간을 가를 수 없다(방어 — route_service가 항상 채운다)
     via_st = station_dao.get_by_idx(db, route.via_station_idx)
     if via_st is None or via_st.latitude is None or via_st.longitude is None:
         return None
@@ -712,11 +711,53 @@ def _fetch_routes(db: Session, origin, dest, criteria: SearchCriteria, k: int) -
         else:
             routes = _recommend(0)
         routes = _enrich_stopovers(db, routes, criteria)
+        _clear_stale_via_miss(routes, criteria.via_station_idx)
+        routes = _prioritize_via(routes, criteria.via_station_idx)
         _attach_train_stops(db, routes)
         return routes, None
     except Exception as e:
         logger.warning("기차 경로 조회 실패: %s", e)
         return [], "기차 경로를 불러오지 못했습니다(코스만 제공)."
+
+
+def _clear_stale_via_miss(routes: list, via_idx: int | None) -> None:
+    """합친 결과에 지정 경유역이 살아 있으면 '경유 제외' 안내를 note에서 떼어낸다.
+
+    당일치기(via_nights=0)와 숙박(via_nights=1)은 서로를 모른 채 따로 조회된다. 당일치기가
+    성립하지 않으면 route_service가 "강릉역 경유는 … 제외했습니다"를 main.note에 남기는데,
+    숙박 경유로는 성립해 카드에 강릉이 버젓이 떠 있으면 그 문장은 사실과 어긋난다.
+    via_miss_note(같은 문장)를 핸들 삼아 그 조각만 제거하고 나머지 비고(환승 안내 등)는 보존한다.
+    """
+    if via_idx is None:
+        return
+    if not any(r.route_type == "경유" and r.via_station_idx == via_idx for r in routes):
+        return  # 정말로 그 경유역을 못 갔다 → 안내를 남겨둔다
+    for r in routes:
+        if not r.via_miss_note:
+            continue
+        kept = [p for p in (r.note or "").split(" / ") if p and p != r.via_miss_note]
+        r.note = " / ".join(kept) or None
+        r.via_miss_note = None
+
+
+def _prioritize_via(routes: list, via_idx: int | None) -> list:
+    """사용자가 지정한 경유역 경로를 기본 왕복 바로 뒤로 끌어올린다(경유 미지정이면 그대로).
+
+    지정 경유는 당일치기(via_nights=0)와 숙박(via_nights=1)을 따로 조회해 합치는데, 당일치기가
+    성립하지 않으면 route_service가 자동 중간역 경유로 폴백한다. 그 폴백 후보들이 목록 앞을 차지하면
+    뒤에 붙는 '진짜 지정 경유(숙박)'가 상위 3장(플랜 A/B/C) 밖으로 밀려 사용자가 요청한 역이
+    카드에서 사라진다. 순서만 바꿔(main → 지정 경유 → 나머지) 요청한 경유가 반드시 노출되게 한다.
+    """
+    if via_idx is None:
+        return routes
+    want = {id(r) for r in routes if r.route_type == "경유" and r.via_station_idx == via_idx}
+    if not want:
+        return routes
+    return (
+        [r for r in routes if r.route_type != "경유"]                        # main(직통/환승) 선두 유지
+        + [r for r in routes if id(r) in want]                               # 요청한 경유역
+        + [r for r in routes if r.route_type == "경유" and id(r) not in want]  # 폴백 자동 경유
+    )
 
 
 def _attach_train_stops(db: Session, routes) -> None:
@@ -853,7 +894,7 @@ def _stopover_record(p, h, score: float) -> dict:
         "place_idx": p.place_idx, "name": p.name, "region": p.region,
         "lat": p.lat, "lng": p.lng, "themes": p.themes, "image_url": p.image_url,
         "open_hour": oh, "close_hour": ch,
-        "open_time": hhmm(oh), "close_time": hhmm(ch),
+        "open_time": hhmm(oh), "close_time": hhmm(ch, closing=True),
         "preference_score": round(score, 4),
     }
 
@@ -873,16 +914,13 @@ def _via_reason(rec: dict, themes, arrive_hour: float | None) -> str:
 
 
 def _via_window(r) -> tuple:
-    """경유 경로의 '경유역 체류 시간대' (도착 dt, 다음 출발 dt)를 뽑는다.
+    """경유 경로의 '경유역 체류 시간대' (도착 dt, 다음 출발 dt).
 
-    가는편 경유(go_trains 2편)면 첫 열차 도착~둘째 열차 출발, 오는편 경유(back_trains 2편)면
-    첫 열차 도착~둘째 열차 출발. 판별 불가면 (None, None).
+    route_service가 조립할 때 실어 보낸 값을 그대로 쓴다. 예전엔 go_trains[0]/[1] 같은 위치로
+    추정했는데, 경유 다리에 환승이 끼거나(3편 이상) 반대 방향 여정이 환승이면(go_trains 2편인데
+    오는편 경유) 엉뚱한 구간을 체류로 잡는다. 값이 없으면 (None, None).
     """
-    if len(r.go_trains) >= 2:
-        return r.go_trains[0].arr_time, r.go_trains[1].dep_time
-    if len(r.back_trains) >= 2:
-        return r.back_trains[0].arr_time, r.back_trains[1].dep_time
-    return None, None
+    return r.via_arr_time, r.via_dep_time
 
 
 def _stopover_visits(recs: list, start_dt, end_dt) -> list:

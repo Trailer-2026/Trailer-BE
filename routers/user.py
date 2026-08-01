@@ -5,8 +5,12 @@ from databases.database import get_db
 from databases.models.user import User
 from core.response import CommonResponse
 from core.security import get_current_user
+from schemas.notification_schema import (
+    NotificationResponse,
+    NotificationUpdateRequest,
+)
 from schemas.user_schema import ProfileResponse, NicknameUpdateRequest
-from services import user_service
+from services import notification_service, user_service
 
 router = APIRouter(prefix="/api/users", tags=["사용자"])
 
@@ -38,6 +42,41 @@ def update_nickname(
 ):
     result = user_service.update_nickname(db, current_user, request_data.nickname)
     return CommonResponse.success_response("닉네임 변경 성공", data=result)
+
+
+@router.get(
+    "/me/notifications",
+    summary="알림 설정 조회",
+    description="알림 설정 화면의 on/off 스위치 상태를 반환합니다 — 이벤트 알림, 기차역 풍경 알림. "
+                "설정을 한 번도 바꾼 적 없는 사용자는 기본값(둘 다 수신)으로 만들어 반환합니다. "
+                "(access token 인증 필요)\n\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[NotificationResponse],
+)
+def get_notification_settings(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    result = notification_service.get_settings(db, current_user)
+    return CommonResponse.success_response("알림 설정 조회 성공", data=result)
+
+
+@router.patch(
+    "/me/notifications",
+    summary="알림 설정 편집",
+    description="알림 수신 여부를 변경합니다. 보낸 항목만 바뀌고 안 보낸 항목은 그대로 유지되므로, "
+                "스위치 하나만 토글할 때는 그 항목만 보내면 됩니다. 변경 후 갱신된 설정을 반환합니다. "
+                "(access token 인증 필요)\n\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[NotificationResponse],
+)
+def update_notification_settings(
+    request_data: NotificationUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    result = notification_service.update_settings(db, current_user, request_data)
+    return CommonResponse.success_response("알림 설정 변경 성공", data=result)
 
 
 @router.patch(

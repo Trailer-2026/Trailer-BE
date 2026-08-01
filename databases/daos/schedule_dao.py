@@ -60,6 +60,31 @@ def soft_delete(db: Session, schedule: Schedule) -> None:
     db.flush()
 
 
+def soft_delete_by_travel(db: Session, travel_idx: int) -> None:
+    """여행 삭제 시 그 여행의 일정 항목을 일괄 소프트 삭제. flush만, commit은 서비스.
+
+    여행만 지우면 일정 행이 부모를 잃고 남는다 — 댓글 삭제가 답글까지 지우는 것과 같은 처리다.
+    """
+    (
+        db.query(Schedule)
+        .filter(Schedule.travel_idx == travel_idx, Schedule.deleted_at.is_(None))
+        .update({Schedule.deleted_at: func.now()}, synchronize_session=False)
+    )
+    db.flush()
+
+
+def count_by_travel(db: Session, travel_idx: int) -> int:
+    """여행의 일정 항목 수 (soft-delete 제외). 여행 요약 응답의 schedule_count용."""
+    return (
+        db.query(func.count(Schedule.schedule_idx))
+        .filter(
+            Schedule.travel_idx == travel_idx,
+            Schedule.deleted_at.is_(None),
+        )
+        .scalar()
+    )
+
+
 def list_by_travel(db: Session, travel_idx: int) -> list[Schedule]:
     """여행의 일정 항목 전체를 타임라인 순서(day_no, sequence)로 조회 (soft-delete 제외)."""
     return (
