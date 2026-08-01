@@ -19,16 +19,23 @@ def _dist(a: ScoredPlace, b: ScoredPlace) -> float:
     return haversine(a.lat, a.lng, b.lat, b.lng)
 
 
-def hhmm(hour: float | None) -> str | None:
+def hhmm(hour: float | None, *, closing: bool = False) -> str | None:
     """시각(float 시간) → 'HH:MM'. None이면 None. 자정 넘김(≥24)은 다음날 시각으로 표기.
 
     엔진(pipeline)·서비스(recommend_service)가 공유하는 유일한 시각 포맷터.
+
+    closing=True(운영 '마감' 시각 전용)면 **정각 24시만 '24:00'으로** 남긴다. 24시간 개방
+    (open=0, close=24)이 '00:00~00:00'으로 찍혀 종일 휴무처럼 보이던 것을 막는다. 25시 이후
+    (심야 영업 18:00~02:00 = close 26.0)는 그대로 접어 '02:00'으로 표기한다.
+    방문 시각(visit_time)에는 쓰지 마라 — itinerary._visit_dt가 되파싱하는 값이라 표기를 바꾸면 안 된다.
     """
     if hour is None:
         return None
     total = int(round(hour * 60))
+    if closing and total == 24 * 60:
+        return "24:00"
     hh, mm = divmod(total, 60)
-    hh %= 24  # 24:00·26:00 등은 00:00·02:00로 표기
+    hh %= 24  # 26:00 등은 02:00로 표기
     return f"{hh:02d}:{mm:02d}"
 
 

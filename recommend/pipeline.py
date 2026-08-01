@@ -226,7 +226,7 @@ def _to_reco(
         reason=_reason(p, selected, arrive_hour),
         image_url=p.image_url,
         open_time=routing.hhmm(p.open_hour),
-        close_time=routing.hhmm(p.close_hour),
+        close_time=routing.hhmm(p.close_hour, closing=True),
         visit_time=routing.hhmm(arrive_hour),
     )
 
@@ -239,7 +239,7 @@ def _reason(p: ScoredPlace, selected: set[Theme], arrive_hour: float | None = No
         return base
     # 방문 예정 시각을 붙이고, 운영시간이 파악된 곳은 함께 표기(마감 전 방문 안내).
     if p.open_hour is not None or p.close_hour is not None:
-        win = f"{routing.hhmm(p.open_hour) or '?'}~{routing.hhmm(p.close_hour) or '?'}"
+        win = f"{routing.hhmm(p.open_hour) or '?'}~{routing.hhmm(p.close_hour, closing=True) or '?'}"
         return f"{base} · {routing.hhmm(arrive_hour)} 방문 (운영 {win})"
     return f"{base} · {routing.hhmm(arrive_hour)} 방문"
 

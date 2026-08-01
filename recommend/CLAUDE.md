@@ -133,8 +133,24 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 - **경로 생성 — `services/route_service.py:recommend(via_station_idx=...)`** (기차 그래프·시각표만)
   - 지정 경유: 그 역을 2~6h 관광 체류로 경유. **가는편 경유**(`_stopover`, path=출발→지정역→도착)와
     **오는편 경유**(`_stopover_return`, path=출발→도착→지정역→출발)를 둘 다 시도해 성립하는 편을 모두 낸다.
-    방향은 별도 필드 없이 **path·기차 시각**으로 드러난다(코스/프론트가 그걸로 배치·구분). **자동 중간역은 만들지 않음**.
-    반환 `[main, (가는편경유?), (오는편경유?)]`. 둘 다 열차 없으면 `[main]`+`main.note` 안내. 출발·도착역과 같으면 무시.
+    방향은 별도 필드 없이 **path·기차 시각**으로 드러난다(코스/프론트가 그걸로 배치·구분).
+    반환 `[main, (가는편경유?), (오는편경유?)]`. 출발·도착역과 같으면 무시.
+  - ⚠️ **경유 다리에도 환승이 적용된다**(`_leg_options`: 직통 우선 → 없으면 `_journey` 거점 환승).
+    예전엔 각 다리를 TAGO 직통 조회 1편으로만 이어서, **직통이 없는 구간**(예: 강릉→부산은 운행 열차 0편)이
+    끼면 경유가 통째로 탈락하고 직통 왕복만 남았다. 첫 다리도 가장 이른 편 하나가 아니라 이른 순
+    `VIA_LEG_TRIES`편까지 시도해 체류 창(2~6h)에 맞는 조합을 찾는다.
+  - 환승을 허용하면 연결만 되면 아무 경로나 성립하므로 **경유 후보에만** 세 겹의 제동을 건다
+    (`main`은 무조건 리턴 보장이라 제외):
+    - `_via_groups`: **출발역·도착역이 속한 클러스터를 환승 거점에서 통째로 제외**. 안 막으면
+      "서울 출발 → 강릉 → (청량리/서울) → 부산"처럼 이미 지나온 곳으로 되돌아갔다 다시 나가는 경로가 나온다.
+      역 하나가 아니라 클러스터 단위로 빼는 이유는 서울·용산·청량리가 같은 도시의 다른 터미널이라, 한 역만 빼면 옆 터미널로 새기 때문.
+    - `_via_travel_ok`: 총 이동시간이 **기본 왕복(main) 대비 `MAX_VIA_TRAVEL_RATIO`배**(+`MIN_VIA_TRAVEL_SLACK`분) 이내.
+    - `_via_hours_ok`: **심야 이동 금지**(`NIGHT_START`~`NIGHT_END` 출발, `NIGHT_LATE_ARR`~`NIGHT_END` 도착 탈락).
+      환승 다리는 대기 끝에 막차/첫차를 잡아 "동대구 00:28 출발 → 부산 01:3x 도착" 같은 후보를 만든다.
+  - **지정 경유 실패 시 자동 경유로 폴백**한다. 예전엔 지정 경유가 성립 안 하면 자동 중간역을 아예 만들지 않아
+    경로가 `[main]` 하나가 되고, `recommend_service._itineraries_from`의 마지막 채움이 그 직통을 복제해
+    **A/B/C 세 카드가 전부 같은 직통**이 됐다. 지금은 사유(`_via_miss_note`: 어느 구간에 열차가 없는지 /
+    체류 조건 불가)를 `main.note`에 남기고 자동 중간역 경유를 대신 채운다.
   - **경유값 방어**: `via_station_idx`는 `SearchCriteria` 검증기가 `≤0`(Swagger 기본값 0 포함)을 `None`으로 정규화한다. route_service도 미존재·철도 미지원·좌표 없는 역이면 **예외 없이 조용히 경유만 생략**(직통 등 열차 정보를 통째로 잃지 않도록) → 자동 경유 모드로 진행.
   - 자동 경유: `_candidate_stops`가 지리적 중간역을 뽑되 **출발·도착 양쪽에서 `max(MIN_LEG_KM, base·MIN_LEG_RATIO)` 이상 떨어진 역만**
     (서울→용산/구포처럼 종점에 붙은 역 제외) + 우회비율 `MAX_DETOUR_RATIO` 이내. 열차가 성립하는 후보 전부를 `[main, 경유들…]`로 반환.
@@ -144,6 +160,18 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
     선택 테마와 겹치는 관광지 **수를 '테마 관련도 점수'** 로 쓰고(그 스캔 결과를 노출에도 재사용), `haversine` 가까운 순 상위 `_VIA_PLACES_N`(기본 3)곳을 `stopover_places`에 붙인다.
   - **자동 경유면** 테마 관련도↓(동점 시 이동시간↑)로 정렬해 상위 `_STOPOVER_N`(기본 3)개만 남기고 나머지 경유는 버린다. **지정 경유면** 단일 경유라 그대로. 직통/환승은 항상 유지·선두.
   - route_service가 아니라 여기서 하는 이유: **route_service는 기차 그래프만**, 관광 데이터·테마는 `tour_place`+`recommend_service` 담당(레이어 경계).
+  - ⚠️ **당일치기·숙박 경유는 서로를 모른 채 따로 조회돼 합쳐진다**(`_fetch_routes`가 `via_nights=0`/`1`을 병렬 호출).
+    지정 경유가 당일치기로만 실패하면 그 호출은 자동 경유로 폴백하면서 "…경유를 제외했습니다"를 `main.note`에 남기는데,
+    숙박 쪽에서 성립하면 **카드엔 그 경유역이 떠 있는데 note는 제외됐다고 말하는** 모순이 생긴다. 합친 뒤 두 번 손본다:
+    - `_clear_stale_via_miss`: 지정 경유역 경로가 살아 있으면 `RouteCandidate.via_miss_note`를 핸들 삼아
+      `note`에서 **그 문장만** 잘라낸다(환승 안내 등 다른 비고는 보존).
+    - `_prioritize_via`: `main → 지정 경유 → 폴백 자동 경유` 순으로 재배치. 안 하면 폴백 후보들이 앞을 차지해
+      진짜 지정 경유가 상위 3장(플랜 A/B/C) 밖으로 밀려 **사용자가 요청한 역이 카드에서 사라진다**.
+
+⚠️ **경유역 체류 시간대는 `RouteCandidate.via_arr_time`/`via_dep_time`으로만 판단하라.** 다리에 환승이 끼면
+`go_trains`가 3~4편이 되어 `go_trains[0].arr_time`/`[1].dep_time` 같은 **위치 기반 추정이 깨진다**(반대 방향
+여정이 환승이면 `len(go_trains)>=2`로 방향을 가르던 것도 오판). `route_service._assemble_stopover`가 조립할 때
+값으로 실어 보내고, `recommend_service._via_window`/`_overnight_segments`와 `itinerary.build_itinerary`가 그것만 읽는다.
 
 출력 타입 `StopoverPlace`와 `RouteCandidate.stopover_places`/`via_station_idx`는 **`schemas/route_schema.py`** 에 있다
 (`recommend_schema`가 `route_schema`를 import하므로 `RecommendedPlace` 직접 재사용은 순환 참조라 불가 → `StopoverPlace`로

@@ -43,12 +43,12 @@ def build_itinerary(route, course, go_date: str) -> Itinerary:
                 start_time=t.dep_time, end_time=t.arr_time, train=t,
             ))
         # 당일치기 경유 관광(하차역 근처). 숙박 경유는 stopover_places가 비어 관광이 코스에 들어있다.
-        if route.stopover_places:
-            # 2편인 방향(가는편/오는편)의 [하차 다리, 승차 다리]. 하차 도착~승차 출발이 경유 체류 시간대.
-            legs = route.go_trains if len(route.go_trains) >= 2 else route.back_trains
-            d = legs[0].arr_time.strftime("%Y%m%d")  # 경유 관광일(하차역 도착일)
-            dwell = legs[0].arr_time    # 체류 시작(하차) 시각 — 방문시각 미상 관광의 정렬 기준
-            depart = legs[1].dep_time   # 둘째 열차 출발 시각 — 방문 종료 상한
+        if route.stopover_places and route.via_arr_time is not None:
+            # 체류 시간대는 route_service가 실어 보낸 값을 쓴다 — 다리에 환승이 끼면 go_trains의
+            # 위치(0/1)로는 하차·승차 다리를 짚을 수 없다.
+            d = route.via_arr_time.strftime("%Y%m%d")  # 경유 관광일(하차역 도착일)
+            dwell = route.via_arr_time   # 체류 시작(하차) 시각 — 방문시각 미상 관광의 정렬 기준
+            depart = route.via_dep_time  # 다음 열차 출발 시각 — 방문 종료 상한
             for sp in route.stopover_places:
                 seg = _visit_seg(_stopover_to_place(sp), d, go)
                 if seg.start_time is None:  # 체류 중 폐점 등으로 방문시각 미상 → 체류 슬롯에 정렬
@@ -175,6 +175,8 @@ def _selfcheck() -> None:
         route_type="경유", path="서울→대전→부산", via_station_idx=5,
         go_trains=[train("1", "서울", "대전", 9, 11), train("2", "대전", "부산", 13, 15)],
         stay_minutes=120, back_trains=[train("3", "부산", "서울", 18, 21)],
+        via_arr_time=datetime(2026, 7, 10, 11, 0, tzinfo=KST),   # 대전 하차
+        via_dep_time=datetime(2026, 7, 10, 13, 0, tzinfo=KST),   # 대전 승차
         total_travel_minutes=300, total_fare=30000, stopover_places=[sp],
     )
     it = build_itinerary(via, course, "20260710")
