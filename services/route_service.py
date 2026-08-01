@@ -314,8 +314,15 @@ def _via_travel_ok(route: RouteCandidate, main: RouteCandidate | None) -> bool:
 
     환승 허용의 대가로 "출발→경유→(왔던 길)→도착"처럼 되돌아가는 연결도 성립하므로,
     직통 대비 MAX_VIA_TRAVEL_RATIO배(짧은 노선 보호용 +MIN_VIA_TRAVEL_SLACK분) 안쪽만 남긴다.
+
+    단 main이 반쪽(가는편 또는 오는편을 못 찾음)이면 상한을 걸지 않는다. total_travel_minutes가
+    한 방향 합이라, 왕복인 경유 후보는 어떤 값이어도 그 상한을 넘어 전부 탈락한다 — 경유역을
+    거쳐야만 도착역에 닿는 경우(via가 환승 거점이 아니라 _journey는 실패하는 노선) 유일하게
+    성립하는 경로까지 지워버린다. 비교 기준이 없을 뿐이지 후보가 나쁜 게 아니다.
     """
-    base = main.total_travel_minutes if main is not None else 0
+    if main is None or not main.go_trains or not main.back_trains:
+        return True
+    base = main.total_travel_minutes
     if base <= 0:
         return True
     return route.total_travel_minutes <= max(base * MAX_VIA_TRAVEL_RATIO, base + MIN_VIA_TRAVEL_SLACK)
