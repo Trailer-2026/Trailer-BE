@@ -45,7 +45,7 @@ def list_comments(db: Session, user, reels_idx: int) -> list[CommentResponse]:
     rows = comment_dao.list_by_reels(
         db, reels_idx, exclude_user_idxs=ban_dao.blocked_user_idxs(db, user.user_idx)
     )
-    idxs = [c.comment_idx for c, _ in rows]
+    idxs = [c.comment_idx for c, *_ in rows]
     counts = like_dao.counts_by_comments(db, idxs)
     liked = like_dao.liked_comment_idxs(db, user.user_idx, idxs)
 
