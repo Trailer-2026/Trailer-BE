@@ -697,30 +697,29 @@ def _fetch_routes(db: Session, origin, dest, criteria: SearchCriteria, k: int) -
             wdb.close()
 
     try:
-        # main(당일)과 숙박경유(via_nights=1)는 서로 독립적인 경로 탐색이라 병렬로 왕복 지연을 겹친다.
+        # 당일(0)과 숙박경유(1)는 같은 구간을 대부분 공유하므로 **순차로** 돈다. 병렬로 돌리면
+        # 두 호출이 같은 (역,역,날짜)를 동시에 조회하는데 fetch_trains의 lru_cache는 응답이 온
+        # 뒤에야 차서 캐시 히트가 0 — TAGO 콜이 그대로 2배가 되고 순간 동시요청도 2배라 429를
+        # 자초한다. 순차면 두 번째 호출의 신규 구간은 날짜 넘는 다리 몇 개뿐이다.
         # 숙박 경유는 k>=3(경유 1박 후 목적지에 최소 1박 남음)에서만.
+        routes = _recommend(0)
         if k >= 3:
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                fut_main = ex.submit(_recommend, 0)
-                fut_over = ex.submit(_recommend, 1)
-                routes = fut_main.result()  # 실패 시 outer except로 → 코스만 제공
-                try:
-                    routes = routes + [r for r in fut_over.result() if r.via_nights >= 1]
-                except Exception as e:  # 숙박 경유 실패해도 당일치기·직통 경로는 유지
-                    logger.warning("숙박 경유 조회 실패(기본 경로는 유지): %s", e)
-        else:
-            routes = _recommend(0)
+            try:
+                routes = routes + [r for r in _recommend(1) if r.via_nights >= 1]
+            except Exception as e:  # 숙박 경유 실패해도 당일치기·직통 경로는 유지
+                logger.warning("숙박 경유 조회 실패(기본 경로는 유지): %s", e)
         routes = _enrich_stopovers(db, routes, criteria)
         _clear_stale_via_miss(routes, criteria.via_station_idx)
         routes = _prioritize_via(routes, criteria.via_station_idx)
         _attach_train_stops(db, routes)
         return routes, None
-    except dgo.PublicApiRejectedError:
-        # 키가 전부 거부된 상황을 '코스만 제공'으로 뭉개면 안 된다 — 기차 없는 카드가 조용히
-        # 나가고 원인은 안 보인다(예전엔 실패 호출 수백 건을 다 쏘다 타임아웃만 났다).
-        raise
     except Exception as e:
-        logger.warning("기차 경로 조회 실패: %s", e)
+        logger.warning("기차 경로 조회 실패: %s: %s", type(e).__name__, e)
+        # 응답 계약은 그대로(200 + 코스). 다만 키 거부(한도 소진·키 만료·공공API 장애)는
+        # 원인을 note에 그대로 실어 보낸다 — 예전엔 "코스만 제공"으로 뭉개져 기차가 왜 없는지
+        # 알 길이 없었고, 실패 호출 수백 건을 끝까지 쏘다 타임아웃만 나기도 했다.
+        if isinstance(e, dgo.PublicApiRejectedError):
+            return [], e.message
         return [], "기차 경로를 불러오지 못했습니다(코스만 제공)."
 
 

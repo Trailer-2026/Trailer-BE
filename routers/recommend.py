@@ -25,8 +25,9 @@ router = APIRouter(prefix="/api/recommend", tags=["Recommend"])
                 "- 404: 출발역 없음\n"
                 "- 400: 날짜 형식 오류, 오는날<가는날, 지정한 도착역 좌표 없음\n"
                 "- 도착역 미지정 시 운행역을 못 찾으면 인근 대도시(KTX)로 폴백합니다.\n"
-                "- 기차 경로 조회 실패(키 미설정 등) 시에도 코스는 제공되며 note로 표기됩니다.\n"
-                "- 502: 공공데이터포털 API 일일 호출 한도 초과·서비스 키 거부 (코스도 제공되지 않음)",
+                "- 기차 경로 조회 실패(키 미설정, 공공데이터포털 한도 초과·장애 등) 시에도 코스는 "
+                "제공되며 사유가 note로 표기됩니다.\n"
+                "- 502: 관광 데이터 조회까지 실패한 경우(공공데이터포털 서비스 키 거부·장애)",
     response_model=CommonResponse[RecommendResponse],
 )
 def recommend_courses(

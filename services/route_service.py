@@ -153,31 +153,42 @@ def _safe_fetch(dep_nat: str, arr_nat: str, ymd: str) -> None:
         pass
 
 
-def _prefetch_segments(dep, arr, groups, stops, go_date, back_date) -> None:
-    """이번 추천에 필요한 모든 (출발,도착,날짜) 구간을 병렬로 미리 받아 캐시를 데운다.
+def _prefetch_segments(dep, arr, groups, stops, go_date, back_date, nail_pass: bool = False) -> None:
+    """이번 추천에 필요한 (출발,도착,날짜) 구간을 병렬로 미리 받아 캐시를 데운다.
 
     이후 _journey/_via_pair의 순차 호출은 전부 캐시 히트가 되어 빨라진다.
     fetch_trains는 등급 필터 전 원본이라 내일로 여부와 무관하게 공유된다.
+
+    환승 거점 다리(거점 1곳당 4구간)는 **직통이 없는 방향에만** 데운다. 직통이 있으면 _journey가
+    거점을 아예 보지 않는데(직통 우선), 그걸 전부 데우면 서울→부산 한 번 검색에 쓰지도 않을
+    40여 콜이 나간다 — 전체 콜의 절반이 넘는다. 데우기(성능)만 건드리는 판정이라 틀려도 결과는
+    안 변한다(그땐 _journey가 그 자리에서 조회한다). _prefetch_transfer_legs는 이미 같은 방식이다.
     """
-    pairs = {
-        (dep.nat_code, arr.nat_code, go_date),
-        (arr.nat_code, dep.nat_code, back_date),
-    }
-    members = {s.station_idx: s for g in groups for s in g}.values()  # 전 그룹 거점역 중복 제거
-    for m in members:
-        if m.station_idx in (dep.station_idx, arr.station_idx) or not m.nat_code:
-            continue
-        # 환승 거점 m: 가는편(dep→m→arr)·오는편(arr→m→dep) 양방향 4구간을 모두 데운다.
-        pairs.add((dep.nat_code, m.nat_code, go_date))
-        pairs.add((m.nat_code, arr.nat_code, go_date))
-        pairs.add((arr.nat_code, m.nat_code, back_date))
-        pairs.add((m.nat_code, dep.nat_code, back_date))
+    # 직통 유무가 아래 판정 기준이라 기본 왕복 2구간을 먼저 데운다.
+    base = [(dep.nat_code, arr.nat_code, go_date), (arr.nat_code, dep.nat_code, back_date)]
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        list(ex.map(lambda p: _safe_fetch(*p), base))
+
+    pairs = set()
+    members = [  # 전 그룹 거점역 중복 제거 + 출발·도착역 자신 제외
+        s for s in {s.station_idx: s for g in groups for s in g}.values()
+        if s.nat_code and s.station_idx not in (dep.station_idx, arr.station_idx)
+    ]
+    for a, b, ymd in ((dep, arr, go_date), (arr, dep, back_date)):
+        if not _direct_missing(a, b, ymd, nail_pass):
+            continue  # 직통이 있으면 그 방향은 환승 탐색이 안 돈다 → 거점 다리는 순수 낭비
+        for m in members:
+            # 환승 거점 m: 하차 다리(a→m)·승차 다리(m→b)를 그 방향 날짜로 데운다.
+            pairs.add((a.nat_code, m.nat_code, ymd))
+            pairs.add((m.nat_code, b.nat_code, ymd))
     for c in stops:
         # 관광 경유 후보 c: 가는편(dep→c→arr)·오는편(arr→c→dep) 양방향 경유를 모두 데운다.
         pairs.add((dep.nat_code, c.nat_code, go_date))
         pairs.add((c.nat_code, arr.nat_code, go_date))
         pairs.add((arr.nat_code, c.nat_code, back_date))
         pairs.add((c.nat_code, dep.nat_code, back_date))
+    if not pairs:
+        return
     with ThreadPoolExecutor(max_workers=min(16, len(pairs))) as ex:
         list(ex.map(lambda p: _safe_fetch(*p), pairs))
 
@@ -620,7 +631,7 @@ def recommend(
     # 경유역 지정 시엔 그 역만 경유하므로 지리적 중간역 자동 후보는 만들지 않는다.
     stops = [] if via is not None else _candidate_stops(all_stations, dep, arr)
     prefetch_stops = stops + ([via] if via is not None else [])
-    _prefetch_segments(dep, arr, groups, prefetch_stops, go_date, back_date)
+    _prefetch_segments(dep, arr, groups, prefetch_stops, go_date, back_date, nail_pass)
 
     def _prefetch_overnight(targets: list[Station]) -> None:
         # 숙박 경유는 날짜 넘는 구간이 있어 그 날짜들을 별도로 데운다(나머지 방향은 _prefetch_segments가 이미 warm).
@@ -703,28 +714,115 @@ def recommend(
     #      성립하지 않으면 사유를 main.note에 남기고 자동 중간역 경유로 폴백한다.
     #    - 미지정 시: 지리적 중간역을 자동 선정(출발·도착에 붙은 역 제외)해 가는편·오는편 경유를 모두 제공.
     #      최종 상위 N개 선별은 '테마 관련도' 기준으로 recommend_service가 한다(여기선 지리·시각표만).
-    if via is not None:
-        stopovers = _stopovers_for([via])
-        if stopovers:
-            return [main] + stopovers
-        # 지정 경유 실패 — 원인을 구간별로 구분해 안내하고, 경유 카드가 0장이 되지 않도록
-        # 자동 중간역 경유로 폴백한다(예전엔 여기서 직통만 남아 세 카드가 전부 같은 직통이 됐다).
-        kind = f"{via_nights}박 숙박 경유" if overnight else "2~6시간 체류 조건"
-        miss = _via_miss_note(dep, arr, via, go_date, go_start, _via_groups(groups, dep, arr), nail_pass, kind,
-                              nights=via_nights if overnight else 0)
-        fallback = _candidate_stops(all_stations, dep, arr)
-        if fallback:
-            _prefetch_segments(dep, arr, [], fallback, go_date, back_date)  # 거점↔dep/arr은 이미 warm
-            if overnight:
-                _prefetch_overnight(fallback)
-            _warm_via_transfers(fallback)  # 후보↔거점(환승 다리)까지 데운 뒤라야 순차 콜이 안 터진다
-            stopovers = _stopovers_for(fallback)
-        if stopovers:
-            miss = f"{miss} 대신 가는 길의 다른 역 경유를 추천합니다."
-        # 이 호출 안에서는 사실이지만, 호출부가 당일치기/숙박 결과를 합치면 어긋날 수 있다
-        # (당일치기는 실패해도 숙박 경유로 그 역을 가는 경우). 잘라낼 수 있게 핸들로도 남긴다.
-        main.via_miss_note = miss
-        main.note = " / ".join(n for n in (main.note, miss) if n) or None
-        return [main] + stopovers
+    def _stopover_routes() -> list[RouteCandidate]:
+        if via is not None:
+            stopovers = _stopovers_for([via])
+            if stopovers:
+                return stopovers
+            # 지정 경유 실패 — 원인을 구간별로 구분해 안내하고, 경유 카드가 0장이 되지 않도록
+            # 자동 중간역 경유로 폴백한다(예전엔 여기서 직통만 남아 세 카드가 전부 같은 직통이 됐다).
+            kind = f"{via_nights}박 숙박 경유" if overnight else "2~6시간 체류 조건"
+            miss = _via_miss_note(dep, arr, via, go_date, go_start, _via_groups(groups, dep, arr), nail_pass, kind,
+                                  nights=via_nights if overnight else 0)
+            fallback = _candidate_stops(all_stations, dep, arr)
+            if fallback:
+                _prefetch_segments(dep, arr, [], fallback, go_date, back_date, nail_pass)  # 거점↔dep/arr은 이미 warm
+                if overnight:
+                    _prefetch_overnight(fallback)
+                _warm_via_transfers(fallback)  # 후보↔거점(환승 다리)까지 데운 뒤라야 순차 콜이 안 터진다
+                stopovers = _stopovers_for(fallback)
+            if stopovers:
+                miss = f"{miss} 대신 가는 길의 다른 역 경유를 추천합니다."
+            # 이 호출 안에서는 사실이지만, 호출부가 당일치기/숙박 결과를 합치면 어긋날 수 있다
+            # (당일치기는 실패해도 숙박 경유로 그 역을 가는 경우). 잘라낼 수 있게 핸들로도 남긴다.
+            main.via_miss_note = miss
+            main.note = " / ".join(n for n in (main.note, miss) if n) or None
+            return stopovers
 
-    return [main] + _stopovers_for(stops)
+        return _stopovers_for(stops)
+
+    # 경유는 부가 정보다 — 여기 도달했다는 건 main(기본 왕복)이 이미 완성됐다는 뜻이므로,
+    # 경유 조회가 어떻게 실패하든 기차를 통째로 잃지 않는다. 예전엔 경유 후보 한 곳의 한 구간이
+    # 429를 맞으면 그 예외가 recommend() 밖으로 나가고, 호출측(_fetch_routes)이 빈 목록으로
+    # 받아 직통 왕복까지 버렸다("기차 없이 코스만" 카드의 정체).
+    #   · 키가 처음부터 죽었으면 위 _journey에서 이미 터져 502로 나간다(여기 도달 못 함)
+    #   · 중간에 죽었으면 캐시로 완성된 main을 준다
+    # → "기차를 못 얻으면 502 / 경유만 실패하면 기본 왕복" 이 분기가 배치만으로 갈린다.
+    try:
+        return [main] + _stopover_routes()
+    except Exception as e:
+        logger.warning("경유 경로 조회 실패(기본 왕복만 제공): %s: %s", type(e).__name__, e)
+        main.note = " / ".join(n for n in (main.note, "경유 경로는 불러오지 못했습니다.") if n) or None
+        return [main]
+
+
+def _selfcheck() -> None:
+    """'무조건 리턴 보장' 셀프체크(네트워크·DB 없음) — 실행: python -m services.route_service.
+
+    경유 조회가 실패해도 기본 왕복(main)은 반드시 남아야 한다. 예전엔 경유 후보 한 곳의
+    구간 조회가 예외를 던지면 그게 recommend() 밖으로 나가 직통 왕복까지 사라졌다.
+    """
+    import sys
+    from datetime import datetime as _dt
+
+    from databases.daos import station_dao as dao
+
+    mod = sys.modules[__name__]
+    stations = [
+        Station(station_idx=1, station_name="서울역", nat_code="NAT010000", latitude=37.5559, longitude=126.9723),
+        Station(station_idx=2, station_name="부산역", nat_code="NAT014445", latitude=35.1151, longitude=129.0403),
+        # 중간역(경유 후보 겸 환승 거점)
+        Station(station_idx=3, station_name="대전역", nat_code="NAT030057", latitude=36.3320, longitude=127.4340),
+    ]
+
+    def trains(dep, arr, ymd):
+        # 어느 구간이든 2시간짜리 열차 5편(06/09/12/15/18시). 09시 출발 → 11시 도착 → 15시 환승이
+        # 성립해 경유 체류(MIN_STAY 2h ~ MAX_STAY 6h)가 실제로 잡히는 시각표다.
+        out = []
+        for h in (6, 9, 12, 15, 18):
+            out.append({
+                "train_no": f"{dep[-3:]}{arr[-3:]}{h}", "grade": "KTX",
+                "dep_station": dep, "arr_station": arr,
+                "dep_time": _dt.strptime(f"{ymd}{h:02d}0000", "%Y%m%d%H%M%S").replace(tzinfo=train_api.KST),
+                "arr_time": _dt.strptime(f"{ymd}{h + 2:02d}0000", "%Y%m%d%H%M%S").replace(tzinfo=train_api.KST),
+                "fare": 59800,
+            })
+        return tuple(out)
+
+    def boom(*a, **k):
+        raise RuntimeError("구간 조회 실패(재현)")
+
+    orig = (train_api.fetch_trains, dao.get_by_idx, dao.get_stations, _via_pair)
+    train_api.fetch_trains = trains
+    dao.get_by_idx = lambda db, idx: next((s for s in stations if s.station_idx == idx), None)
+    dao.get_stations = lambda db: stations
+    try:
+        # 1) 정상: 기본 왕복 + 경유가 함께 나온다.
+        routes = recommend(None, 1, 2, "20260810", "20260814")
+        assert routes and routes[0].route_type in ("직통", "환승"), routes[0].route_type
+        assert routes[0].go_trains and routes[0].back_trains, "기본 왕복에 열차가 없다"
+        assert any(r.route_type == "경유" for r in routes), [r.route_type for r in routes]
+
+        # 2) 경유 다리 조회가 터져도 기본 왕복은 남는다(429·API 장애 시나리오).
+        mod._via_pair = boom
+        routes = recommend(None, 1, 2, "20260810", "20260814")
+        assert len(routes) == 1, [r.route_type for r in routes]
+        assert routes[0].go_trains and routes[0].back_trains, "기차가 통째로 사라졌다"
+        assert "경유 경로는 불러오지 못했습니다." in (routes[0].note or ""), routes[0].note
+
+        # 3) 기본 왕복 조회 자체가 터지면 예외를 그대로 올린다(원인을 502로 노출해야 하므로).
+        mod._via_pair = orig[3]
+        train_api.fetch_trains = boom
+        try:
+            recommend(None, 1, 2, "20260810", "20260814")
+            raise AssertionError("기본 왕복이 실패하면 예외가 올라와야 한다")
+        except ExternalServiceException:
+            pass
+    finally:
+        train_api.fetch_trains, dao.get_by_idx, dao.get_stations = orig[:3]
+        mod._via_pair = orig[3]
+    print("route_service selfcheck OK")
+
+
+if __name__ == "__main__":
+    _selfcheck()
