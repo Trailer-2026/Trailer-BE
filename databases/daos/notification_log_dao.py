@@ -5,12 +5,13 @@ from databases.models.notification_log import NotificationLog
 
 
 def create(
-    db: Session, user_idx: int, type: str, title: str, body: str,
+    db: Session, user_idx: int, notification_type: str, title: str, body: str,
     travel_idx: int | None = None,
 ) -> NotificationLog:
     """알림 이력 1건 생성. flush만 하고 commit은 서비스가 한다."""
     row = NotificationLog(
-        user_idx=user_idx, type=type, title=title, body=body, travel_idx=travel_idx,
+        user_idx=user_idx, type=notification_type, title=title, body=body,
+        travel_idx=travel_idx,
     )
     db.add(row)
     db.flush()
@@ -86,7 +87,7 @@ def mark_all_read(db: Session, user_idx: int) -> int:
     )
 
 
-def exists(db: Session, user_idx: int, type: str, travel_idx: int) -> bool:
+def exists(db: Session, user_idx: int, notification_type: str, travel_idx: int) -> bool:
     """같은 여행에 같은 종류의 알림을 이미 보낸 적이 있는지 — 중복 발송 방지용.
 
     기간 제한이 없다(D-1은 여행당 평생 1회). soft-delete된 이력도 '보낸 적 있음'으로
@@ -94,7 +95,7 @@ def exists(db: Session, user_idx: int, type: str, travel_idx: int) -> bool:
     """
     query = db.query(NotificationLog).filter(
         NotificationLog.user_idx == user_idx,
-        NotificationLog.type == type,
+        NotificationLog.type == notification_type,
         NotificationLog.travel_idx == travel_idx,
     )
     return db.query(query.exists()).scalar()

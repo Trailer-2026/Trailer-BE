@@ -77,7 +77,7 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 
 **유의할 점**
 
-- **풍경은 이력을 남기지 않는다**(`notify(..., record=False)`). 알림 화면에서 풍경은 목록이 아니라 상단 카드로 뜨고 그 카드는 조회 응답(`based_at`·`items`)으로 그리면 되는데, 중복 억제도 없어서 이력을 남기면 아무도 읽지 않는 행이 호출 횟수만큼 쌓이기 때문이다. 결과적으로 `notification_log`에는 `TRAVEL_SAVED`/`TRAVEL_D1`만 들어간다.
+- **풍경은 이력을 남기지 않는다**(`notify(..., record=False)`). 알림 화면에서 풍경은 목록이 아니라 상단 카드로 뜨고 그 카드는 조회 응답(`based_at`·`items`)으로 그리면 되는데, 중복 억제도 없어서 이력을 남기면 아무도 읽지 않는 행이 호출 횟수만큼 쌓이기 때문이다. 결과적으로 `notification_log`에는 여행 알림 3종(`TRAVEL_SAVED`/`TRAVEL_D1`/`TRAVEL_DELETED`)만 들어간다.
 - **중복 발송을 막는 건 D-1뿐**이다(`push_service.notify_trip_d1`이 `notification_log_dao.exists`로 직접 검사 — 자정 배치와 저장 시점 두 경로가 같은 여행을 건드리므로 여행당 1회). **풍경은 억제하지 않는다** — 조회할 때마다 보내고, 호출 빈도 조절은 앱 몫이다. 이력을 FCM 호출보다 먼저 커밋하므로 **Firebase 장애 시 재시도하지 않는다(at-most-once)** — 대신 알림 화면에는 남는다.
 - **D-1을 저장 시점에도 보내는 이유**: 오늘 저장한 '내일 출발' 여행은 자정 배치만으로는 **영영 알림을 못 받는다**. 다음 자정(= 출발 당일 00:00)의 배치는 '내일 출발'을 찾으므로 그 여행은 이미 대상이 아니기 때문이다.
 - **대상은 `travel_idx` 하나**다. 이력에 남는 알림이 전부 여행에 딸린 것이라 다형 참조(`ref_type`/`ref_idx`)를 쓰지 않는다. 딥링크 정보는 FCM `data` payload로도 내려가는데, 거기선 종류에 맞는 키만 담는다(`travel_idx` 또는 풍경의 `scenic_spot_idx`) — FCM `data` 값은 전부 문자열이라 빈 값과 구분이 안 되기 때문이다. `TRAVEL_DELETED`의 `travel_idx`는 이미 삭제된 여행이라 열면 404이니 앱이 이동시키면 안 된다.

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, text
 
 from databases.models.base import BaseModel
 
@@ -18,6 +18,17 @@ class NotificationLog(BaseModel):
         # 알림 화면의 커서 페이징 질의(user_idx로 좁히고 PK 역순) 그대로를 태운다.
         # 정렬 키를 created_at이 아닌 PK로 잡는 이유는 dao.list_by_user 참조.
         Index('ix_notification_log_user_idx', 'user_idx', 'notification_log_idx'),
+        # D-1은 여행당 1회라는 불변식을 DB로 강제한다. 자정 배치와 저장 시점 즉시 발송이
+        # 동시에 같은 여행을 집으면 양쪽 다 이력 검사를 통과할 수 있어(check-then-act),
+        # 애플리케이션 검사만으로는 중복 발송을 완전히 막지 못한다. 늦게 INSERT한 쪽이
+        # 여기서 걸려 push_service.notify의 예외 처리로 롤백되고 푸시도 나가지 않는다.
+        # 다른 종류(추가·삭제)는 반복될 수 있어 부분 인덱스로 D-1만 건다.
+        Index(
+            'uq_notification_log_travel_d1', 'user_idx', 'travel_idx',
+            unique=True,
+            postgresql_where=text("type = 'TRAVEL_D1'"),
+            sqlite_where=text("type = 'TRAVEL_D1'"),
+        ),
         {'comment': '발송된 알림 이력 (알림 화면 목록)'},
     )
 

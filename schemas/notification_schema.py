@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from core.enums import NotificationType
+
 
 class NotificationResponse(BaseModel):
     """알림 설정 화면의 on/off 스위치 상태."""
@@ -25,7 +27,7 @@ class NotificationLogItem(BaseModel):
     """알림 화면에 뜨는 알림 1건."""
 
     notification_log_idx: int = Field(..., description="알림 PK (읽음 처리·페이징 커서에 사용)", examples=[128])
-    type: str = Field(
+    type: NotificationType = Field(
         ...,
         description="알림 종류 — TRAVEL_SAVED(일정 추가) | TRAVEL_D1(출발 하루 전) | "
                     "TRAVEL_DELETED(일정 삭제). "

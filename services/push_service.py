@@ -28,6 +28,10 @@ _ALARM_FIELD = {
     NotificationType.SCENERY: "scenery_alarm",
 }
 
+# 탭해도 열 화면이 없는 종류 — 대상이 이미 삭제돼 조회하면 404다. 어느 여행이었는지는
+# 이력(notification_log.travel_idx)에 남기되, 앱이 이동에 쓰는 FCM data에서는 뺀다.
+_NO_DEEPLINK = {NotificationType.TRAVEL_DELETED}
+
 # 알림 화면이 종류별 라벨로 쓰는 제목(디자인의 "풍경알림" 칩). OS 푸시의 제목이기도 하다.
 _TITLE_TRAVEL = "일정알림"
 _TITLE_SCENERY = "풍경알림"
@@ -72,15 +76,16 @@ def notify(
 
         if record:
             notification_log_dao.create(
-                db, user_idx=user_idx, type=ntype.value, title=title, body=body,
+                db, user_idx=user_idx, notification_type=ntype.value, title=title, body=body,
                 travel_idx=travel_idx,
             )
             db.commit()
 
         # data는 앱이 알림을 탭했을 때 어느 화면을 열지 판단하는 딥링크 정보.
         # 해당 없는 키는 빼서 보낸다(FCM data 값은 모두 문자열이라 빈 값과 구분이 안 된다).
+        # 값의 문자열 변환은 firebase.send_multicast가 맡는다.
         data = {"type": ntype.value}
-        if travel_idx is not None:
+        if travel_idx is not None and ntype not in _NO_DEEPLINK:
             data["travel_idx"] = travel_idx
         if scenic_spot_idx is not None:
             data["scenic_spot_idx"] = scenic_spot_idx
@@ -121,7 +126,9 @@ def notify_trip_d1(db: Session, user_idx: int, travel) -> bool:
     """'일정이 하루 남았어요' — 출발 하루 전 발송. 여행당 1회만 나간다(멱등).
 
     자정 배치와 저장 시점 즉시 발송 두 경로가 같은 여행을 건드릴 수 있어, 이미 보낸
-    이력이 있으면 건너뛴다. 판정 근거는 notification_log뿐이다.
+    이력이 있으면 건너뛴다. 이 검사는 빠른 경로일 뿐 경합(check-then-act)에는
+    무력해서, 최종 방어는 notification_log의 부분 유니크 인덱스가 맡는다 — 늦게
+    INSERT한 쪽이 거기서 걸려 notify 안에서 롤백되고 푸시도 나가지 않는다.
     """
     if notification_log_dao.exists(
         db, user_idx, NotificationType.TRAVEL_D1.value, travel.travel_idx
@@ -138,8 +145,9 @@ def notify_trip_d1(db: Session, user_idx: int, travel) -> bool:
 def notify_travel_deleted(db: Session, user_idx: int, travel) -> bool:
     """'일정에서 삭제되었어요' — 여행이 삭제된 직후 발송. 반드시 커밋 이후에 호출한다.
 
-    소프트 삭제라 travel 행 자체는 남아 travel_idx FK도 유효하다. 다만 앱이 이 알림을
-    탭해 여행을 열면 삭제된 여행이라 404가 나므로, 딥링크는 걸지 않는 편이 낫다.
+    소프트 삭제라 travel 행 자체는 남아 travel_idx FK도 유효하다. 다만 열면 404이므로
+    FCM data에는 travel_idx를 싣지 않는다(_NO_DEEPLINK) — 이력에는 어느 여행이었는지
+    남으니 식별은 되고, 앱이 실수로 이동시킬 여지만 없앤다.
     """
     return notify(
         db, user_idx, NotificationType.TRAVEL_DELETED,

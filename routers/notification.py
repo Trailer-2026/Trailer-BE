@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/notifications", tags=["알림"])
 def get_notifications(
     limit: int = Query(20, ge=1, le=100, description="한 번에 가져올 개수 (1~100, 기본 20)"),
     cursor: int | None = Query(
-        None, description="이전 응답의 next_cursor. 첫 페이지는 생략합니다.",
+        None, ge=1, description="이전 응답의 next_cursor. 첫 페이지는 생략합니다.",
     ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -61,7 +61,7 @@ def read_all_notifications(
     response_model=CommonResponse[None],
 )
 def read_notification(
-    notification_log_idx: int = Path(..., description="읽음 처리할 알림 PK"),
+    notification_log_idx: int = Path(..., ge=1, description="읽음 처리할 알림 PK"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
