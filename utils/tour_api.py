@@ -7,9 +7,7 @@ train_api.py와 동형: urllib + _type=json, 실패 시 예외를 그대로 올�
 """
 import json
 import urllib.parse
-import urllib.request
 
-from config import Config
 from utils import dgo
 
 _BASE = "https://apis.data.go.kr/B551011/KorService2"
@@ -18,27 +16,32 @@ _COMMON = {
     "MobileApp": "Trailer",
     "_type": "json",
 }
-
-
-def _service_key() -> str:
-    # Decoding 키. urlencode가 다시 인코딩하므로 원본(디코딩) 값을 넣는다.
-    return Config.read("tourapi", "service_key")
+# serviceKey는 dgo가 주입한다(config [tourapi] service_key, 콤마로 여러 키 가능).
 
 
 def _get(operation: str, params: dict, timeout: int = 20) -> dict:
-    """KorService2 오퍼레이션 1콜. response.body(dict)를 반환한다."""
-    q = {**_COMMON, "serviceKey": _service_key(), **params}
-    url = f"{_BASE}/{operation}?" + urllib.parse.urlencode(q)
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        payload = json.load(r)
-    # data.go.kr 오류는 두 형태: (1) 최상위 {resultCode, resultMsg} (2) response.header.resultCode
-    if "response" not in payload:
-        raise RuntimeError(f"TourAPI {operation} 실패: {payload.get('resultCode')} {payload.get('resultMsg')}")
-    resp = payload["response"]
-    header = resp.get("header") or {}
-    if header.get("resultCode") not in ("0000", "0", None):
-        raise RuntimeError(f"TourAPI {operation} 실패: {header.get('resultCode')} {header.get('resultMsg')}")
-    return resp.get("body") or {}
+    """KorService2 오퍼레이션 1콜. response.body(dict)를 반환한다.
+
+    serviceKey 주입·거부 시 다음 키로의 로테이션은 dgo가 맡는다(TAGO와 같은 계정 키를 쓰므로
+    죽은 키 정보를 공유한다). body만 필요한 dgo.get_body와 달리 여기선 header.resultCode까지
+    봐야 해서 요청 자체는 직접 만든다.
+    """
+    def _call(key: str) -> dict:
+        q = {**_COMMON, "serviceKey": key, **params}
+        url = f"{_BASE}/{operation}?" + urllib.parse.urlencode(q)
+        payload = dgo.fetch_json(url, timeout)
+        # data.go.kr 오류는 두 형태: (1) 최상위 {resultCode, resultMsg} (2) response.header.resultCode
+        if "response" not in payload:
+            dgo.raise_if_key_problem(json.dumps(payload, ensure_ascii=False))
+            raise RuntimeError(f"TourAPI {operation} 실패: {payload.get('resultCode')} {payload.get('resultMsg')}")
+        resp = payload["response"]
+        header = resp.get("header") or {}
+        if header.get("resultCode") not in ("0000", "0", None):
+            dgo.raise_if_key_problem(json.dumps(header, ensure_ascii=False))
+            raise RuntimeError(f"TourAPI {operation} 실패: {header.get('resultCode')} {header.get('resultMsg')}")
+        return resp.get("body") or {}
+
+    return dgo.with_key(_call, _BASE)
 
 
 def area_based_list(

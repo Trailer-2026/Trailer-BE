@@ -19,7 +19,7 @@ from schemas.recommend_schema import (
 )
 from schemas.route_schema import StopoverPlace
 from services import route_service
-from utils import plan_cache, tour_place
+from utils import dgo, plan_cache, tour_place
 
 logger = logging.getLogger(__name__)
 
@@ -715,6 +715,10 @@ def _fetch_routes(db: Session, origin, dest, criteria: SearchCriteria, k: int) -
         routes = _prioritize_via(routes, criteria.via_station_idx)
         _attach_train_stops(db, routes)
         return routes, None
+    except dgo.PublicApiRejectedError:
+        # 키가 전부 거부된 상황을 '코스만 제공'으로 뭉개면 안 된다 — 기차 없는 카드가 조용히
+        # 나가고 원인은 안 보인다(예전엔 실패 호출 수백 건을 다 쏘다 타임아웃만 났다).
+        raise
     except Exception as e:
         logger.warning("기차 경로 조회 실패: %s", e)
         return [], "기차 경로를 불러오지 못했습니다(코스만 제공)."

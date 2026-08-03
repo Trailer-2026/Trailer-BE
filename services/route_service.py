@@ -40,7 +40,7 @@ from core.exceptions.custom import (
 from databases.daos import station_dao
 from databases.models.station import Station
 from schemas.route_schema import RouteCandidate, RouteTrain
-from utils import train_api
+from utils import dgo, train_api
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,8 @@ def _station(db: Session, idx: int, label: str) -> Station:
 def _legs(dep_nat: str, arr_nat: str, ymd: str, nail_pass: bool = False) -> tuple:
     try:
         trains = train_api.fetch_trains(dep_nat, arr_nat, ymd)
+    except dgo.PublicApiRejectedError:
+        raise  # 키 거부는 "조회 실패"로 뭉개지 말고 원인 문구를 그대로 올린다
     except Exception as e:
         logger.warning("구간 API 실패 %s->%s %s: %s", dep_nat, arr_nat, ymd, e)
         raise ExternalServiceException("열차 시간표 조회에 실패했습니다.")
