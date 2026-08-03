@@ -65,23 +65,53 @@ async def _train_stop_daily_loop():
             log.warning("train_stop 일일 갱신 실패(다음 주기 재시도): %s", e)
 
 
+async def _trip_reminder_daily_loop():
+    """매일 KST 자정에 '여행이 하루 남았습니다'(D-1) 알림을 보낸다.
+
+    시작 시 1회 보정 실행 — 서버가 자정에 꺼져 있었어도 놓친 D-1을 채운다. 이미 보낸
+    건은 notification_log로 걸러지므로 몇 번 돌아도 중복 발송되지 않는다.
+    실패해도 루프는 유지되고 다음 날 다시 시도한다.
+    """
+    from services import trip_reminder_service
+
+    log = logging.getLogger(__name__)
+    try:
+        n = await asyncio.to_thread(trip_reminder_service.send_d1_reminders)
+        if n:
+            log.info("D-1 여행 알림 시작 보정 발송: %d건", n)
+    except Exception as e:
+        log.warning("D-1 여행 알림 시작 보정 실패(다음 자정에 재시도): %s", e)
+    while True:
+        try:
+            await asyncio.sleep(trip_reminder_service.seconds_until_next_midnight_kst())
+            n = await asyncio.to_thread(trip_reminder_service.send_d1_reminders)
+            log.info("D-1 여행 알림 발송: %d건", n)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("D-1 여행 알림 실패(다음 자정에 재시도): %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_firebase()
     # OPENAPI_EXPORT(노션 동기화·인메모리 DB)나 명시적 off일 땐 자동 갱신 비활성.
     # 다중 워커로 띄우면 워커마다 돌므로, 그 땐 off하고 cron/systemd timer로 스크립트를 돌려라.
-    task = None
+    tasks = []
     if os.getenv("OPENAPI_EXPORT") != "1":
         push_service.ensure_tables()  # notification·notification_log 자체 provision (마이그레이션 도구 없음)
         if os.getenv("TRAIN_STOP_AUTOSYNC", "1") == "1":
-            task = asyncio.create_task(_train_stop_daily_loop())
+            tasks.append(asyncio.create_task(_train_stop_daily_loop()))
+        if os.getenv("TRIP_REMINDER_AUTOSYNC", "1") == "1":
+            tasks.append(asyncio.create_task(_trip_reminder_daily_loop()))
     try:
         yield
     finally:
-        if task is not None:
+        for task in tasks:
             task.cancel()
+        for task in tasks:
             try:
-                await task  # 취소가 실제로 반영돼 진행 중인 갱신이 멈출 때까지 대기
+                await task  # 취소가 실제로 반영돼 진행 중인 작업이 멈출 때까지 대기
             except asyncio.CancelledError:
                 pass
 
