@@ -88,9 +88,12 @@ def search_on_segment(
     matches.sort(key=lambda m: m[0])
 
     # 응답에 필요한 필드만 담은 슬림 item으로 매핑 (side는 진행 방향 좌/우 확정)
+    # scenic_spot_idx는 풍경 알림의 중복 발송 판정·딥링크 키다. 응답 스키마
+    # (ScenicSpotResponse)에는 없는 필드라 API 응답에는 노출되지 않는다.
     results: list[dict] = []
     for distance_m, spot, seg in matches[:top_n]:
         results.append({
+            "scenic_spot_idx": spot.scenic_spot_idx,
             "name": spot.name,
             "category": spot.category,
             "distance_m": round(distance_m, 1),

@@ -84,6 +84,22 @@ def get_active_travel(db: Session, user_idx: int, today: date) -> Travel | None:
     )
 
 
+def list_starting_on(db: Session, day: date) -> list[Travel]:
+    """그 날짜에 출발하는 모든 사용자의 여행 (soft-delete 제외).
+
+    D-1 알림 배치용 — 기준 날짜(KST)는 서비스가 구해 넘긴다.
+    """
+    return (
+        db.query(Travel)
+        .filter(
+            Travel.deleted_at.is_(None),
+            Travel.start_date == day,
+        )
+        .order_by(Travel.travel_idx)
+        .all()
+    )
+
+
 def list_completed_by_user(db: Session, user_idx: int, today: date) -> list[Travel]:
     """사용자의 '지난 여행'(종료일이 오늘 이전) 전체를 최신순으로 조회 (soft-delete 제외).
 
