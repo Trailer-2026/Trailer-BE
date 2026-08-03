@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from core.response import CommonResponse
-from core.security import get_current_user
+from core.security import get_current_user, get_optional_user
 from databases.database import get_db
 from databases.models.user import User
 from schemas.video_schema import (
@@ -226,14 +226,17 @@ def render_video_from_travel(
                 "한 번씩 추천됨) exclude를 무시하고 처음부터 다시 추천합니다. 각 릴스에는 "
                 "작성자의 닉네임(nickname)·프로필 사진(profile_image)이 함께 내려가며, "
                 "작성자 없는 옛 릴스는 둘 다 null 입니다. exclude 형식이 잘못되면 400을 "
-                "반환합니다.",
+                "반환합니다.\n\n"
+                "인증은 선택입니다 — JWT를 보내면 내가 차단한 사용자의 릴스가 결과에서 빠지고, "
+                "토큰이 없거나 만료됐으면 비로그인으로 간주해 전체에서 추천합니다(401 없음).",
     response_model=CommonResponse[list[ReelsRecommendResponse]],
 )
 def recommend_reels(
     exclude: str = Query("", description="제외할 reels_idx 목록 (쉼표 구분, 예: 1,5,9 — 이전 응답의 idx 누적)"),
     db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
 ):
-    reels = video_service.recommend_reels(db, exclude)
+    reels = video_service.recommend_reels(db, exclude, current_user)
     return CommonResponse.success_response("릴스 추천 목록 조회 성공", data=reels)
 
 
