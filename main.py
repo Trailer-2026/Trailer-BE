@@ -33,6 +33,8 @@ from routers.ban import router as ban_router
 from routers.video import router as video_router
 from routers.user import router as user_router
 from routers.share import router as share_router
+from routers.notification import router as notification_router
+from services import push_service
 from utils.firebase import init_firebase
 
 
@@ -69,8 +71,10 @@ async def lifespan(app: FastAPI):
     # OPENAPI_EXPORT(노션 동기화·인메모리 DB)나 명시적 off일 땐 자동 갱신 비활성.
     # 다중 워커로 띄우면 워커마다 돌므로, 그 땐 off하고 cron/systemd timer로 스크립트를 돌려라.
     task = None
-    if os.getenv("OPENAPI_EXPORT") != "1" and os.getenv("TRAIN_STOP_AUTOSYNC", "1") == "1":
-        task = asyncio.create_task(_train_stop_daily_loop())
+    if os.getenv("OPENAPI_EXPORT") != "1":
+        push_service.ensure_tables()  # notification·notification_log 자체 provision (마이그레이션 도구 없음)
+        if os.getenv("TRAIN_STOP_AUTOSYNC", "1") == "1":
+            task = asyncio.create_task(_train_stop_daily_loop())
     try:
         yield
     finally:
@@ -110,6 +114,7 @@ app.include_router(like_router)
 app.include_router(ban_router)
 app.include_router(video_router)
 app.include_router(user_router)
+app.include_router(notification_router)
 app.include_router(share_router)  # /r/{reels_idx} — 브라우저용 공유 페이지(HTML)
 
 @app.get("/")
