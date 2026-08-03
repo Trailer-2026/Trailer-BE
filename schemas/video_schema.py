@@ -17,8 +17,18 @@ class ReelsRecommendResponse(BaseModel):
     reels_idx: int = Field(..., description="릴스 PK (재요청 시 exclude에 누적해 전달)")
     url: str = Field(..., description="릴스 영상 URL")
     title: str | None = Field(None, description="릴스 제목 (없으면 null)")
+    like_count: int = Field(0, description="릴스 좋아요 수")
+    comment_count: int = Field(0, description="릴스 댓글 수 (답글 포함)")
+    is_liked: bool = Field(False, description="내가 좋아요한 릴스인지 (비로그인은 항상 false)")
     nickname: str | None = Field(None, description="릴스 작성자 닉네임 (작성자 없는 옛 릴스는 null)")
     profile_image: str | None = Field(None, description="릴스 작성자 프로필 사진 URL (작성자 없는 옛 릴스는 null)")
+
+
+class ReelsShareResponse(BaseModel):
+    """릴스 공유 링크."""
+
+    share_url: str = Field(..., description="공유용 페이지 URL (공유 시트에 그대로 넘기면 됨)")
+    title: str | None = Field(None, description="릴스 제목 (공유 문구용, 없으면 null)")
 
 
 class VideoEditResponse(BaseModel):

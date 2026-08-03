@@ -81,3 +81,19 @@ def get_current_user(
     if not user:
         raise UnauthorizedException("사용자를 찾을 수 없습니다.")
     return user
+
+
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    """토큰이 유효하면 사용자, 없거나 유효하지 않으면 None — 비로그인도 허용하는 공개 엔드포인트용.
+
+    만료 토큰을 401로 튕기지 않고 비로그인 취급한다(공개 엔드포인트가 토큰 때문에 실패하면 퇴보).
+    """
+    if credentials is None:
+        return None
+    try:
+        return get_current_user(credentials, db)
+    except UnauthorizedException:
+        return None

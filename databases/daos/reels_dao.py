@@ -48,13 +48,17 @@ def hard_delete(db: Session, reels: Reels) -> None:
 
 
 def get_random_reels(
-    db: Session, count: int, exclude_idxs: list[int]
+    db: Session,
+    count: int,
+    exclude_idxs: list[int],
+    exclude_user_idxs: list[int] | None = None,
 ) -> list[tuple[Reels, str | None, str | None]]:
     """무작위 count개를 (릴스, 작성자 닉네임, 프로필 사진)으로 조회 (soft-delete·exclude_idxs 제외).
 
     작성자 없는(사진만 렌더 시절)·탈퇴한 작성자의 릴스도 나오도록 User 는 outer join —
     그런 릴스는 닉네임·프로필이 None (탈퇴 조건은 ON 절에 둬야 릴스가 통째로 빠지지 않는다).
     url 이 빈 문자열인 행은 렌더가 아직 안 끝난 자리표라 피드에서 제외한다.
+    exclude_user_idxs(차단한 사용자)의 릴스는 쿼리에서 제외한다.
     """
     query = (
         db.query(Reels, User.nickname, User.profile_image)
@@ -66,4 +70,9 @@ def get_random_reels(
     )
     if exclude_idxs:
         query = query.filter(Reels.reels_idx.notin_(exclude_idxs))
+    if exclude_user_idxs:
+        # user_idx 가 NULL 인 익명 릴스는 NOT IN 이 NULL 이라 통째로 빠진다 — is_(None) 로 살린다.
+        query = query.filter(
+            Reels.user_idx.is_(None) | Reels.user_idx.notin_(exclude_user_idxs)
+        )
     return query.order_by(func.random()).limit(count).all()
