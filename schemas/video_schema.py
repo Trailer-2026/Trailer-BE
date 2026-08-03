@@ -21,6 +21,13 @@ class ReelsRecommendResponse(BaseModel):
     profile_image: str | None = Field(None, description="릴스 작성자 프로필 사진 URL (작성자 없는 옛 릴스는 null)")
 
 
+class ReelsShareResponse(BaseModel):
+    """릴스 공유 링크."""
+
+    share_url: str = Field(..., description="공유용 페이지 URL (공유 시트에 그대로 넘기면 됨)")
+    title: str | None = Field(None, description="릴스 제목 (공유 문구용, 없으면 null)")
+
+
 class VideoEditResponse(BaseModel):
     """릴스 영상 편집(구간 삭제 / 이미지 삽입) 결과."""
 

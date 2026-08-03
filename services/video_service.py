@@ -45,7 +45,7 @@ from core.exceptions.custom import (
     NotFoundException,
 )
 from databases.daos import ban_dao, reels_dao, schedule_dao, travel_dao, travel_image_dao
-from schemas.video_schema import ReelsRecommendResponse
+from schemas.video_schema import ReelsRecommendResponse, ReelsShareResponse
 from utils import gcs
 
 logger = logging.getLogger(__name__)
@@ -245,6 +245,33 @@ def recommend_reels(db: Session, exclude: str, user=None) -> list[ReelsRecommend
         )
         for reels, nickname, profile_image in rows
     ]
+
+
+# --------------------------------------------------------------------------- #
+# 릴스 공유
+# --------------------------------------------------------------------------- #
+def get_shared_reels(db: Session, reels_idx: int):
+    """공유 페이지에 띄울 릴스 — 없거나 삭제됐거나 렌더 중이면 None.
+
+    릴스는 공개 피드라 소유자를 따지지 않는다(추천 API 도 남의 릴스 url 을 그대로
+    내려준다). DB 를 거치는 덕에 삭제된 릴스는 공유 링크가 즉시 죽는다 — 버킷 URL 을
+    직접 공유했을 때는 못 하던 일이다.
+    """
+    reels = reels_dao.get_by_idx(db, reels_idx)
+    return reels if reels is not None and reels.url else None
+
+
+def get_share_link(db: Session, reels_idx: int, request_base_url: str) -> ReelsShareResponse:
+    """릴스 공유 링크(/r/{reels_idx}) 를 만들어 준다. 공유 불가 릴스면 404.
+
+    도메인은 [app] share_base_url 이 있으면 그 값, 없으면 요청 자체의 호스트를 쓴다.
+    리버스 프록시 뒤에서 내부 호스트가 잡히면 그 설정으로 덮어라.
+    """
+    reels = get_shared_reels(db, reels_idx)
+    if reels is None:
+        raise NotFoundException("릴스를 찾을 수 없습니다.")
+    base = (Config.read("app", "share_base_url", "") or request_base_url).rstrip("/")
+    return ReelsShareResponse(share_url=f"{base}/r/{reels.reels_idx}", title=reels.title)
 
 
 # --------------------------------------------------------------------------- #
