@@ -55,6 +55,38 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 - **Errors**: `raise` a recognized exception reachably from the route. Only `NotFound/BadRequest/Duplicate/Unauthorized` detected; dict-dispatch or `try/except`-swallowed raises are missed → document in route `description`. New exception type → also add HTTP code to `EXC_CODE` in `scripts/error_index.py`.
 - Importing the app sets `OPENAPI_EXPORT=1` → `databases/database.py` uses in-memory SQLite (no Postgres).
 
+## 푸시 알림 (FCM)
+
+알림은 **설정**과 **이력** 두 테이블로 나뉜다. 헷갈리지 말 것.
+
+- `notification` — 수신 on/off **설정**, 사용자당 1행(`event_alarm`/`scenery_alarm`). `GET·PATCH /api/users/me/notifications`.
+- `notification_log` — 실제로 보낸 알림 **이력**. 앱의 "알림 화면" 목록이 이 테이블이다. `GET /api/notifications`(커서 페이징), `PATCH .../{idx}/read`, `PATCH .../read-all`.
+
+**발송 경로**: 트리거 → `services/push_service.notify()` → 설정 확인(`notification_dao`) → 이력 저장·커밋(`notification_log_dao`) → `services/fcm_service.send_push` → `utils/firebase.send_multicast`.
+
+`notify()`는 **예외를 절대 올리지 않는다**(경고 로그 후 `False`). 알림은 부가 기능이라 호출한 쪽의 트랜잭션·배치 루프를 깨면 안 된다. 그래서 **여행 저장 같은 트리거는 반드시 `db.commit()` 뒤에 호출**한다.
+
+**트리거 3종** (`core.enums.NotificationType`, 설정 매핑은 `push_service._ALARM_FIELD`)
+
+| type | 언제 | 발화 지점 | 설정 | 이력 |
+|---|---|---|---|---|
+| `TRAVEL_SAVED` | 여행 저장 직후 | `services/travel_service.py` `save_selected_plan`·`create_manual`의 커밋 다음 줄 | `event_alarm` | O |
+| `TRAVEL_D1` | 출발 하루 전 KST 자정 **+ 저장 시점에 이미 내일 출발이면 즉시** | `main.py:_trip_reminder_daily_loop` → `trip_reminder_service.send_d1_reminders`, 그리고 `push_service.notify_travel_saved` 안 | `event_alarm` | O |
+| `TRAVEL_DELETED` | 여행 삭제 직후 | `services/travel_service.py:delete_travel`의 커밋 다음 줄 | `event_alarm` | O |
+| `SCENERY` | 구간별 창밖 관광지 조회 시 | `GET /api/scenic-spots/nearby` → `scenic_spot_service.find_nearby` → `push_service.notify_scenery` | `scenery_alarm` | X |
+
+**유의할 점**
+
+- **풍경은 이력을 남기지 않는다**(`notify(..., record=False)`). 알림 화면에서 풍경은 목록이 아니라 상단 카드로 뜨고 그 카드는 조회 응답(`based_at`·`items`)으로 그리면 되는데, 중복 억제도 없어서 이력을 남기면 아무도 읽지 않는 행이 호출 횟수만큼 쌓이기 때문이다. 결과적으로 `notification_log`에는 `TRAVEL_SAVED`/`TRAVEL_D1`만 들어간다.
+- **중복 발송을 막는 건 D-1뿐**이다(`push_service.notify_trip_d1`이 `notification_log_dao.exists`로 직접 검사 — 자정 배치와 저장 시점 두 경로가 같은 여행을 건드리므로 여행당 1회). **풍경은 억제하지 않는다** — 조회할 때마다 보내고, 호출 빈도 조절은 앱 몫이다. 이력을 FCM 호출보다 먼저 커밋하므로 **Firebase 장애 시 재시도하지 않는다(at-most-once)** — 대신 알림 화면에는 남는다.
+- **D-1을 저장 시점에도 보내는 이유**: 오늘 저장한 '내일 출발' 여행은 자정 배치만으로는 **영영 알림을 못 받는다**. 다음 자정(= 출발 당일 00:00)의 배치는 '내일 출발'을 찾으므로 그 여행은 이미 대상이 아니기 때문이다.
+- **대상은 `travel_idx` 하나**다. 이력에 남는 알림이 전부 여행에 딸린 것이라 다형 참조(`ref_type`/`ref_idx`)를 쓰지 않는다. 딥링크 정보는 FCM `data` payload로도 내려가는데, 거기선 종류에 맞는 키만 담는다(`travel_idx` 또는 풍경의 `scenic_spot_idx`) — FCM `data` 값은 전부 문자열이라 빈 값과 구분이 안 되기 때문이다. `TRAVEL_DELETED`의 `travel_idx`는 이미 삭제된 여행이라 열면 404이니 앱이 이동시키면 안 된다.
+- **서버는 사용자의 실시간 위치를 모른다.** 풍경 알림은 앱이 좌표와 탑승 구간을 보내는 `GET /api/scenic-spots/nearby`에 얹혀 있다 — 조회 로직(`scenic_spot_dao.search_on_segment`, 가시 1500m + 진행 방향 ±100°)은 그대로 두고 `scenic_spot_service.find_nearby`가 알림만 덧붙인다. 알림을 보낼 대상이 필요해 **이 엔드포인트는 인증 필수로 바뀌었다**(원래는 인증 없이 호출 가능했다). 응답 스키마는 그대로다. 역명은 `station`·`scenic_spot_segment`와 같은 **"대전역" 형식(`역` 포함)** 이다.
+- **문구의 조사**: 여행 제목은 사용자가 자유롭게 지어서 받침 유무가 제각각이라 `push_service._josa_i_ga`로 이/가를 고른다('부산 여행'이 / '제주도'가). 한글로 끝나지 않으면 '가'로 둔다.
+- **D-1 루프**는 `train_stop`과 같은 lifespan asyncio 패턴이다. 시작 시 1회 보정 실행(자정에 서버가 꺼져 있었던 경우 복구, 멱등이라 안전) 후 매 자정. `TRIP_REMINDER_AUTOSYNC=0`으로 끌 수 있다(기본 `1`). 다중 워커로 띄워도 이력 검사 덕에 중복 발송은 안 되지만 낭비이므로, 그 땐 끄고 배치를 따로 돌려라.
+- **테이블 생성**: 마이그레이션 도구가 없어 `notification`·`notification_log` 둘 다 `push_service.ensure_tables()`(lifespan 1회)로 자체 provision한다 — `train_stop`과 같은 방식. 운영 DB에 수동 DDL을 넣을 필요가 없다.
+- **소프트 삭제 예외 아님**: 읽기는 `deleted_at.is_(None)`을 지킨다. 단 `exists`(중복 판정)만은 삭제된 이력도 '보낸 적 있음'으로 세야 재발송을 막을 수 있어 필터하지 않는다.
+
 ## 열차 정차역 자동 갱신 (`train_stop`)
 
 경로의 각 열차편(`RouteTrain`)에 **탑승구간 정차역 수·순서**(`stop_station_count`/`stop_stations`)를 붙이는 기능. 데이터는 한국철도공사 **열차운행정보 API**(`travelerTrainRunInfo2`, data.go.kr B551457)에서 온다.
