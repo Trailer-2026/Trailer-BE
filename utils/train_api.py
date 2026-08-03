@@ -7,7 +7,6 @@
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
-from config import Config
 from utils import dgo
 
 _BASE = "https://apis.data.go.kr/1613000/TrainInfo/GetStrtpntAlocFndTrainInfo"
@@ -24,8 +23,7 @@ def fetch_trains(dep_nat: str, arr_nat: str, ymd: str) -> tuple:
     반환: ({train_no, grade, dep_station, arr_station, dep_time, arr_time, fare}, ...)
     네트워크/파싱 실패 시 예외를 그대로 올린다(서비스에서 502로 변환).
     """
-    params = {
-        "serviceKey": Config.read("tourapi", "service_key"),
+    params = {  # serviceKey는 dgo가 주입·로테이션한다
         "pageNo": 1,
         "numOfRows": 500,  # 한 구간 하루 최대 ~수십 편 << 500
         "_type": "json",
