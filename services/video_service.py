@@ -44,7 +44,7 @@ from core.exceptions.custom import (
     ExternalServiceException,
     NotFoundException,
 )
-from databases.daos import reels_dao, schedule_dao, travel_dao, travel_image_dao
+from databases.daos import ban_dao, reels_dao, schedule_dao, travel_dao, travel_image_dao
 from schemas.video_schema import ReelsRecommendResponse
 from utils import gcs
 
@@ -212,13 +212,14 @@ def get_bgm_path(filename: str) -> Path:
 RECOMMEND_REELS_COUNT = 10
 
 
-def recommend_reels(db: Session, exclude: str) -> list[ReelsRecommendResponse]:
+def recommend_reels(db: Session, exclude: str, user=None) -> list[ReelsRecommendResponse]:
     """릴스를 무작위로 최대 10개 추천한다.
 
     exclude(쉼표 구분 reels_idx 목록)에 담긴 릴스는 제외하고 뽑는다 — 프론트가
     이미 받은 idx를 누적해 재요청하면 새 릴스만 내려간다. 남은 릴스가 10개
     미만이면 있는 만큼만 반환하고, 제외 후 남은 릴스가 하나도 없으면 exclude를
     무시하고 전체에서 처음부터 다시 추천한다.
+    로그인 상태면 내가 차단한 사용자의 릴스는 두 경로 모두에서 빠진다(비로그인은 user=None).
     """
     exclude_idxs: list[int] = []
     for token in exclude.split(","):
@@ -229,10 +230,11 @@ def recommend_reels(db: Session, exclude: str) -> list[ReelsRecommendResponse]:
             raise BadRequestException("exclude는 쉼표로 구분한 reels_idx 목록이어야 합니다.")
         exclude_idxs.append(int(token))
 
-    rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, exclude_idxs)
+    blocked = ban_dao.blocked_user_idxs(db, user.user_idx) if user else []
+    rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, exclude_idxs, blocked)
     if not rows and exclude_idxs:
         # 전부 이미 추천된 상태 → 한 바퀴 돌았으니 처음부터 다시
-        rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, [])
+        rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, [], blocked)
     return [
         ReelsRecommendResponse(
             reels_idx=reels.reels_idx,
