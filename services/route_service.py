@@ -752,7 +752,10 @@ def recommend(
         return [main] + _stopover_routes()
     except Exception as e:
         logger.warning("경유 경로 조회 실패(기본 왕복만 제공): %s: %s", type(e).__name__, e)
-        main.note = " / ".join(n for n in (main.note, "경유 경로는 불러오지 못했습니다.") if n) or None
+        # 키 거부는 원인이 명확하니 그 사유까지 알려준다(그 외엔 내부 사정이라 일반 문구만).
+        notes = (main.note, "경유 경로는 불러오지 못했습니다.",
+                 e.message if isinstance(e, dgo.PublicApiRejectedError) else None)
+        main.note = " / ".join(n for n in notes if n) or None
         return [main]
 
 
