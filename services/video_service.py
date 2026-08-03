@@ -44,7 +44,15 @@ from core.exceptions.custom import (
     ExternalServiceException,
     NotFoundException,
 )
-from databases.daos import ban_dao, reels_dao, schedule_dao, travel_dao, travel_image_dao
+from databases.daos import (
+    ban_dao,
+    comment_dao,
+    like_dao,
+    reels_dao,
+    schedule_dao,
+    travel_dao,
+    travel_image_dao,
+)
 from schemas.video_schema import ReelsRecommendResponse, ReelsShareResponse
 from utils import gcs
 
@@ -235,11 +243,19 @@ def recommend_reels(db: Session, exclude: str, user=None) -> list[ReelsRecommend
     if not rows and exclude_idxs:
         # 전부 이미 추천된 상태 → 한 바퀴 돌았으니 처음부터 다시
         rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, [], blocked)
+    # 좋아요·댓글 수는 행마다 세면 N+1 이라 뽑힌 릴스만 묶어 두 번에 읽는다.
+    idxs = [reels.reels_idx for reels, _, _ in rows]
+    like_counts = like_dao.counts_by_reels(db, idxs)
+    comment_counts = comment_dao.counts_by_reels(db, idxs)
+    liked = like_dao.liked_reels_idxs(db, user.user_idx, idxs) if user else set()
     return [
         ReelsRecommendResponse(
             reels_idx=reels.reels_idx,
             url=reels.url,
             title=reels.title,
+            like_count=like_counts.get(reels.reels_idx, 0),
+            comment_count=comment_counts.get(reels.reels_idx, 0),
+            is_liked=reels.reels_idx in liked,
             nickname=nickname,
             profile_image=profile_image,
         )
@@ -650,12 +666,19 @@ def _validate_render_options(theme: str) -> str:
     return theme
 
 
+def _clean_title(title: str | None) -> str | None:
+    """릴스 제목 정규화 — 공백만이면 None(제목 없음)으로 본다. 길이는 폼에서 100자로 막는다."""
+    title = (title or "").strip()
+    return title or None
+
+
 def _spawn_render_job(
     db: Session,
     travel_data_path: Path,
     bgm_path: Path | None,
     theme: str,
     user_idx: int,
+    title: str | None = None,
 ) -> dict[str, object]:
     """릴스 행을 먼저 등록하고, 렌더 서브프로세스를 백그라운드 스레드로 띄운다.
 
@@ -664,7 +687,9 @@ def _spawn_render_job(
     결과 영상을 GCS 버킷(reels/)에 올려 url 을 채우고, 실패하면 그 행을 DB 에서
     지운다(_discard_pending_reels) — 영상 없는 릴스가 남지 않게.
     """
-    reels = reels_dao.create(db, user_idx=user_idx, url=PENDING_REELS_URL, title=None)
+    reels = reels_dao.create(
+        db, user_idx=user_idx, url=PENDING_REELS_URL, title=_clean_title(title)
+    )
     db.commit()
 
     command = _build_command(travel_data_path, theme)
@@ -836,6 +861,7 @@ def start_render_photos_only(
     start_latitude: float | None = None,
     start_longitude: float | None = None,
     sort_by_time: bool = True,
+    title: str | None = None,
 ) -> dict[str, object]:
     """사진들의 EXIF(GPS·촬영시각)만으로 여행 경로 영상 렌더링을 시작한다.
 
@@ -911,7 +937,7 @@ def start_render_photos_only(
         raise BadRequestException("사진들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
-    return _spawn_render_job(db, travel_data_path, bgm_path, theme, user_idx)
+    return _spawn_render_job(db, travel_data_path, bgm_path, theme, user_idx, title)
 
 
 # --------------------------------------------------------------------------- #
@@ -941,6 +967,7 @@ def start_render_travel(
     *,
     bgm: str = "",
     theme: str = "default",
+    title: str | None = None,
 ) -> dict[str, object]:
     """저장된 여행(travel)의 일정·첨부 이미지만으로 여행 경로 영상 렌더링을 시작한다.
 
@@ -991,7 +1018,11 @@ def start_render_travel(
         raise BadRequestException("일정 지점이 2개 이상이어야 이동 경로를 만들 수 있습니다.")
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
-    return _spawn_render_job(db, travel_data_path, bgm_path, theme, user.user_idx)
+    # 제목을 안 주면 여행 이름을 그대로 쓴다 — 이미 조회한 값이라 공짜다.
+    return _spawn_render_job(
+        db, travel_data_path, bgm_path, theme, user.user_idx,
+        _clean_title(title) or travel.title,
+    )
 
 
 def get_render_job(db: Session, reels_idx: int, user_idx: int) -> dict[str, object]:
