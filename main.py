@@ -32,6 +32,7 @@ from routers.like import router as like_router
 from routers.ban import router as ban_router
 from routers.video import router as video_router
 from routers.user import router as user_router
+from routers.share import router as share_router
 from utils.firebase import init_firebase
 
 
@@ -109,6 +110,7 @@ app.include_router(like_router)
 app.include_router(ban_router)
 app.include_router(video_router)
 app.include_router(user_router)
+app.include_router(share_router)  # /r/{reels_idx} — 브라우저용 공유 페이지(HTML)
 
 @app.get("/")
 async def root():

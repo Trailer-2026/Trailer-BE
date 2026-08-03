@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from databases.models.user import User
 from schemas.video_schema import (
     BgmTrackResponse,
     ReelsRecommendResponse,
+    ReelsShareResponse,
     VideoEditResponse,
     VideoRenderStatusResponse,
 )
@@ -238,6 +239,28 @@ def recommend_reels(
 ):
     reels = video_service.recommend_reels(db, exclude, current_user)
     return CommonResponse.success_response("릴스 추천 목록 조회 성공", data=reels)
+
+
+@router.get(
+    "/reels/{reels_idx}/share",
+    summary="릴스 공유 링크 조회 (reels_idx)",
+    description="릴스(reels_idx)를 공유할 때 쓸 링크를 반환합니다. share_url 은 영상이 재생되는 "
+                "공유 페이지 주소(/r/{reels_idx})로, 카톡·SNS 공유 시트에 그대로 넘기면 됩니다. "
+                "버킷 영상 주소를 직접 공유할 때와 달리 링크 미리보기가 뜨고, 삭제되거나 아직 "
+                "렌더 중인 릴스는 그 페이지가 404가 되어 공유 링크가 끊깁니다. 앱 안에서 바로 "
+                "재생할 영상 주소는 릴스 목록의 url 을 그대로 쓰면 됩니다. "
+                "본인 릴스가 아니어도 조회할 수 있습니다"
+                "(릴스는 공개 피드). 없거나 삭제됐거나 아직 렌더가 끝나지 않은 릴스면 404를 "
+                "반환합니다. 로그인 없이 호출할 수 있습니다.",
+    response_model=CommonResponse[ReelsShareResponse],
+)
+def get_reels_share_link(
+    reels_idx: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    data = video_service.get_share_link(db, reels_idx, str(request.base_url))
+    return CommonResponse.success_response("공유 링크 조회 성공", data=data)
 
 
 @router.post(
