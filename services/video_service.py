@@ -54,9 +54,26 @@ from databases.daos import (
     travel_image_dao,
 )
 from schemas.video_schema import ReelsRecommendResponse, ReelsShareResponse
-from utils import gcs
+from utils import gcs, kakao_local
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_reels_columns() -> None:
+    """reels 에 홈 화면 카드용 컬럼(region·thumbnail_url)을 없으면 추가한다.
+
+    이 저장소엔 마이그레이션 도구가 없어 자체 provision 한다
+    (push_service.ensure_tables·train_stop 선례). 서버 기동 시 1회 호출.
+    """
+    from sqlalchemy import text
+
+    from databases.database import engine
+
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE reels ADD COLUMN IF NOT EXISTS region VARCHAR(50)"))
+        conn.execute(
+            text("ALTER TABLE reels ADD COLUMN IF NOT EXISTS thumbnail_url VARCHAR(200)")
+        )
 
 VIDEO_MAKER_DIR = Path(__file__).resolve().parent / "videoMaker"
 BGM_DIR = VIDEO_MAKER_DIR / "bgm"
@@ -220,8 +237,13 @@ def get_bgm_path(filename: str) -> Path:
 RECOMMEND_REELS_COUNT = 10
 
 
-def recommend_reels(db: Session, exclude: str, user=None) -> list[ReelsRecommendResponse]:
-    """릴스를 무작위로 최대 10개 추천한다.
+def recommend_reels(
+    db: Session, exclude: str, user=None, count: int = RECOMMEND_REELS_COUNT
+) -> list[ReelsRecommendResponse]:
+    """릴스를 무작위로 최대 count(기본 10)개 추천한다.
+
+    홈 화면의 "지금 사람들이 떠나는 여행" 카드는 같은 목록을 count 만 줄여 쓴다 —
+    카드에 필요한 지역 태그(region)·썸네일(thumbnail_url)이 여기 같이 내려간다.
 
     exclude(쉼표 구분 reels_idx 목록)에 담긴 릴스는 제외하고 뽑는다 — 프론트가
     이미 받은 idx를 누적해 재요청하면 새 릴스만 내려간다. 남은 릴스가 10개
@@ -239,10 +261,10 @@ def recommend_reels(db: Session, exclude: str, user=None) -> list[ReelsRecommend
         exclude_idxs.append(int(token))
 
     blocked = ban_dao.blocked_user_idxs(db, user.user_idx) if user else []
-    rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, exclude_idxs, blocked)
+    rows = reels_dao.get_random_reels(db, count, exclude_idxs, blocked)
     if not rows and exclude_idxs:
         # 전부 이미 추천된 상태 → 한 바퀴 돌았으니 처음부터 다시
-        rows = reels_dao.get_random_reels(db, RECOMMEND_REELS_COUNT, [], blocked)
+        rows = reels_dao.get_random_reels(db, count, [], blocked)
     # 좋아요·댓글 수는 행마다 세면 N+1 이라 뽑힌 릴스만 묶어 두 번에 읽는다.
     idxs = [reels.reels_idx for reels, _, _ in rows]
     like_counts = like_dao.counts_by_reels(db, idxs)
@@ -253,6 +275,8 @@ def recommend_reels(db: Session, exclude: str, user=None) -> list[ReelsRecommend
             reels_idx=reels.reels_idx,
             url=reels.url,
             title=reels.title,
+            region=reels.region,
+            thumbnail_url=reels.thumbnail_url,
             like_count=like_counts.get(reels.reels_idx, 0),
             comment_count=comment_counts.get(reels.reels_idx, 0),
             is_liked=reels.reels_idx in liked,
@@ -345,6 +369,7 @@ def _parse_output_name(stdout: str) -> str | None:
 EDIT_TIMEOUT_SECONDS = 60 * 5
 # 편집 결과물이 올라갈 버킷 경로 접두어 (렌더 원본 reels/ 와 구분).
 EDIT_OBJECT_PREFIX = "reels/edited"
+THUMBNAIL_OBJECT_PREFIX = "reels/thumb"
 # 삽입 사진이 화면에 머무는 시간(초). 렌더러가 영상 안에서 사진 한 장을 보여주는
 # 시간과 같은 값이라 삽입 클립만 튀지 않는다 — render_video.QUALITY_FAST_CONFIG 의
 # photo_fade_in(0.4) + photo_hold(1.6) + photo_fade_out(0.4). 그쪽이 바뀌면 같이 고칠 것.
@@ -425,6 +450,46 @@ def _run_ffmpeg(args: list[str]) -> None:
         raise ExternalServiceException(f"영상 편집 실패:\n{(result.stderr or '')[-1500:]}")
 
 
+# 썸네일을 뽑는 시점(초). 영상 앞엔 TRAILER 인트로가 약 3초(intro_video 의
+# HOLD+ZOOM) 붙으므로 그 뒤에서 떠야 로고 대신 실제 여행 장면이 잡힌다.
+THUMBNAIL_AT_SECONDS = 3.5
+
+
+def _publish_thumbnail(video_path: Path) -> str | None:
+    """영상에서 대표 프레임 한 장을 뽑아 버킷에 올린다 → 공개 URL. 실패하면 None.
+
+    홈 화면 카드가 영상을 받지 않고 그릴 수 있게 하는 부가 정보라, ffmpeg 이 없거나
+    영상이 THUMBNAIL_AT_SECONDS 보다 짧아 프레임이 안 나와도 렌더/편집 자체는
+    성공시켜야 한다 — 그래서 여기서 예외를 삼키고 경고만 남긴다.
+    """
+    target = video_path.with_name(f"{video_path.stem}_thumb.jpg")
+    try:
+        _run_ffmpeg([
+            "-ss", f"{THUMBNAIL_AT_SECONDS:.1f}", "-i", str(video_path),
+            "-frames:v", "1", "-vf", "scale=540:-2", "-q:v", "3", str(target),
+        ])
+        return gcs.upload_bytes(
+            f"{THUMBNAIL_OBJECT_PREFIX}/{uuid.uuid4().hex}.jpg",
+            target.read_bytes(), "image/jpeg",
+        )
+    except Exception:
+        logger.warning("릴스 썸네일 생성 실패(무시): %s", video_path.name)
+        return None
+    finally:
+        target.unlink(missing_ok=True)
+
+
+def _delete_object_quietly(url: str | None, what: str) -> None:
+    """버킷 객체를 지운다. 실패해도 로그만 남긴다(고아 객체는 서비스에 영향 없음)."""
+    object_path = gcs.object_path_from_url(url or "")
+    if not object_path:
+        return
+    try:
+        gcs.delete_object(object_path)
+    except Exception:
+        logger.warning("%s 삭제 실패(무시): %s", what, object_path)
+
+
 def _edit_result(db: Session, reels, started: float, target: Path) -> dict[str, object]:
     """편집 결과물을 버킷에 올리고 릴스 URL 을 교체한다 (target 은 임시 파일).
 
@@ -435,23 +500,25 @@ def _edit_result(db: Session, reels, started: float, target: Path) -> dict[str, 
     info = _ffprobe_video(target)
     # commit 이후엔 인스턴스 속성이 만료돼 재조회가 걸리므로 미리 읽어 둔다.
     reels_idx, previous_url = reels.reels_idx, reels.url
+    previous_thumbnail = reels.thumbnail_url
     video_url = gcs.upload_file(
         f"{EDIT_OBJECT_PREFIX}/{uuid.uuid4().hex}.mp4", target, "video/mp4"
     )
+    # 영상이 바뀌었으니 썸네일도 다시 뽑는다(앞부분을 잘라낸 편집이면 옛 썸네일이
+    # 영상에 없는 장면이 된다). 실패하면 None 이라 옛 썸네일이 그대로 남는다.
+    thumbnail_url = _publish_thumbnail(target)
     try:
-        reels_dao.update_url(db, reels, video_url)
+        reels_dao.update_url(db, reels, video_url, thumbnail_url)
         db.commit()
     except Exception:
         db.rollback()
         gcs.delete_object(gcs.object_path_from_url(video_url) or video_url)  # 고아 객체 정리
+        _delete_object_quietly(thumbnail_url, "고아 썸네일")
         raise
 
-    previous_object = gcs.object_path_from_url(previous_url or "")
-    if previous_object:
-        try:
-            gcs.delete_object(previous_object)
-        except Exception:
-            logger.warning("편집 전 영상 객체 삭제 실패(무시): %s", previous_object)
+    _delete_object_quietly(previous_url, "편집 전 영상 객체")
+    if thumbnail_url:
+        _delete_object_quietly(previous_thumbnail, "편집 전 썸네일")
 
     return {
         "reels_idx": reels_idx,
@@ -672,6 +739,34 @@ def _clean_title(title: str | None) -> str | None:
     return title or None
 
 
+def _region_of_trip(track_points: list[dict[str, object]]) -> str | None:
+    """경로의 지역 태그(홈 카드용). 카카오 호출이 실패하면 None.
+
+    출발 지점에서 가장 멀리 간 지점을 여행지로 본다 — 첫 지점은 집·출발역일 때가
+    많아 "서울"이 붙어버린다. 태그는 부가 정보라 실패(키 미설정·네트워크)를 흡수하고
+    렌더를 막지 않는다.
+    """
+    # ponytail: 최다 방문 지역이 아니라 최장거리 1지점. 경유가 많은 여행에서 태그가
+    # 어긋나면 지점별로 세서 최빈값을 쓰되, 지오코딩 호출이 지점 수만큼 늘어난다.
+    if not track_points:
+        return None
+    origin = track_points[0]
+    farthest = max(
+        track_points,
+        key=lambda p: _haversine_km(
+            float(origin["latitude"]), float(origin["longitude"]),
+            float(p["latitude"]), float(p["longitude"]),
+        ),
+    )
+    try:
+        return kakao_local.region_of(
+            float(farthest["latitude"]), float(farthest["longitude"])
+        )
+    except Exception:
+        logger.warning("릴스 지역 태그 조회 실패(무시): %s", farthest)
+        return None
+
+
 def _spawn_render_job(
     db: Session,
     travel_data_path: Path,
@@ -679,6 +774,7 @@ def _spawn_render_job(
     theme: str,
     user_idx: int,
     title: str | None = None,
+    region: str | None = None,
 ) -> dict[str, object]:
     """릴스 행을 먼저 등록하고, 렌더 서브프로세스를 백그라운드 스레드로 띄운다.
 
@@ -688,7 +784,8 @@ def _spawn_render_job(
     지운다(_discard_pending_reels) — 영상 없는 릴스가 남지 않게.
     """
     reels = reels_dao.create(
-        db, user_idx=user_idx, url=PENDING_REELS_URL, title=_clean_title(title)
+        db, user_idx=user_idx, url=PENDING_REELS_URL, title=_clean_title(title),
+        region=region,
     )
     db.commit()
 
@@ -937,7 +1034,10 @@ def start_render_photos_only(
         raise BadRequestException("사진들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
-    return _spawn_render_job(db, travel_data_path, bgm_path, theme, user_idx, title)
+    return _spawn_render_job(
+        db, travel_data_path, bgm_path, theme, user_idx, title,
+        region=_region_of_trip(track_points),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1019,9 +1119,11 @@ def start_render_travel(
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
     # 제목을 안 주면 여행 이름을 그대로 쓴다 — 이미 조회한 값이라 공짜다.
+    # 지역도 마찬가지로 여행에 적힌 값을 먼저 쓰고, 없을 때만 좌표로 역지오코딩한다.
     return _spawn_render_job(
         db, travel_data_path, bgm_path, theme, user.user_idx,
         _clean_title(title) or travel.title,
+        region=(travel.region or "").strip() or _region_of_trip(track_points),
     )
 
 
@@ -1236,17 +1338,19 @@ def _publish_reels_video(reels_idx: int, video_path: Path) -> str:
     from databases.database import SessionLocal
 
     url = gcs.upload_file(f"reels/{uuid.uuid4().hex}.mp4", video_path, "video/mp4")
+    thumbnail_url = _publish_thumbnail(video_path)  # 홈 카드용 대표 프레임 (실패해도 None)
     db = SessionLocal()
     try:
         reels = reels_dao.get_by_idx(db, reels_idx)
         if reels is None:
             raise NotFoundException(f"릴스(reels_idx={reels_idx})가 사라졌습니다.")
-        reels_dao.update_url(db, reels, url)
+        reels_dao.update_url(db, reels, url, thumbnail_url)
         db.commit()
         return url
     except Exception:
         db.rollback()
         gcs.delete_object(gcs.object_path_from_url(url) or url)  # 고아 객체 정리
+        _delete_object_quietly(thumbnail_url, "고아 썸네일")
         raise
     finally:
         db.close()

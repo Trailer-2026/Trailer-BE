@@ -13,17 +13,28 @@ def get_by_idx(db: Session, reels_idx: int) -> Reels | None:
     ).first()
 
 
-def create(db: Session, *, user_idx: int | None, url: str, title: str | None) -> Reels:
+def create(
+    db: Session, *, user_idx: int | None, url: str, title: str | None,
+    region: str | None = None,
+) -> Reels:
     """릴스 행 생성 (flush만 — commit은 서비스가)."""
-    reels = Reels(user_idx=user_idx, url=url, title=title)
+    reels = Reels(user_idx=user_idx, url=url, title=title, region=region)
     db.add(reels)
     db.flush()
     return reels
 
 
-def update_url(db: Session, reels: Reels, url: str) -> Reels:
-    """릴스 영상 URL 교체 (렌더 완료·편집본 갱신, flush만 — commit은 서비스가)."""
+def update_url(
+    db: Session, reels: Reels, url: str, thumbnail_url: str | None = None
+) -> Reels:
+    """릴스 영상 URL 교체 (렌더 완료·편집본 갱신, flush만 — commit은 서비스가).
+
+    thumbnail_url 은 새로 뽑았을 때만 넘긴다 — 추출에 실패하면 None 이 와서
+    기존 썸네일을 유지한다(영상 교체보다 덜 중요한 부가 정보).
+    """
     reels.url = url
+    if thumbnail_url is not None:
+        reels.thumbnail_url = thumbnail_url
     db.flush()
     return reels
 

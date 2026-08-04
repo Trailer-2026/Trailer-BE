@@ -21,4 +21,8 @@ class Reels(BaseModel):
     )
     url = Column(String(100), nullable=False, comment="영상 URL")
     title = Column(String(100), nullable=True, comment="제목")
+    # 홈 화면 카드용 — 카드는 영상을 안 틀고 썸네일 한 장 + 지역 태그로 그린다.
+    # 둘 다 렌더 시점에만 채울 수 있어(좌표·여행 정보가 그 때만 있다) 옛 릴스는 NULL 이다.
+    region = Column(String(50), nullable=True, comment="지역 태그 (예: 강원, 부산)")
+    thumbnail_url = Column(String(200), nullable=True, comment="대표 프레임 이미지 URL")
     # ponytail: 좋아요 수는 reels_like COUNT(*)로 계산. 피드가 느려지면 like_count 캐시 컬럼 추가.
