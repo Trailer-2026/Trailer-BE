@@ -24,17 +24,15 @@ def create(
     return reels
 
 
-def update_url(
-    db: Session, reels: Reels, url: str, thumbnail_url: str | None = None
-) -> Reels:
-    """릴스 영상 URL 교체 (렌더 완료·편집본 갱신, flush만 — commit은 서비스가).
+def update_url(db: Session, reels: Reels, url: str, thumbnail_url: str | None) -> Reels:
+    """릴스 영상·썸네일 URL 교체 (렌더 완료·편집본 갱신, flush만 — commit은 서비스가).
 
-    thumbnail_url 은 새로 뽑았을 때만 넘긴다 — 추출에 실패하면 None 이 와서
-    기존 썸네일을 유지한다(영상 교체보다 덜 중요한 부가 정보).
+    thumbnail_url 은 항상 그대로 덮어쓴다. 추출 실패(None)일 때 옛 값을 남기면
+    영상은 편집본인데 썸네일만 편집 전 장면을 가리키게 되므로(앞부분을 잘라낸
+    편집이면 영상에 없는 장면이다), 그럴 바엔 비워서 앱이 폴백하게 둔다.
     """
     reels.url = url
-    if thumbnail_url is not None:
-        reels.thumbnail_url = thumbnail_url
+    reels.thumbnail_url = thumbnail_url
     db.flush()
     return reels
 

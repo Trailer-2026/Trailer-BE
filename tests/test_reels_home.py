@@ -11,8 +11,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from databases.daos import reels_dao
+from databases.models.base import Base
+from databases.models.reels import Reels
+from databases.models.user import User
 from services import video_service
 from utils import kakao_local
+
+
+def _session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[t.__table__ for t in (User, Reels)])
+    return sessionmaker(bind=engine)()
 
 
 def _stub_urlopen(payload):
@@ -72,6 +85,15 @@ def main():
         assert video_service._region_of_trip(points) is None, "조회 실패는 None 으로 흡수"
     finally:
         urllib.request.urlopen = original
+
+    # 6) 영상 교체 시 썸네일은 항상 덮어쓴다 — 추출 실패(None)면 비워야 한다.
+    #    옛 값을 남기면 편집본 영상에 없는 장면을 계속 가리킨다.
+    db = _session()
+    reels = reels_dao.create(db, user_idx=None, url="https://x/a.mp4", title=None)
+    reels_dao.update_url(db, reels, "https://x/a.mp4", "https://x/a.jpg")
+    assert reels.thumbnail_url == "https://x/a.jpg"
+    reels_dao.update_url(db, reels, "https://x/edited.mp4", None)
+    assert reels.thumbnail_url is None, "추출 실패면 옛 썸네일을 비워야 한다"
 
     print("ok")
 

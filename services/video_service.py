@@ -505,7 +505,8 @@ def _edit_result(db: Session, reels, started: float, target: Path) -> dict[str, 
         f"{EDIT_OBJECT_PREFIX}/{uuid.uuid4().hex}.mp4", target, "video/mp4"
     )
     # 영상이 바뀌었으니 썸네일도 다시 뽑는다(앞부분을 잘라낸 편집이면 옛 썸네일이
-    # 영상에 없는 장면이 된다). 실패하면 None 이라 옛 썸네일이 그대로 남는다.
+    # 영상에 없는 장면이 된다). 실패하면 None 으로 비운다 — 편집 전 장면을 계속
+    # 걸어두는 것보다 앱이 영상 프레임으로 폴백하는 편이 낫다.
     thumbnail_url = _publish_thumbnail(target)
     try:
         reels_dao.update_url(db, reels, video_url, thumbnail_url)
@@ -516,9 +517,9 @@ def _edit_result(db: Session, reels, started: float, target: Path) -> dict[str, 
         _delete_object_quietly(thumbnail_url, "고아 썸네일")
         raise
 
+    # 새로 뽑았든 비웠든 릴스는 더 이상 옛 썸네일을 참조하지 않는다 → 항상 정리.
     _delete_object_quietly(previous_url, "편집 전 영상 객체")
-    if thumbnail_url:
-        _delete_object_quietly(previous_thumbnail, "편집 전 썸네일")
+    _delete_object_quietly(previous_thumbnail, "편집 전 썸네일")
 
     return {
         "reels_idx": reels_idx,
@@ -762,8 +763,10 @@ def _region_of_trip(track_points: list[dict[str, object]]) -> str | None:
         return kakao_local.region_of(
             float(farthest["latitude"]), float(farthest["longitude"])
         )
-    except Exception:
-        logger.warning("릴스 지역 태그 조회 실패(무시): %s", farthest)
+    except Exception as error:
+        # 좌표는 사용자 위치라 로그에 남기지 않는다 — 실패 원인 판별엔 예외 종류면
+        # 충분하다(키 미설정·타임아웃·HTTP 오류가 서로 다른 타입으로 온다).
+        logger.warning("릴스 지역 태그 조회 실패(무시): %s", type(error).__name__)
         return None
 
 
