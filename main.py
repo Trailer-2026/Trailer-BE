@@ -34,7 +34,7 @@ from routers.video import router as video_router
 from routers.user import router as user_router
 from routers.share import router as share_router
 from routers.notification import router as notification_router
-from services import push_service
+from services import push_service, video_service
 from utils.firebase import init_firebase
 
 
@@ -100,6 +100,7 @@ async def lifespan(app: FastAPI):
     tasks = []
     if os.getenv("OPENAPI_EXPORT") != "1":
         push_service.ensure_tables()  # notification·notification_log 자체 provision (마이그레이션 도구 없음)
+        video_service.ensure_reels_columns()  # reels.region·thumbnail_url 자체 provision (동상)
         if os.getenv("TRAIN_STOP_AUTOSYNC", "1") == "1":
             tasks.append(asyncio.create_task(_train_stop_daily_loop()))
         if os.getenv("TRIP_REMINDER_AUTOSYNC", "1") == "1":

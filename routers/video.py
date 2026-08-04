@@ -250,16 +250,22 @@ def render_video_from_travel(
                 "작성자의 닉네임(nickname)·프로필 사진(profile_image)이 함께 내려가며, "
                 "작성자 없는 옛 릴스는 둘 다 null 입니다. exclude 형식이 잘못되면 400을 "
                 "반환합니다.\n\n"
+                "**홈 화면의 '지금 사람들이 떠나는 여행' 카드도 이 API를 씁니다** — limit 으로 "
+                "필요한 개수(예: 2)만 받으면 됩니다. 카드에 필요한 지역 태그(region)와 "
+                "썸네일 이미지(thumbnail_url)가 함께 내려가며, 렌더 전에 만들어진 옛 릴스는 "
+                "둘 다 null 이라 그 땐 지역 핀을 숨기고 url 영상의 첫 프레임을 카드 이미지로 "
+                "쓰면 됩니다.\n\n"
                 "인증은 선택입니다 — JWT를 보내면 내가 차단한 사용자의 릴스가 결과에서 빠지고, "
                 "토큰이 없거나 만료됐으면 비로그인으로 간주해 전체에서 추천합니다(401 없음).",
     response_model=CommonResponse[list[ReelsRecommendResponse]],
 )
 def recommend_reels(
     exclude: str = Query("", description="제외할 reels_idx 목록 (쉼표 구분, 예: 1,5,9 — 이전 응답의 idx 누적)"),
+    limit: int = Query(10, ge=1, le=10, description="받을 릴스 개수 (홈 화면 카드는 2)"),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_user),
 ):
-    reels = video_service.recommend_reels(db, exclude, current_user)
+    reels = video_service.recommend_reels(db, exclude, current_user, limit)
     return CommonResponse.success_response("릴스 추천 목록 조회 성공", data=reels)
 
 
