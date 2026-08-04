@@ -38,7 +38,7 @@ def list_blocked(db: Session, user_idx: int) -> list[tuple[int, str | None]]:
     return (
         db.query(User.user_idx, User.nickname)
         .join(Ban, Ban.blocked_user_idx == User.user_idx)
-        .filter(Ban.user_idx == user_idx)
+        .filter(Ban.user_idx == user_idx, User.deleted_at.is_(None))
         .order_by(Ban.ban_idx.desc())
         .all()
     )

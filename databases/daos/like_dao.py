@@ -49,6 +49,19 @@ def count_by_comment(db: Session, comment_idx: int) -> int:
     )
 
 
+def counts_by_reels(db: Session, reels_idxs: list[int]) -> dict[int, int]:
+    """릴스 여러 건의 좋아요 수를 {reels_idx: count}로 일괄 조회 (피드 N+1 회피)."""
+    if not reels_idxs:
+        return {}
+    rows = (
+        db.query(Like.reels_idx, func.count(Like.likes_idx))
+        .filter(Like.reels_idx.in_(reels_idxs))
+        .group_by(Like.reels_idx)
+        .all()
+    )
+    return {reels_idx: count for reels_idx, count in rows}
+
+
 def counts_by_comments(db: Session, comment_idxs: list[int]) -> dict[int, int]:
     """댓글 여러 건의 좋아요 수를 {comment_idx: count}로 일괄 조회 (목록 조회 N+1 회피)."""
     if not comment_idxs:
@@ -60,6 +73,18 @@ def counts_by_comments(db: Session, comment_idxs: list[int]) -> dict[int, int]:
         .all()
     )
     return {comment_idx: count for comment_idx, count in rows}
+
+
+def liked_reels_idxs(db: Session, user_idx: int, reels_idxs: list[int]) -> set[int]:
+    """그 사용자가 좋아요한 릴스 PK 집합 (피드에서 하트 채움 표시용)."""
+    if not reels_idxs:
+        return set()
+    rows = (
+        db.query(Like.reels_idx)
+        .filter(Like.user_idx == user_idx, Like.reels_idx.in_(reels_idxs))
+        .all()
+    )
+    return {reels_idx for (reels_idx,) in rows}
 
 
 def liked_comment_idxs(db: Session, user_idx: int, comment_idxs: list[int]) -> set[int]:

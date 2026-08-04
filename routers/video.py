@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from core.response import CommonResponse
-from core.security import get_current_user
+from core.security import get_current_user, get_optional_user
 from databases.database import get_db
 from databases.models.user import User
 from schemas.video_schema import (
     BgmTrackResponse,
     ReelsRecommendResponse,
+    ReelsShareResponse,
     VideoEditResponse,
     VideoRenderStatusResponse,
 )
@@ -39,6 +40,14 @@ def _bgm_form():
 
 def _theme_form():
     return Form("default", description="지도 계절 테마: default|spring|summer|autumn|winter")
+
+
+def _title_form(extra: str = ""):
+    return Form(
+        "",
+        max_length=100,
+        description=f"릴스 제목 (100자 이내, 빈 값이면 제목 없음{extra})",
+    )
 
 
 def _photo_payloads(photos: list[UploadFile]) -> list[tuple[str, bytes]]:
@@ -106,7 +115,8 @@ def download_reels_video(
                 "GET /api/videos/render/{reels_idx} 로 폴링). 릴스 행은 렌더 시작 시점에 "
                 "로그인 사용자(user_idx)와 연결해 미리 만들어지고(영상이 없는 동안은 추천 "
                 "피드에 뜨지 않음), 렌더가 끝나면 그 행의 url 에 GCS 영상 주소가 채워집니다. "
-                "렌더에 실패하면 그 릴스 행은 삭제됩니다. "
+                "렌더에 실패하면 그 릴스 행은 삭제됩니다. title 을 주면 그 값이 릴스 "
+                "제목이 되고, 비우면 제목 없는(null) 릴스가 됩니다. "
                 "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
                 "GPS 없는 사진은 자동 제외됩니다. 지점 기준 1km 미만인 연속 사진들은 카메라 "
                 "이동 없이 첫 사진 위치에 고정해 순서대로 보여주고, 1km 이상 떨어진 사진이 "
@@ -122,6 +132,7 @@ def render_video_photos_only(
     start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
+    title: str = _title_form(),
     photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -132,6 +143,7 @@ def render_video_photos_only(
         user_idx=current_user.user_idx,
         bgm=bgm,
         theme=theme,
+        title=title,
         start_name=start_name,
         start_latitude=start_latitude,
         start_longitude=start_longitude,
@@ -154,7 +166,9 @@ def render_video_photos_only(
                 "조건을 못 채우면 400을 반환합니다. 영상 앞뒤에는 TRAILER 인트로·아웃트로가 "
                 "항상 붙습니다. 릴스 행은 렌더 시작 시점에 로그인 사용자(user_idx)와 연결해 "
                 "미리 만들어지고, 렌더가 끝나면 그 행의 url 에 GCS 영상 주소가 채워집니다"
-                "(실패 시 릴스 행 삭제). JWT 인증이 필요하며 토큰이 없거나 유효하지 않으면 "
+                "(실패 시 릴스 행 삭제). title 을 주면 그 값이 릴스 제목이 되고, 비우면 "
+                "제목 없는(null) 릴스가 됩니다. "
+                "JWT 인증이 필요하며 토큰이 없거나 유효하지 않으면 "
                 "401을 반환합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
@@ -164,6 +178,7 @@ def render_video_photos_ordered(
     start_longitude: float | None = Form(None, description="출발지 경도 (위도와 함께 지정)"),
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
+    title: str = _title_form(),
     photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장) — 보낸 순서가 곧 영상 순서"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -174,6 +189,7 @@ def render_video_photos_ordered(
         user_idx=current_user.user_idx,
         bgm=bgm,
         theme=theme,
+        title=title,
         start_name=start_name,
         start_latitude=start_latitude,
         start_longitude=start_longitude,
@@ -196,7 +212,9 @@ def render_video_photos_ordered(
                 "없거나 지점이 2개 미만이면 400을 반환합니다. 영상 앞뒤에는 TRAILER "
                 "인트로·아웃트로가 항상 붙습니다. 릴스 행은 렌더 시작 시점에 로그인 "
                 "사용자(user_idx)와 연결해 미리 만들어지고, 렌더가 끝나면 그 행의 url 에 GCS "
-                "영상 주소가 채워집니다(실패 시 릴스 행 삭제). JWT 인증이 필요하며 토큰이 "
+                "영상 주소가 채워집니다(실패 시 릴스 행 삭제). title 을 주면 그 값이 릴스 "
+                "제목이 되고, 비우면 그 여행의 제목(travel.title)이 릴스 제목으로 들어갑니다. "
+                "JWT 인증이 필요하며 토큰이 "
                 "없거나 유효하지 않으면 401을 반환합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
@@ -204,6 +222,7 @@ def render_video_from_travel(
     travel_idx: int = Form(..., description="영상을 만들 여행 PK (본인 여행만 가능)"),
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
+    title: str = _title_form(", 여행 제목이 대신 들어감"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -213,6 +232,7 @@ def render_video_from_travel(
         travel_idx,
         bgm=bgm,
         theme=theme,
+        title=title,
     )
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
 
@@ -224,17 +244,51 @@ def render_video_from_travel(
                 "쉼표로 구분해 넘기면 그 릴스들을 제외하고 새로 뽑으며, 남은 릴스가 10개 "
                 "미만이면 있는 만큼만 반환합니다. 제외하고 남은 릴스가 하나도 없으면(전부 "
                 "한 번씩 추천됨) exclude를 무시하고 처음부터 다시 추천합니다. 각 릴스에는 "
+                "제목(title)과 좋아요 수(like_count)·댓글 수(comment_count, 답글 포함)가 함께 "
+                "내려갑니다. 로그인 상태로 호출하면 내가 좋아요한 릴스는 is_liked 가 true 로 "
+                "내려가고(비로그인은 항상 false), 또 "
                 "작성자의 닉네임(nickname)·프로필 사진(profile_image)이 함께 내려가며, "
                 "작성자 없는 옛 릴스는 둘 다 null 입니다. exclude 형식이 잘못되면 400을 "
-                "반환합니다.",
+                "반환합니다.\n\n"
+                "**홈 화면의 '지금 사람들이 떠나는 여행' 카드도 이 API를 씁니다** — limit 으로 "
+                "필요한 개수(예: 2)만 받으면 됩니다. 카드에 필요한 지역 태그(region)와 "
+                "썸네일 이미지(thumbnail_url)가 함께 내려가며, 렌더 전에 만들어진 옛 릴스는 "
+                "둘 다 null 이라 그 땐 지역 핀을 숨기고 url 영상의 첫 프레임을 카드 이미지로 "
+                "쓰면 됩니다.\n\n"
+                "인증은 선택입니다 — JWT를 보내면 내가 차단한 사용자의 릴스가 결과에서 빠지고, "
+                "토큰이 없거나 만료됐으면 비로그인으로 간주해 전체에서 추천합니다(401 없음).",
     response_model=CommonResponse[list[ReelsRecommendResponse]],
 )
 def recommend_reels(
     exclude: str = Query("", description="제외할 reels_idx 목록 (쉼표 구분, 예: 1,5,9 — 이전 응답의 idx 누적)"),
+    limit: int = Query(10, ge=1, le=10, description="받을 릴스 개수 (홈 화면 카드는 2)"),
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
+):
+    reels = video_service.recommend_reels(db, exclude, current_user, limit)
+    return CommonResponse.success_response("릴스 추천 목록 조회 성공", data=reels)
+
+
+@router.get(
+    "/reels/{reels_idx}/share",
+    summary="릴스 공유 링크 조회 (reels_idx)",
+    description="릴스(reels_idx)를 공유할 때 쓸 링크를 반환합니다. share_url 은 영상이 재생되는 "
+                "공유 페이지 주소(/r/{reels_idx})로, 카톡·SNS 공유 시트에 그대로 넘기면 됩니다. "
+                "버킷 영상 주소를 직접 공유할 때와 달리 링크 미리보기가 뜨고, 삭제되거나 아직 "
+                "렌더 중인 릴스는 그 페이지가 404가 되어 공유 링크가 끊깁니다. 앱 안에서 바로 "
+                "재생할 영상 주소는 릴스 목록의 url 을 그대로 쓰면 됩니다. "
+                "본인 릴스가 아니어도 조회할 수 있습니다"
+                "(릴스는 공개 피드). 없거나 삭제됐거나 아직 렌더가 끝나지 않은 릴스면 404를 "
+                "반환합니다. 로그인 없이 호출할 수 있습니다.",
+    response_model=CommonResponse[ReelsShareResponse],
+)
+def get_reels_share_link(
+    reels_idx: int,
+    request: Request,
     db: Session = Depends(get_db),
 ):
-    reels = video_service.recommend_reels(db, exclude)
-    return CommonResponse.success_response("릴스 추천 목록 조회 성공", data=reels)
+    data = video_service.get_share_link(db, reels_idx, str(request.base_url))
+    return CommonResponse.success_response("공유 링크 조회 성공", data=data)
 
 
 @router.post(

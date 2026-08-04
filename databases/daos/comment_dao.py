@@ -44,6 +44,23 @@ def list_by_reels(
     return q.order_by(Comment.comment_idx.asc()).all()
 
 
+def counts_by_reels(db: Session, reels_idxs: list[int]) -> dict[int, int]:
+    """릴스 여러 건의 댓글 수를 {reels_idx: count}로 일괄 조회 (피드 N+1 회피).
+
+    답글(parent_idx 있는 행)도 함께 센다 — 화면의 댓글 수는 "이 릴스에 달린 말"의
+    총량이라 목록에 보이는 건수와 일치해야 한다.
+    """
+    if not reels_idxs:
+        return {}
+    rows = (
+        db.query(Comment.reels_idx, func.count(Comment.comment_idx))
+        .filter(Comment.reels_idx.in_(reels_idxs), Comment.deleted_at.is_(None))
+        .group_by(Comment.reels_idx)
+        .all()
+    )
+    return {reels_idx: count for reels_idx, count in rows}
+
+
 def update_content(db: Session, comment: Comment, content: str) -> Comment:
     """댓글 내용 수정. flush만 하고 commit은 서비스가 한다."""
     comment.content = content

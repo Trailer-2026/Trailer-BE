@@ -18,6 +18,18 @@ class Theme(str, enum.Enum):
     THEME_PARK = "THEME_PARK"  # 테마파크
 
 
+class NotificationType(str, enum.Enum):
+    """푸시 알림 종류. notification_log.type에 value가 그대로 저장된다.
+
+    수신 설정(notification 테이블)과의 매핑은 services/push_service._ALARM_FIELD 참조.
+    """
+
+    TRAVEL_SAVED = "TRAVEL_SAVED"        # 일정에 추가되었습니다
+    TRAVEL_D1 = "TRAVEL_D1"              # 일정이 하루 남았습니다
+    TRAVEL_DELETED = "TRAVEL_DELETED"    # 일정에서 삭제되었습니다
+    SCENERY = "SCENERY"                  # 실시간 창밖 풍경 (푸시만, 이력 미기록)
+
+
 # 테마 한글 라벨 (응답·추천 이유 표시용)
 THEME_LABELS = {
     Theme.NATURE: "자연",

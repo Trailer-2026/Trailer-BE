@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from core.exceptions.custom import BadRequestException, NotFoundException
 from databases.daos import schedule_dao, station_dao, travel_dao, travel_like_dao, user_dao
+from services import push_service
 from schemas.travel_schema import (
     HomeTravelCard,
     PastTravelCard,
@@ -73,6 +74,8 @@ def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
         count += 1
 
     db.commit()
+    # '여행을 담았습니다' 푸시 — 커밋 뒤에 보낸다. 알림이 실패해도 저장은 되돌리지 않는다.
+    push_service.notify_travel_saved(db, user.user_idx, travel)
     return TravelResponse(
         travel_idx=travel.travel_idx, title=travel.title,
         start_date=travel.start_date, end_date=travel.end_date,
@@ -96,6 +99,7 @@ def create_manual(db: Session, user, req: TravelManualCreateRequest) -> TravelRe
         region=req.region, status="PLANNED",
     )
     db.commit()
+    push_service.notify_travel_saved(db, user.user_idx, travel)  # 커밋 뒤 발송(실패해도 무해)
     return TravelResponse(
         travel_idx=travel.travel_idx, title=travel.title,
         start_date=travel.start_date, end_date=travel.end_date,
@@ -179,6 +183,7 @@ def delete_travel(db: Session, user, travel_idx: int) -> None:
     schedule_dao.soft_delete_by_travel(db, travel_idx)
     travel_dao.soft_delete(db, travel)
     db.commit()
+    push_service.notify_travel_deleted(db, user.user_idx, travel)  # 커밋 뒤 발송(실패해도 무해)
 
 
 def current_travel(db: Session, user) -> HomeTravelCard | None:

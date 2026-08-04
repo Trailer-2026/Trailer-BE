@@ -13,17 +13,26 @@ def get_by_idx(db: Session, reels_idx: int) -> Reels | None:
     ).first()
 
 
-def create(db: Session, *, user_idx: int | None, url: str, title: str | None) -> Reels:
+def create(
+    db: Session, *, user_idx: int | None, url: str, title: str | None,
+    region: str | None = None,
+) -> Reels:
     """릴스 행 생성 (flush만 — commit은 서비스가)."""
-    reels = Reels(user_idx=user_idx, url=url, title=title)
+    reels = Reels(user_idx=user_idx, url=url, title=title, region=region)
     db.add(reels)
     db.flush()
     return reels
 
 
-def update_url(db: Session, reels: Reels, url: str) -> Reels:
-    """릴스 영상 URL 교체 (렌더 완료·편집본 갱신, flush만 — commit은 서비스가)."""
+def update_url(db: Session, reels: Reels, url: str, thumbnail_url: str | None) -> Reels:
+    """릴스 영상·썸네일 URL 교체 (렌더 완료·편집본 갱신, flush만 — commit은 서비스가).
+
+    thumbnail_url 은 항상 그대로 덮어쓴다. 추출 실패(None)일 때 옛 값을 남기면
+    영상은 편집본인데 썸네일만 편집 전 장면을 가리키게 되므로(앞부분을 잘라낸
+    편집이면 영상에 없는 장면이다), 그럴 바엔 비워서 앱이 폴백하게 둔다.
+    """
     reels.url = url
+    reels.thumbnail_url = thumbnail_url
     db.flush()
     return reels
 
@@ -48,13 +57,17 @@ def hard_delete(db: Session, reels: Reels) -> None:
 
 
 def get_random_reels(
-    db: Session, count: int, exclude_idxs: list[int]
+    db: Session,
+    count: int,
+    exclude_idxs: list[int],
+    exclude_user_idxs: list[int] | None = None,
 ) -> list[tuple[Reels, str | None, str | None]]:
     """무작위 count개를 (릴스, 작성자 닉네임, 프로필 사진)으로 조회 (soft-delete·exclude_idxs 제외).
 
     작성자 없는(사진만 렌더 시절)·탈퇴한 작성자의 릴스도 나오도록 User 는 outer join —
     그런 릴스는 닉네임·프로필이 None (탈퇴 조건은 ON 절에 둬야 릴스가 통째로 빠지지 않는다).
     url 이 빈 문자열인 행은 렌더가 아직 안 끝난 자리표라 피드에서 제외한다.
+    exclude_user_idxs(차단한 사용자)의 릴스는 쿼리에서 제외한다.
     """
     query = (
         db.query(Reels, User.nickname, User.profile_image)
@@ -66,4 +79,9 @@ def get_random_reels(
     )
     if exclude_idxs:
         query = query.filter(Reels.reels_idx.notin_(exclude_idxs))
+    if exclude_user_idxs:
+        # user_idx 가 NULL 인 익명 릴스는 NOT IN 이 NULL 이라 통째로 빠진다 — is_(None) 로 살린다.
+        query = query.filter(
+            Reels.user_idx.is_(None) | Reels.user_idx.notin_(exclude_user_idxs)
+        )
     return query.order_by(func.random()).limit(count).all()
