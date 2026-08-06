@@ -7,6 +7,7 @@ scripts/sync_train_stops.py(수동)와 main.py의 일일 자동 갱신 루프가
 배치 컨텍스트라 요청 스코프가 아닌 자체 세션을 열고 직접 커밋한다.
 """
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 
 from databases.daos import train_stop_dao
@@ -52,6 +53,56 @@ def refresh(ymd: str | None = None) -> int:
         return n
     finally:
         db.close()
+
+
+# ── 직통 연결 인덱스 (열차 시간표 API 헛호출 제거용) ──────────────────────────
+# 한 열차가 A를 지나 B에 서면 A→B 직통이 존재한다. 그 (A,B) 순서쌍 전체를 미리 펼쳐 둔다.
+# 왜 필요한가: 추천 1회가 쏘는 열차 조회 100~190콜 중 **70%가 "열차 0편"** 응답이었다
+# (실측, 서울→부산 192콜 중 135콜). 있지도 않은 직통을 물어보는 것이라 DB로 걸러낼 수 있다.
+# 갱신은 하루 1회 전량 교체라 적재 시각(created_at 최댓값)이 바뀔 때만 인덱스를 다시 만든다.
+_link_lock = threading.Lock()
+_link_version: datetime | None = None
+_links: frozenset[tuple[str, str]] = frozenset()
+
+
+def _build_links(rows: list[tuple[str, int, str]]) -> frozenset[tuple[str, str]]:
+    """(trn_no, seq, stn_nm) 목록 → 한 열차로 이어지는 (앞역, 뒷역) 순서쌍 집합."""
+    by_train: dict[str, list[str]] = {}
+    for trn_no, _seq, stn_nm in rows:  # DAO가 seq 오름차순으로 준다
+        by_train.setdefault(trn_no, []).append(stn_nm)
+    out = set()
+    for stops in by_train.values():
+        for i, a in enumerate(stops):
+            for b in stops[i + 1:]:
+                out.add((a, b))
+    return frozenset(out)
+
+
+def direct_links() -> frozenset[tuple[str, str]]:
+    """직통 연결 (앞역, 뒷역) 순서쌍 집합. 역명은 train_stop 형식('역' 접미사 없음).
+
+    데이터가 없으면 빈 집합 — 호출부는 그 때 '판정 불가'로 보고 평소대로 조회해야 한다.
+    **어떤 이유로든 실패해도 빈 집합**이다(테이블 미생성·DB 장애 등). 이 인덱스는 조회를
+    줄이는 최적화일 뿐이라, 못 만들었다고 추천 자체가 죽으면 손해가 훨씬 크다.
+    """
+    global _link_version, _links
+    db = SessionLocal()
+    try:
+        version = train_stop_dao.latest_created_at(db)
+        with _link_lock:
+            if version == _link_version and _links:
+                return _links
+        rows = train_stop_dao.all_sequences(db)
+    except Exception as e:
+        logger.warning("train_stop 직통 인덱스 조회 실패(프리페치 필터 비활성): %s", e)
+        return frozenset()
+    finally:
+        db.close()
+    links = _build_links(rows)
+    with _link_lock:
+        _link_version, _links = version, links
+    logger.info("train_stop 직통 인덱스 구축: %d쌍", len(links))
+    return links
 
 
 def refresh_if_stale(max_age_hours: int = _FRESH_WITHIN_HOURS) -> int | None:

@@ -40,6 +40,7 @@ from core.exceptions.custom import (
 from databases.daos import station_dao
 from databases.models.station import Station
 from schemas.route_schema import RouteCandidate, RouteTrain
+from services import train_stop_service
 from utils import dgo, train_api
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,40 @@ def _safe_fetch(dep_nat: str, arr_nat: str, ymd: str) -> None:
         pass
 
 
+def _warmable(pairs: set, by_nat: dict) -> set:
+    """데울 (출발nat, 도착nat, 날짜) 중 **직통이 존재할 법한 것만** 남긴다.
+
+    추천 1회의 열차 조회 중 70%가 "열차 0편" 응답이었다(실측: 서울→부산 192콜 중 135콜).
+    train_stop(매일 갱신되는 정차역 스냅샷)에 두 역을 잇는 열차가 아예 없으면 그 조회는
+    빈손이 확정이라 미리 데울 이유가 없다.
+
+    **데우기 판정이라 틀려도 결과는 안 변한다** — 걸러낸 구간이 정말 필요하면 _journey가
+    그 자리에서 조회한다(느려질 뿐). 그래서 모르는 역(train_stop 미수록: SRT 동탄·판교,
+    관광열차 노선 등)과 인덱스가 비었을 때는 **보수적으로 남긴다**.
+    """
+    links = train_stop_service.direct_links()
+    if not links:
+        return pairs  # 인덱스 없음(최초 기동 등) → 예전과 똑같이 전부 데운다
+    known = {n for pair in links for n in pair}
+
+    def keep(dep_nat: str, arr_nat: str) -> bool:
+        a, b = by_nat.get(dep_nat), by_nat.get(arr_nat)
+        if a is None or b is None or a not in known or b not in known:
+            return True  # 판정 불가 → 남긴다
+        return (a, b) in links
+
+    return {p for p in pairs if keep(p[0], p[1])}
+
+
+def _nat_names(*groups) -> dict:
+    """nat_code → train_stop 역명('역' 접미사 없음) 매핑. Station 목록들을 합쳐 만든다."""
+    return {
+        s.nat_code: s.station_name.removesuffix("역")
+        for g in groups for s in g
+        if s is not None and s.nat_code and s.station_name
+    }
+
+
 def _prefetch_segments(dep, arr, groups, stops, go_date, back_date, nail_pass: bool = False) -> None:
     """이번 추천에 필요한 (출발,도착,날짜) 구간을 병렬로 미리 받아 캐시를 데운다.
 
@@ -187,6 +222,7 @@ def _prefetch_segments(dep, arr, groups, stops, go_date, back_date, nail_pass: b
         pairs.add((c.nat_code, arr.nat_code, go_date))
         pairs.add((arr.nat_code, c.nat_code, back_date))
         pairs.add((c.nat_code, dep.nat_code, back_date))
+    pairs = _warmable(pairs, _nat_names(members, [dep, arr], stops))
     if not pairs:
         return
     with ThreadPoolExecutor(max_workers=min(16, len(pairs))) as ex:
@@ -228,6 +264,7 @@ def _prefetch_transfer_legs(pairs, groups: list[list[Station]], nail_pass: bool)
                 continue
             need.add((a.nat_code, m.nat_code, ymd))  # 하차 다리(후보→거점) — 여태 미적재였던 쪽
             need.add((m.nat_code, b.nat_code, ymd))  # 승차 다리(거점→도착)
+    need = _warmable(need, _nat_names(members, [a for a, _b, _y in pairs], [b for _a, b, _y in pairs]))
     if not need:
         return
     with ThreadPoolExecutor(max_workers=min(16, len(need))) as ex:
