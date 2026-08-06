@@ -100,13 +100,28 @@ _dead: dict[tuple[str, str], float] = {}
 
 
 def live_keys(scope: str) -> list[str]:
-    """그 API(scope)에서 아직 거부되지 않은 서비스 키 목록(설정 순서 유지)."""
+    """그 API(scope)에서 쓸 수 있는 서비스 키 — **거부 이력이 없는 것부터** 순서대로.
+
+    차단 중(TRIP_SECONDS 이내)인 키는 아예 뺀다. 남는 키는 '거부된 적 없음'(설정 순서 유지) →
+    '오래전에 거부됨' → '최근에 거부됨' 순이다.
+
+    왜 순서를 바꾸나: 일일 쿼터가 소진된 키는 **자정까지 안 풀리는데** TRIP_SECONDS(5분)만
+    지나면 후보로 되살아난다. 설정 순서 그대로면 그 죽은 키를 매번 **맨 먼저** 찌르고 거부당한
+    뒤에야 다음 키로 넘어가, 5분마다 오퍼레이션마다 헛호출이 반복된다. 뒤로 미뤄 두면 살아 있는
+    키를 먼저 쓰고, 자정에 한도가 풀렸는지는 다른 키가 다 떨어졌을 때 자연히 확인된다.
+    """
     now = time.monotonic()
     raw = Config.read(_KEY_SECTION, _KEY_NAME) or ""
-    return [
-        k for k in (x.strip() for x in raw.split(",")) if k
-        and now - _dead.get((scope, k), float("-inf")) >= TRIP_SECONDS
-    ]
+    ranked = []
+    for k in (x.strip() for x in raw.split(",")):
+        if not k:
+            continue
+        at = _dead.get((scope, k))
+        if at is not None and now - at < TRIP_SECONDS:
+            continue  # 차단 중
+        ranked.append((at if at is not None else float("-inf"), k))
+    ranked.sort(key=lambda t: t[0])  # 안정 정렬 → 거부 이력 없는 키끼리는 설정 순서 유지
+    return [k for _, k in ranked]
 
 
 def raise_if_key_problem(text: str) -> None:
@@ -297,12 +312,24 @@ def _selfcheck() -> None:
             pass
         assert used == ["k1"] * 3 + ["k2"] * 3 + ["k3"] * 3, used
 
+        # 8) 차단이 풀린 키는 **맨 뒤로** 간다 — 일일 쿼터 소진은 자정까지 안 풀리는데
+        #    TRIP_SECONDS만 지나면 후보로 돌아오므로, 설정 순서를 그대로 두면 죽은 키를
+        #    5분마다 매번 먼저 찔러 헛호출이 반복된다.
+        _dead.clear(); used.clear(); rejected = set(); throttle = 0
+        _dead[(A, "k1")] = time.monotonic() - (TRIP_SECONDS + 1)  # 예전에 거부됐고 차단은 풀림
+        assert live_keys(A) == ["k2", "k3", "k1"], live_keys(A)
+        _dead[(A, "k3")] = time.monotonic() - (TRIP_SECONDS + 100)  # k1보다 더 오래전
+        assert live_keys(A) == ["k2", "k3", "k1"], live_keys(A)
+        _dead[(A, "k2")] = time.monotonic()  # 방금 거부 → 차단 중이라 아예 빠진다
+        assert live_keys(A) == ["k3", "k1"], live_keys(A)
+        assert live_keys(B) == ["k1", "k2", "k3"], "다른 scope는 영향 없어야 한다"
+
         assert items({"items": ""}) == []
     finally:
         urllib.request.urlopen, Config.read, time.sleep = orig_urlopen, orig_read, orig_sleep
         _dead.clear()
 
-    # 8) 레이트 게이트: 스레드를 몰아쳐도 scope별로 MIN_CALL_INTERVAL 간격이 지켜진다.
+    # 9) 레이트 게이트: 스레드를 몰아쳐도 scope별로 MIN_CALL_INTERVAL 간격이 지켜진다.
     #    (여기만 진짜로 잔다 — 위 블록은 time.sleep을 no-op으로 바꿔놨었다.)
     #    개별 간격이 아니라 총 소요로 본다 — 윈도우 타이머 해상도(~16ms) 탓에 콜 하나하나의
     #    간격은 흔들리지만, 정작 지켜야 하는 건 구간 평균 속도라 그게 맞는 판정이기도 하다.
@@ -314,7 +341,7 @@ def _selfcheck() -> None:
     elapsed = time.monotonic() - t0
     assert elapsed >= MIN_CALL_INTERVAL * 5 * 0.9, f"게이트가 안 먹었다: {elapsed:.3f}s"
 
-    # 9) 다른 scope는 서로 안 막는다 — 6+6콜을 두 API로 나눠 쏘면 12콜치가 아니라 6콜치 시간.
+    # 10) 다른 scope는 서로 안 막는다 — 6+6콜을 두 API로 나눠 쏘면 12콜치가 아니라 6콜치 시간.
     _last_call.clear(); _locks.clear()
     threads = [threading.Thread(target=lambda s=s: _throttle(s))
                for s in ("http://x", "http://y") for _ in range(6)]
@@ -324,7 +351,7 @@ def _selfcheck() -> None:
     elapsed = time.monotonic() - t0
     assert elapsed < MIN_CALL_INTERVAL * 9, f"scope끼리 서로 막고 있다: {elapsed:.3f}s"
 
-    # 10) 게이트는 with_key에 걸려 있다 — fetch_json을 직접 부르는 tour_api 경로도 반드시 탄다.
+    # 11) 게이트는 with_key에 걸려 있다 — fetch_json을 직접 부르는 tour_api 경로도 반드시 탄다.
     #     (get_body에만 걸면 TourAPI 트래픽 전량이 게이트를 빠져나간다.)
     _last_call.clear(); _locks.clear()
     orig_urlopen, orig_read = urllib.request.urlopen, Config.read
