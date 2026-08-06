@@ -1,5 +1,3 @@
-import logging
-
 from sqlalchemy.orm import Session
 
 from databases.daos import user_dao, refresh_token_dao, fcm_token_dao
@@ -13,8 +11,6 @@ from core.security import (
 )
 from core.exceptions.custom import BadRequestException, UnauthorizedException
 from schemas.auth_schema import TokenResponse
-
-logger = logging.getLogger(__name__)
 
 
 def _issue_tokens(user: User, db: Session) -> TokenResponse:
@@ -116,14 +112,3 @@ def withdraw(user_idx: int, db: Session) -> None:
         fcm_token_dao.soft_delete_by_tokens(db, tokens)
     user_dao.soft_delete(db, user_idx)
     db.commit()
-
-
-def cleanup_expired_tokens(db: Session) -> int:
-    """전체 사용자의 만료된 refresh 토큰을 일괄 정리한다 (배치/스케줄러용).
-
-    삭제된 행 수를 반환한다.
-    """
-    deleted = refresh_token_dao.delete_expired(db)
-    db.commit()
-    logger.info(f"만료된 refresh 토큰 {deleted}건 정리 완료")
-    return deleted
