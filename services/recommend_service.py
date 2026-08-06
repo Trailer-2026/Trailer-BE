@@ -316,7 +316,7 @@ def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, rout
     """
     scored = _prepare_scored(places, criteria, k)
     memo: dict = {}       # 숙소 조회 캐시(경로 간 공유) — 종점 좌표가 같으면 재사용
-    via_cache: dict = {}  # 경유역 scored 캐시(경유역당 1회 조회)
+    via_cache: dict = {}  # 경유역 scored 캐시 — 키는 (경유역, 그 도시 체류일수)
     route_list = routes or [None]
 
     # 다시받기(page): page*target개를 건너뛴 다음 target개를 반환하도록, 전체를 build_count까지
@@ -474,17 +474,25 @@ def _course_for_overnight(db, dest_scored, criteria, k, dest_anchor, route, memo
         return None
     via_anchor = (via_st.latitude, via_st.longitude)
 
-    # 경유역 추천지 점수화+운영시간(경유역당 1회, via_cache 공유). 목적지 scored는 재사용.
-    if route.via_station_idx not in via_cache:
-        via_places = tour_place.live_places(via_anchor[0], via_anchor[1], criteria.themes)
-        via_cache[route.via_station_idx] = _prepare_scored(via_places, criteria, k)
-    via_scored = via_cache[route.via_station_idx]
-
+    # 구간 나눔을 **조회보다 먼저** 한다 — 일수가 안 맞아 폐기할 후보에 TourAPI를 쓰지 않도록.
     go = datetime.strptime(criteria.go_date, "%Y%m%d")
     segs = _overnight_segments(route)
     first_days = (segs[0][2].date() - go.date()).days   # 먼저 묵는 도시 일수 = 전이 열차 출발일 - 가는날
     if first_days < 1 or k - first_days < 1:
         return None
+    # 경유 도시가 실제로 머무는 일수(앞 구간이면 first_days, 뒤 구간이면 나머지).
+    via_days = first_days if segs[0][0] else k - first_days
+
+    # 경유역 추천지 점수화+운영시간(경유역·일수 조합당 1회, via_cache 공유). 목적지 scored는 재사용.
+    # **k가 아니라 via_days로 조회한다** — 운영시간 조회 대상은 working_set(=3×일수×3)이고
+    # 아래 build_courses가 이 도시엔 seg_k(=via_days)짜리 작업셋만 쓴다. 전체 일수로 받으면
+    # 2박3일 기준 27곳을 조회하고 9곳만 보게 되어, 일일 쿼터가 제일 빠듯한 detailIntro2를
+    # 18건씩 헛되이 태운다.
+    cache_key = (route.via_station_idx, via_days)
+    if cache_key not in via_cache:
+        via_places = tour_place.live_places(via_anchor[0], via_anchor[1], criteria.themes)
+        via_cache[cache_key] = _prepare_scored(via_places, criteria, via_days)
+    via_scored = via_cache[cache_key]
 
     days: list = []
     for idx, (is_via, arr, dep) in enumerate(segs):
