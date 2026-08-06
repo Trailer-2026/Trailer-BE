@@ -25,6 +25,11 @@ def _get(operation: str, params: dict, timeout: int = 20) -> dict:
     serviceKey 주입·거부 시 다음 키로의 로테이션은 dgo가 맡는다(TAGO와 같은 계정 키를 쓰므로
     죽은 키 정보를 공유한다). body만 필요한 dgo.get_body와 달리 여기선 header.resultCode까지
     봐야 해서 요청 자체는 직접 만든다.
+
+    **죽은 키는 오퍼레이션 단위로 센다**(scope에 operation까지 넣는 이유). data.go.kr의 일일
+    쿼터가 오퍼레이션별이라(응답 헤더 X-RateLimit-Limit=1000) detailIntro2가 소진돼도 같은 키의
+    areaBasedList2는 멀쩡하다(실측 확인). KorService2 하나로 묶으면 운영시간 조회가 쿼터를 다
+    쓴 순간 관광지 목록 조회까지 같이 막혀 **추천 코스의 장소가 통째로 0건**이 된다.
     """
     def _call(key: str) -> dict:
         q = {**_COMMON, "serviceKey": key, **params}
@@ -41,7 +46,7 @@ def _get(operation: str, params: dict, timeout: int = 20) -> dict:
             raise RuntimeError(f"TourAPI {operation} 실패: {header.get('resultCode')} {header.get('resultMsg')}")
         return resp.get("body") or {}
 
-    return dgo.with_key(_call, _BASE)
+    return dgo.with_key(_call, f"{_BASE}/{operation}")
 
 
 def area_based_list(
