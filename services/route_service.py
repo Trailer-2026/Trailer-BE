@@ -183,8 +183,7 @@ def _nat_names(*groups) -> dict:
     """nat_code → train_stop 역명('역' 접미사 없음) 매핑. Station 목록들을 합쳐 만든다."""
     return {
         s.nat_code: s.station_name.removesuffix("역")
-        for g in groups for s in g
-        if s is not None and s.nat_code and s.station_name
+        for g in groups for s in g if s.nat_code
     }
 
 

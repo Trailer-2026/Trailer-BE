@@ -7,7 +7,6 @@ scripts/sync_train_stops.py(수동)와 main.py의 일일 자동 갱신 루프가
 배치 컨텍스트라 요청 스코프가 아닌 자체 세션을 열고 직접 커밋한다.
 """
 import logging
-import threading
 from datetime import datetime, timedelta, timezone
 
 from databases.daos import train_stop_dao
@@ -60,9 +59,9 @@ def refresh(ymd: str | None = None) -> int:
 # 왜 필요한가: 추천 1회가 쏘는 열차 조회 100~190콜 중 **70%가 "열차 0편"** 응답이었다
 # (실측, 서울→부산 192콜 중 135콜). 있지도 않은 직통을 물어보는 것이라 DB로 걸러낼 수 있다.
 # 갱신은 하루 1회 전량 교체라 적재 시각(created_at 최댓값)이 바뀔 때만 인덱스를 다시 만든다.
-_link_lock = threading.Lock()
-_link_version: datetime | None = None
-_links: frozenset[tuple[str, str]] = frozenset()
+# (적재 시각, 순서쌍 집합) 한 덩어리로 둔다 — 이름 하나에 대입하는 건 GIL이 원자성을 보장하므로
+# 락 없이도 버전과 내용이 어긋난 채로 읽히지 않는다. 동시에 두 번 만들어도 결과는 같다.
+_cache: tuple[datetime | None, frozenset[tuple[str, str]]] = (None, frozenset())
 
 
 def _build_links(rows: list[tuple[str, int, str]]) -> frozenset[tuple[str, str]]:
@@ -85,13 +84,13 @@ def direct_links() -> frozenset[tuple[str, str]]:
     **어떤 이유로든 실패해도 빈 집합**이다(테이블 미생성·DB 장애 등). 이 인덱스는 조회를
     줄이는 최적화일 뿐이라, 못 만들었다고 추천 자체가 죽으면 손해가 훨씬 크다.
     """
-    global _link_version, _links
+    global _cache
     db = SessionLocal()
     try:
         version = train_stop_dao.latest_created_at(db)
-        with _link_lock:
-            if version == _link_version and _links:
-                return _links
+        cached_version, cached_links = _cache
+        if version == cached_version and cached_links:
+            return cached_links
         rows = train_stop_dao.all_sequences(db)
     except Exception as e:
         logger.warning("train_stop 직통 인덱스 조회 실패(프리페치 필터 비활성): %s", e)
@@ -99,8 +98,7 @@ def direct_links() -> frozenset[tuple[str, str]]:
     finally:
         db.close()
     links = _build_links(rows)
-    with _link_lock:
-        _link_version, _links = version, links
+    _cache = (version, links)
     logger.info("train_stop 직통 인덱스 구축: %d쌍", len(links))
     return links
 
