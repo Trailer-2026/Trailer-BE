@@ -59,7 +59,10 @@ TRIP_SECONDS = 300
 # 실측상 몇 초면 풀린다. 이걸 키 만료로 보고 TRIP_SECONDS 동안 차단하면 추천 검색 두세 번에
 # 키 3개가 전부 죽어, 그 5분간 모든 사용자의 여정에서 기차가 통째로 빠진다(route_type "현지").
 # 지터를 주는 이유: 16스레드가 동시에 429를 맞으므로 같은 시각에 깨면 그대로 다시 몰린다.
-RATE_LIMIT_RETRIES = 2
+# 1회인 이유: 초당 제한은 아래 게이트가 앞에서 막으므로 이건 그물을 빠져나간 몫만 받는 보험이다.
+# 더 늘리면 **TourAPI 쪽이 손해다** — 거긴 429가 일일 쿼터 소진이라 재시도해도 절대 안 풀리는데,
+# 소진된 오퍼레이션 호출 한 건이 (재시도+키 3개)만큼 헛콜과 백오프 대기를 그대로 문다.
+RATE_LIMIT_RETRIES = 1
 RATE_LIMIT_BACKOFF = (0.4, 1.2)
 # 최소 호출 간격(초) = 10콜/초. **재시도만으로는 못 막아서 필요하다** — 백오프로 미뤄봐야
 # 16스레드가 다시 몰려 또 429다. 실측: TAGO는 약 17콜/초에서 첫 429라 여유를 뒀다.
@@ -310,7 +313,8 @@ def _selfcheck() -> None:
             raise AssertionError("계속 429면 PublicApiRejectedError가 나야 한다")
         except PublicApiRejectedError:
             pass
-        assert used == ["k1"] * 3 + ["k2"] * 3 + ["k3"] * 3, used
+        attempts = RATE_LIMIT_RETRIES + 1
+        assert used == ["k1"] * attempts + ["k2"] * attempts + ["k3"] * attempts, used
 
         # 8) 차단이 풀린 키는 **맨 뒤로** 간다 — 일일 쿼터 소진은 자정까지 안 풀리는데
         #    TRIP_SECONDS만 지나면 후보로 돌아오므로, 설정 순서를 그대로 두면 죽은 키를
