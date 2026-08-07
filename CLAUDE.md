@@ -110,6 +110,16 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 - **테이블 생성**: 마이그레이션 도구가 없어 `ticket_service.ensure_tables()`(lifespan 1회)로 자체 provision한다 — `notification`·`train_stop`과 같은 방식.
 - **수정(PATCH)은 없다** — 저장·목록·삭제 3개뿐이다. 잘못 넣었으면 지우고 다시 저장한다.
 
+## 마이페이지 릴스 (북마크 테이블은 없다)
+
+`GET /api/users/me/reels`(내가 올린) / `GET /api/users/me/reels/liked`(좋아요한). 둘 다 `routers/user.py` → `video_service.list_my_reels`·`list_liked_reels` → `reels_dao.list_by_user`·`list_liked_by_user`.
+
+- **북마크 = 릴스 좋아요다.** 앱의 하트가 곧 저장이라 `likes`(reels_idx가 채워진 행)를 그대로 목록으로 읽는다. **별도 북마크 테이블을 만들지 마라** — 하트와 저장이 갈리면 화면에 버튼이 두 개가 되고, `likes`엔 `num_nonnulls(reels_idx, comment_idx) = 1` CHECK가 박혀 있어 세 번째 타깃을 끼우는 것도 막혀 있다(`travel_like`를 따로 뗀 것과 같은 이유).
+- **커서가 목록마다 다르다**: 내가 올린 건 `reels_idx`, 좋아요한 건 **`likes_idx`**다. 후자의 정렬 기준이 릴스 생성순이 아니라 내가 누른 순서라 커서도 같은 축이어야 페이지 경계가 안 어긋난다. 그래서 `next_cursor`는 앱이 해석하지 말고 그대로 돌려보내야 한다.
+- **응답은 홈 피드 카드와 같은 필드 구성**(`MyReelsItem` ≈ `ReelsRecommendResponse`)이라 같은 카드 컴포넌트로 그린다. 좋아요 목록의 `is_liked`는 항상 true다(목록에서 바로 해제하라고 같이 내려준다).
+- **제외 규칙**: 소프트 삭제된 릴스, `url`이 빈 문자열인 렌더 미완료 자리표(피드와 동일), 그리고 좋아요 목록에선 **내가 차단한 사용자의 릴스**(`recommend_reels`와 같은 규칙 — 차단 전에 누른 하트가 남아 그 사람 릴스가 계속 보이면 안 된다).
+- `Like.deleted_at`은 안 거른다 — 좋아요 취소가 행 삭제라 소프트 삭제된 좋아요가 없고, `like_dao`의 다른 읽기도 안 건다. 여기서만 거르면 목록엔 없는데 `like_count`엔 잡히는 릴스가 생긴다.
+
 ## 열차 정차역 자동 갱신 (`train_stop`)
 
 경로의 각 열차편(`RouteTrain`)에 **탑승구간 정차역 수·순서**(`stop_station_count`/`stop_stations`)를 붙이는 기능. 데이터는 한국철도공사 **열차운행정보 API**(`travelerTrainRunInfo2`, data.go.kr B551457)에서 온다.
