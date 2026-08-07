@@ -200,6 +200,55 @@ def notify_travel_deleted(db: Session, user_idx: int, travel) -> bool:
     )
 
 
+def notify_train_departure(
+    db: Session, user_idx: int, *, dep_station: str, dep_at, minutes_left: int,
+    train_label: str | None = None, seat_label: str | None = None,
+    travel_idx: int | None = None, schedule_idx: int | None = None,
+    ticket_idx: int | None = None,
+) -> bool:
+    """'곧 출발이에요' — 열차 출발 직전 발송. 출발 1건당 1회만 나간다(멱등).
+
+    추천 코스 승차권(schedule)과 직접 입력 승차권(ticket) 두 출처를 모두 받는다 —
+    둘 중 하나의 idx만 준다. 1분마다 도는 루프가 같은 열차를 10번 집으므로 이미 보낸
+    이력이 있으면 건너뛴다. 이 검사는 빠른 경로일 뿐이고, 최종 방어는 notification_log의
+    부분 유니크 인덱스가 맡는다(D-1과 같은 구조).
+
+    train_label은 추천 코스만 있다('KTX 101') — 직접 입력 승차권엔 열차번호·등급 입력칸이
+    없어 None이다. seat_label은 반대로 직접 입력에만 있을 수 있다('3호차 12A').
+    """
+    if notification_log_dao.exists_for_departure(
+        db, user_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx
+    ):
+        return False
+    return notify(
+        db, user_idx, NotificationType.TRAIN_D10M,
+        title=_TITLE_TRAVEL,
+        body=_departure_body(dep_station, dep_at, minutes_left, train_label, seat_label),
+        travel_idx=travel_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx,
+    )
+
+
+def _departure_body(
+    dep_station: str, dep_at, minutes_left: int,
+    train_label: str | None, seat_label: str | None,
+) -> str:
+    """탑승 알림 본문 — "10분 뒤 서울역에서 KTX 101 열차가 출발해요 (3호차 12A) · 12:10 출발".
+
+    역명 표기가 출처마다 다르다 — schedule.dep_station은 '서울', ticket은 station을
+    조인해 '서울역'이다. 사용자에게 보이는 문구는 하나여야 하므로 '역'을 붙여 맞춘다.
+
+    분은 상수(10)가 아니라 **실제 남은 시간**을 쓴다. 서버가 잠깐 멈췄다 재개되면 남은
+    시간이 10분보다 짧은 열차에도 알림이 나가는데, 그 때 '10분 뒤'라고 하면 3분 남은
+    사람을 느긋하게 만든다. 출발 시각을 뒤에 같이 붙이는 것도 같은 이유다.
+    """
+    station = dep_station if dep_station.endswith("역") else f"{dep_station}역"
+    train = f"{train_label} 열차가" if train_label else "열차가"
+    body = f"{minutes_left}분 뒤 {station}에서 {train} 출발해요"
+    if seat_label:
+        body += f" ({seat_label})"
+    return f"{body} · {dep_at:%H:%M} 출발"
+
+
 def _josa_i_ga(word: str) -> str:
     """한글 낱말 뒤에 붙일 주격 조사 '이'/'가'를 고른다 (받침 있으면 '이').
 
