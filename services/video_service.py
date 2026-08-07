@@ -293,7 +293,7 @@ def recommend_reels(
 
 
 # --------------------------------------------------------------------------- #
-# 마이페이지 릴스
+# 마이페이지 릴스 (내가 올린 / 좋아요한)
 # --------------------------------------------------------------------------- #
 def list_my_reels(
     db: Session, user, limit: int, cursor: int | None
@@ -311,6 +311,31 @@ def list_my_reels(
     return MyReelsListResponse(
         items=items,
         next_cursor=rows[-1].reels_idx if has_more and rows else None,
+    )
+
+
+def list_liked_reels(
+    db: Session, user, limit: int, cursor: int | None
+) -> MyReelsListResponse:
+    """마이페이지 "좋아요한 릴스" — 내가 좋아요를 누른 순, 커서 페이징.
+
+    별도의 북마크 테이블은 없다. 앱의 하트가 곧 저장이라 likes 테이블(reels_idx 가
+    채워진 행)을 그대로 목록으로 읽는다.
+
+    내가 차단한 사용자의 릴스는 뺀다 — 추천 피드(recommend_reels)와 같은 규칙이라,
+    차단 후에도 예전에 누른 하트 때문에 그 사람 릴스가 여기 남아 있으면 안 된다.
+    커서는 likes_idx 다(reels_idx 가 아니다 — reels_dao.list_liked_by_user 참고).
+    """
+    blocked = ban_dao.blocked_user_idxs(db, user.user_idx)
+    rows = reels_dao.list_liked_by_user(db, user.user_idx, limit + 1, cursor, blocked)
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = _to_reels_cards(
+        db, user, [(reels, nickname, profile_image) for _, reels, nickname, profile_image in rows]
+    )
+    return MyReelsListResponse(
+        items=items,
+        next_cursor=rows[-1][0] if has_more and rows else None,
     )
 
 

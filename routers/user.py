@@ -103,6 +103,30 @@ def get_my_reels(
     return CommonResponse.success_response("내가 올린 릴스 목록 조회 성공", data=result)
 
 
+@router.get(
+    "/me/reels/liked",
+    summary="좋아요한 릴스 목록",
+    description="마이페이지에 저장(하트)해 둔 릴스를 내가 좋아요를 누른 순서대로 반환합니다. "
+                "별도의 북마크 기능은 없고 릴스 좋아요(POST/DELETE /api/reels/{reels_idx}/likes)가 "
+                "곧 저장이라, 목록의 하트를 해제하면 이 목록에서도 빠집니다. 내가 차단한 "
+                "사용자의 릴스와 삭제된 릴스는 포함되지 않습니다. 다음 페이지는 응답의 "
+                "next_cursor를 cursor로 넘겨 요청하고, next_cursor가 null이면 마지막 "
+                "페이지입니다. (access token 인증 필요)\n\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[MyReelsListResponse],
+)
+def get_my_liked_reels(
+    limit: int = Query(20, ge=1, le=100, description="한 번에 가져올 개수 (1~100, 기본 20)"),
+    cursor: int | None = Query(
+        None, ge=1, description="이전 응답의 next_cursor. 첫 페이지는 생략합니다.",
+    ),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    result = video_service.list_liked_reels(db, current_user, limit, cursor)
+    return CommonResponse.success_response("좋아요한 릴스 목록 조회 성공", data=result)
+
+
 @router.patch(
     "/me/profile-image",
     summary="프로필 사진 편집",

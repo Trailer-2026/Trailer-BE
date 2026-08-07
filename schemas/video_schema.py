@@ -54,7 +54,11 @@ class MyReelsItem(BaseModel):
     )
     like_count: int = Field(0, description="릴스 좋아요 수")
     comment_count: int = Field(0, description="릴스 댓글 수 (답글 포함)")
-    is_liked: bool = Field(False, description="내가 좋아요한 릴스인지")
+    is_liked: bool = Field(
+        False,
+        description="내가 좋아요한 릴스인지 — 좋아요한 릴스 목록에서는 항상 true입니다. "
+                    "목록에서 바로 하트를 해제할 수 있게 함께 내려줍니다",
+    )
     nickname: str | None = Field(
         None, description="릴스 작성자 닉네임 (작성자 없는 옛 릴스·탈퇴 회원은 null)"
     )
