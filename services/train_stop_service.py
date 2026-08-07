@@ -61,7 +61,9 @@ def refresh(ymd: str | None = None) -> int:
 # 갱신은 하루 1회 전량 교체라 적재 시각(created_at 최댓값)이 바뀔 때만 인덱스를 다시 만든다.
 # (적재 시각, 순서쌍 집합) 한 덩어리로 둔다 — 이름 하나에 대입하는 건 GIL이 원자성을 보장하므로
 # 락 없이도 버전과 내용이 어긋난 채로 읽히지 않는다. 동시에 두 번 만들어도 결과는 같다.
-_cache: tuple[datetime | None, frozenset[tuple[str, str]]] = (None, frozenset())
+# None = 아직 안 만듦. 빈 집합도 '만든 결과'라 그대로 재사용해야 한다(테이블이 비었을 때
+# 매 호출 전량 조회하는 걸 막는다) — 그래서 빈 집합 falsy가 아니라 None으로 미구축을 판별한다.
+_cache: tuple[datetime | None, frozenset[tuple[str, str]]] | None = None
 
 
 def _build_links(rows: list[tuple[str, int, str]]) -> frozenset[tuple[str, str]]:
@@ -88,9 +90,9 @@ def direct_links() -> frozenset[tuple[str, str]]:
     db = SessionLocal()
     try:
         version = train_stop_dao.latest_created_at(db)
-        cached_version, cached_links = _cache
-        if version == cached_version and cached_links:
-            return cached_links
+        cached = _cache  # 이름 하나만 읽어 버전·내용이 어긋나지 않게 한다
+        if cached is not None and cached[0] == version:
+            return cached[1]
         rows = train_stop_dao.all_sequences(db)
     except Exception as e:
         logger.warning("train_stop 직통 인덱스 조회 실패(프리페치 필터 비활성): %s", e)

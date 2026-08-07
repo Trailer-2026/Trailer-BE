@@ -34,6 +34,22 @@ def test_build_links():
     assert len(links) == 3 + 1
 
 
+def test_direct_links_caches_empty_result():
+    """빈 테이블이어도 결과는 캐시된다 — 호출마다 전량 조회를 반복하면 안 된다."""
+    calls = []
+
+    class _Dao:
+        latest_created_at = staticmethod(lambda db: None)
+        all_sequences = staticmethod(lambda db: calls.append(db) or [])
+
+    train_stop_service.SessionLocal = lambda: type("_Db", (), {"close": lambda self: None})()
+    train_stop_service.train_stop_dao = _Dao
+    train_stop_service._cache = None
+    assert train_stop_service.direct_links() == frozenset()
+    assert train_stop_service.direct_links() == frozenset()
+    assert len(calls) == 1, "빈 결과도 재사용해야 한다"
+
+
 def test_warmable_filters_only_known_missing():
     """직통이 없다고 '확인된' 구간만 걸러내고, 판정 불가는 남긴다."""
     train_stop_service.direct_links = lambda: frozenset({("서울", "부산"), ("대전", "부산")})
@@ -62,6 +78,7 @@ if __name__ == "__main__":
     try:
         for fn in (
             test_build_links,
+            test_direct_links_caches_empty_result,  # direct_links 를 갈아끼우는 아래 테스트보다 먼저
             test_warmable_filters_only_known_missing,
             test_warmable_is_noop_without_index,
         ):
