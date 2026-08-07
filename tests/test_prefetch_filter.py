@@ -7,10 +7,14 @@
 (모르는 역·빈 인덱스)는 반드시 '남긴다'(=평소대로 조회) 쪽으로 기울어야 한다. 이걸 반대로
 바꾸면 API 콜은 더 줄고 눈에도 안 띄지만, 멀쩡한 경로에서 기차가 조용히 사라진다.
 """
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# route_service를 import 하면 databases.database가 import 시점에 엔진을 만든다. Postgres 드라이버도
+# 설정도 없이 돌 수 있게 인메모리 SQLite로 돌린다(노션 동기화가 쓰는 것과 같은 스위치).
+os.environ.setdefault("OPENAPI_EXPORT", "1")
 
 from services import route_service, train_stop_service
 
