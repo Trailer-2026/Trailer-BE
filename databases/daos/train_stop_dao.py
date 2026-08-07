@@ -41,6 +41,19 @@ def get_stops_for(db: Session, trn_nos: set[str]) -> dict[str, list[TrainStop]]:
     return out
 
 
+def all_sequences(db: Session) -> list[tuple[str, int, str]]:
+    """전 열차의 (열차번호, 정차순서, 역명)을 seq 오름차순으로. 정차 연결 인덱스 구축용.
+
+    전량(수천 행)을 한 번에 읽지만 컬럼 3개뿐이라 가볍고, 호출부가 결과를 캐시한다.
+    """
+    return (
+        db.query(TrainStop.trn_no, TrainStop.seq, TrainStop.stn_nm)
+        .filter(TrainStop.deleted_at.is_(None))
+        .order_by(TrainStop.trn_no, TrainStop.seq)
+        .all()
+    )
+
+
 def replace_all(db: Session, records: list[dict]) -> int:
     """정차역 테이블을 전량 교체 적재한다(하루치 스냅샷 갱신용). flush만; 커밋은 호출부(스크립트).
 

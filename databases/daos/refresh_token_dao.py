@@ -1,13 +1,9 @@
-import logging
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from databases.models.refresh_token import RefreshToken
-
-logger = logging.getLogger(__name__)
 
 
 def create(db: Session, user_idx: int, jti: str, expires_at: datetime) -> RefreshToken:
@@ -47,13 +43,12 @@ def revoke_all_for_user(db: Session, user_idx: int) -> int:
     ).update({"revoked": True})
 
 
-def delete_expired(db: Session, user_idx: Optional[int] = None) -> int:
-    """만료된(expires_at < now) refresh 토큰을 삭제. 영향받은 행 수 반환.
+def delete_expired(db: Session, user_idx: int) -> int:
+    """해당 사용자의 만료된(expires_at < now) refresh 토큰을 삭제. 영향받은 행 수 반환.
 
     무효화됐지만 아직 만료 전인 토큰은 재사용 탐지를 위해 남겨둔다.
-    user_idx가 주어지면 해당 사용자 것만, 없으면 전체를 정리한다.
     """
-    query = db.query(RefreshToken).filter(RefreshToken.expires_at < func.now())
-    if user_idx is not None:
-        query = query.filter(RefreshToken.user_idx == user_idx)
-    return query.delete(synchronize_session=False)
+    return db.query(RefreshToken).filter(
+        RefreshToken.expires_at < func.now(),
+        RefreshToken.user_idx == user_idx,
+    ).delete(synchronize_session=False)
