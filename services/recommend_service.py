@@ -484,7 +484,7 @@ def _course_for_overnight(db, dest_scored, criteria, k, dest_anchor, route, memo
     via_days = first_days if segs[0][0] else k - first_days
 
     # 경유역 추천지 점수화+운영시간(경유역·일수 조합당 1회, via_cache 공유). 목적지 scored는 재사용.
-    # **k가 아니라 via_days로 조회한다** — 운영시간 조회 대상은 working_set(=3×일수×3)이고
+    # **k가 아니라 via_days로 조회한다** — 운영시간 조회 대상은 working_set(=3 x 일수 x 3)이고
     # 아래 build_courses가 이 도시엔 seg_k(=via_days)짜리 작업셋만 쓴다. 전체 일수로 받으면
     # 2박3일 기준 27곳을 조회하고 9곳만 보게 되어, 일일 쿼터가 제일 빠듯한 detailIntro2를
     # 18건씩 헛되이 태운다.
