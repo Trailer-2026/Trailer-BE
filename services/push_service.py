@@ -25,6 +25,9 @@ _ALARM_FIELD = {
     NotificationType.TRAVEL_SAVED: "event_alarm",
     NotificationType.TRAVEL_D1: "event_alarm",
     NotificationType.TRAVEL_DELETED: "event_alarm",
+    # 탑승 알림도 일정 알림 스위치를 따른다 — 설정 화면의 스위치는 두 개(이벤트/풍경)뿐이라
+    # 새 종류를 위해 세 번째를 만들면 앱 설정 화면까지 같이 바꿔야 한다.
+    NotificationType.TRAIN_D10M: "event_alarm",
     NotificationType.SCENERY: "scenery_alarm",
 }
 
@@ -50,13 +53,50 @@ def ensure_tables() -> None:
     from databases.models.travel import Travel  # noqa: F401
     from databases.models.user import User  # noqa: F401
 
+    # FK 대상이 되는 schedule·ticket도 같은 이유로 MetaData에 올려 둔다.
+    from databases.models.schedule import Schedule  # noqa: F401
+    from databases.models.ticket import Ticket  # noqa: F401
+
     Notification.__table__.create(bind=engine, checkfirst=True)
     NotificationLog.__table__.create(bind=engine, checkfirst=True)
+    _ensure_departure_columns()
+
+
+def _ensure_departure_columns() -> None:
+    """이미 만들어져 있는 notification_log에 TRAIN_D10M용 컬럼·인덱스를 덧붙인다.
+
+    위의 create(checkfirst=True)는 **테이블이 이미 있으면 아무것도 하지 않는다** —
+    운영 DB엔 notification_log가 이미 있어서 새 컬럼이 영영 안 생긴다. reels의
+    region·thumbnail_url과 같은 방식으로 여기서 ALTER를 따로 건다
+    (video_service.ensure_reels_columns 선례).
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS schedule_idx INTEGER "
+            "REFERENCES schedule(schedule_idx)"
+        ))
+        conn.execute(text(
+            "ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS ticket_idx INTEGER "
+            "REFERENCES ticket(ticket_idx)"
+        ))
+        # 중복 발송의 최종 방어 — 모델의 __table_args__와 같은 인덱스지만, 테이블이
+        # 이미 있으면 create가 안 만들어 주므로 여기서도 건다.
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_log_train_schedule "
+            "ON notification_log (user_idx, schedule_idx) WHERE type = 'TRAIN_D10M'"
+        ))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_log_train_ticket "
+            "ON notification_log (user_idx, ticket_idx) WHERE type = 'TRAIN_D10M'"
+        ))
 
 
 def notify(
     db: Session, user_idx: int, ntype: NotificationType, title: str, body: str,
     travel_idx: int | None = None, scenic_spot_idx: int | None = None,
+    schedule_idx: int | None = None, ticket_idx: int | None = None,
     record: bool = True,
 ) -> bool:
     """수신 설정을 확인하고 이력을 남긴 뒤 사용자의 모든 기기로 푸시한다. 발송했으면 True.
@@ -77,7 +117,7 @@ def notify(
         if record:
             notification_log_dao.create(
                 db, user_idx=user_idx, notification_type=ntype.value, title=title, body=body,
-                travel_idx=travel_idx,
+                travel_idx=travel_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx,
             )
             db.commit()
 
@@ -89,6 +129,9 @@ def notify(
             data["travel_idx"] = travel_idx
         if scenic_spot_idx is not None:
             data["scenic_spot_idx"] = scenic_spot_idx
+        # 직접 입력 승차권은 여행이 없어(travel_idx NULL) 승차권 목록으로 보내야 한다.
+        if ticket_idx is not None:
+            data["ticket_idx"] = ticket_idx
         result = fcm_service.send_push(db, user_idx, title, body, data=data)
 
         # 발송 흔적을 남긴다 — 풍경은 이력도 안 남아서 이 로그가 유일한 확인 수단이다.
