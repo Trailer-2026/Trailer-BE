@@ -34,7 +34,8 @@ from routers.video import router as video_router
 from routers.user import router as user_router
 from routers.share import router as share_router
 from routers.notification import router as notification_router
-from services import push_service, video_service
+from routers.ticket import router as ticket_router
+from services import push_service, ticket_service, video_service
 from utils.firebase import init_firebase
 
 
@@ -92,6 +93,29 @@ async def _trip_reminder_daily_loop():
             log.warning("D-1 여행 알림 실패(다음 자정에 재시도): %s", e)
 
 
+async def _train_departure_loop():
+    """1분마다 '열차가 10분 뒤 출발해요' 알림을 보낸다 (추천 코스·직접 입력 승차권 공통).
+
+    D-1(자정 1회)과 달리 주기가 짧다 — 10분 창을 놓치지 않으려면 그보다 촘촘히 돌아야 한다.
+    출발 1건당 1회라는 건 notification_log가 보장하므로, 창이 겹쳐 같은 열차를 여러 번
+    집어도 알림은 한 번만 나간다. 실패해도 루프는 유지되고 다음 분에 다시 시도한다.
+    """
+    from services import train_departure_service
+
+    log = logging.getLogger(__name__)
+    while True:
+        try:
+            n = await asyncio.to_thread(train_departure_service.send_departure_reminders)
+            if n:
+                log.info("열차 탑승 알림 발송: %d건", n)
+            await asyncio.sleep(train_departure_service.CHECK_INTERVAL_SEC)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("열차 탑승 알림 실패(다음 주기 재시도): %s", e)
+            await asyncio.sleep(train_departure_service.CHECK_INTERVAL_SEC)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_firebase()
@@ -99,12 +123,17 @@ async def lifespan(app: FastAPI):
     # 다중 워커로 띄우면 워커마다 돌므로, 그 땐 off하고 cron/systemd timer로 스크립트를 돌려라.
     tasks = []
     if os.getenv("OPENAPI_EXPORT") != "1":
-        push_service.ensure_tables()  # notification·notification_log 자체 provision (마이그레이션 도구 없음)
+        # 순서 주의: notification_log가 ticket을 FK로 참조하므로 ticket이 먼저 있어야 한다.
+        # (뒤집으면 ticket이 없는 DB에서 notification_log의 CREATE/ALTER가 FK 대상을 못 찾아 죽는다)
+        ticket_service.ensure_tables()  # ticket(직접 입력 승차권) 자체 provision (마이그레이션 도구 없음)
+        push_service.ensure_tables()  # notification·notification_log 자체 provision (동상)
         video_service.ensure_reels_columns()  # reels.region·thumbnail_url 자체 provision (동상)
         if os.getenv("TRAIN_STOP_AUTOSYNC", "1") == "1":
             tasks.append(asyncio.create_task(_train_stop_daily_loop()))
         if os.getenv("TRIP_REMINDER_AUTOSYNC", "1") == "1":
             tasks.append(asyncio.create_task(_trip_reminder_daily_loop()))
+        if os.getenv("TRAIN_DEPARTURE_AUTOSYNC", "1") == "1":
+            tasks.append(asyncio.create_task(_train_departure_loop()))
     try:
         yield
     finally:
@@ -146,6 +175,7 @@ app.include_router(ban_router)
 app.include_router(video_router)
 app.include_router(user_router)
 app.include_router(notification_router)
+app.include_router(ticket_router)
 app.include_router(share_router)  # /r/{reels_idx} — 브라우저용 공유 페이지(HTML)
 
 @app.get("/")

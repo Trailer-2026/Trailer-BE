@@ -73,6 +73,7 @@ def _to_item(row) -> NotificationLogItem:
         title=row.title,
         body=row.body,
         travel_idx=row.travel_idx,
+        ticket_idx=row.ticket_idx,
         is_read=row.read_at is not None,
         created_at=row.created_at,
     )

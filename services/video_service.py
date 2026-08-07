@@ -53,7 +53,12 @@ from databases.daos import (
     travel_dao,
     travel_image_dao,
 )
-from schemas.video_schema import ReelsRecommendResponse, ReelsShareResponse
+from schemas.video_schema import (
+    MyReelsItem,
+    MyReelsListResponse,
+    ReelsRecommendResponse,
+    ReelsShareResponse,
+)
 from utils import gcs, kakao_local
 
 logger = logging.getLogger(__name__)
@@ -272,6 +277,80 @@ def recommend_reels(
     liked = like_dao.liked_reels_idxs(db, user.user_idx, idxs) if user else set()
     return [
         ReelsRecommendResponse(
+            reels_idx=reels.reels_idx,
+            url=reels.url,
+            title=reels.title,
+            region=reels.region,
+            thumbnail_url=reels.thumbnail_url,
+            like_count=like_counts.get(reels.reels_idx, 0),
+            comment_count=comment_counts.get(reels.reels_idx, 0),
+            is_liked=reels.reels_idx in liked,
+            nickname=nickname,
+            profile_image=profile_image,
+        )
+        for reels, nickname, profile_image in rows
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# 마이페이지 릴스 (내가 올린 / 좋아요한)
+# --------------------------------------------------------------------------- #
+def list_my_reels(
+    db: Session, user, limit: int, cursor: int | None
+) -> MyReelsListResponse:
+    """마이페이지 "내가 올린 릴스" — 최신순, 커서 페이징.
+
+    작성자가 호출자뿐이라 닉네임·프로필은 조인 없이 current_user 에서 채운다.
+    """
+    rows = reels_dao.list_by_user(db, user.user_idx, limit + 1, cursor)
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = _to_reels_cards(
+        db, user, [(reels, user.nickname, user.profile_image) for reels in rows]
+    )
+    return MyReelsListResponse(
+        items=items,
+        next_cursor=rows[-1].reels_idx if has_more and rows else None,
+    )
+
+
+def list_liked_reels(
+    db: Session, user, limit: int, cursor: int | None
+) -> MyReelsListResponse:
+    """마이페이지 "좋아요한 릴스" — 내가 좋아요를 누른 순, 커서 페이징.
+
+    별도의 북마크 테이블은 없다. 앱의 하트가 곧 저장이라 likes 테이블(reels_idx 가
+    채워진 행)을 그대로 목록으로 읽는다.
+
+    내가 차단한 사용자의 릴스는 뺀다 — 추천 피드(recommend_reels)와 같은 규칙이라,
+    차단 후에도 예전에 누른 하트 때문에 그 사람 릴스가 여기 남아 있으면 안 된다.
+    커서는 likes_idx 다(reels_idx 가 아니다 — reels_dao.list_liked_by_user 참고).
+    """
+    blocked = ban_dao.blocked_user_idxs(db, user.user_idx)
+    rows = reels_dao.list_liked_by_user(db, user.user_idx, limit + 1, cursor, blocked)
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = _to_reels_cards(
+        db, user, [(reels, nickname, profile_image) for _, reels, nickname, profile_image in rows]
+    )
+    return MyReelsListResponse(
+        items=items,
+        next_cursor=rows[-1][0] if has_more and rows else None,
+    )
+
+
+def _to_reels_cards(db: Session, user, rows) -> list[MyReelsItem]:
+    """(릴스, 닉네임, 프로필) 목록에 좋아요·댓글 수와 내 좋아요 여부를 붙인다.
+
+    recommend_reels 와 같은 이유로 카운트는 행마다 세지 않고 뽑힌 릴스만 묶어
+    일괄 조회한다(N+1 회피).
+    """
+    idxs = [reels.reels_idx for reels, _, _ in rows]
+    like_counts = like_dao.counts_by_reels(db, idxs)
+    comment_counts = comment_dao.counts_by_reels(db, idxs)
+    liked = like_dao.liked_reels_idxs(db, user.user_idx, idxs)
+    return [
+        MyReelsItem(
             reels_idx=reels.reels_idx,
             url=reels.url,
             title=reels.title,
