@@ -87,6 +87,29 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 - **테이블 생성**: 마이그레이션 도구가 없어 `notification`·`notification_log` 둘 다 `push_service.ensure_tables()`(lifespan 1회)로 자체 provision한다 — `train_stop`과 같은 방식. 운영 DB에 수동 DDL을 넣을 필요가 없다.
 - **소프트 삭제 예외 아님**: 읽기는 `deleted_at.is_(None)`을 지킨다. 단 `exists`(중복 판정)만은 삭제된 이력도 '보낸 적 있음'으로 세야 재발송을 막을 수 있어 필터하지 않는다.
 
+## 승차권 (두 갈래 — 합치지 않는다)
+
+승차권 데이터가 **두 곳에 따로** 있다. 헷갈리지 말 것.
+
+| | AI 추천 코스 승차권 | 직접 입력 승차권 |
+|---|---|---|
+| 저장 | `schedule` (kind=train) | `ticket` 테이블 |
+| 생기는 시점 | 추천 코스 저장(`POST /api/travels`) 시 | 사용자가 티켓 정보를 입력할 때 |
+| 여행 연결 | `travel_idx` 필수 | **없음** — `user_idx`로만 소유 |
+| 조회 | `GET /api/travels/{travel_idx}/tickets` | `GET /api/tickets` |
+| 열차번호·등급 | 있음 | **없음**(화면에 입력칸이 없다) |
+| 호차·좌석 | 직접 입력분만 | 있음(선택) |
+
+**두 소스를 합쳐 내려주지 않는다.** 추천 코스대로 움직이는 사용자는 추천이 준 열차 정보를 그대로 쓰고, `ticket`은 (a) 추천 없이 승차권만 저장하는 사용자와 (b) 추천과 별개로 예매 정보를 적어 두는 사용자를 위한 것이다. 추천을 받았지만 추천과 다른 시간으로 예매한 경우는 다루지 않는다.
+
+**유의할 점**
+
+- **여행에 묶지 않는 이유**: 여행을 하나도 만들지 않은 사용자도 승차권만 저장할 수 있어야 한다. 그래서 `ticket`엔 `travel_idx`가 없고, 여행 기간 검증도 하지 않는다. 검증은 **출발·도착 일시가 엇갈리지 않을 것**과 **출발 일시가 아직 오지 않았을 것** 둘뿐이다(`services/ticket_service.create_ticket`).
+- **역은 `station_idx`(FK)로 받는다** — `GET /api/stations`에서 고른 PK. 응답엔 `station`을 조인해 역명("서울역", `역` 접미사 포함)을 함께 담는다. `schedule.dep_station`은 접미사 없는 "서울" 형식이라 표기가 다르다.
+- **출발·도착을 Date+Time 4컬럼으로** 나눠 담는다. 화면 입력 단위가 그렇고, 도착일이 출발일과 다를 수 있다(자정 넘김 열차). `travel.start_date`·`schedule.start_time`과 같은 naive KST wall-clock이라 현재 시각 비교 시 `now_kst().replace(tzinfo=None)`으로 tzinfo를 뗀다.
+- **테이블 생성**: 마이그레이션 도구가 없어 `ticket_service.ensure_tables()`(lifespan 1회)로 자체 provision한다 — `notification`·`train_stop`과 같은 방식.
+- **수정(PATCH)은 없다** — 저장·목록·삭제 3개뿐이다. 잘못 넣었으면 지우고 다시 저장한다.
+
 ## 열차 정차역 자동 갱신 (`train_stop`)
 
 경로의 각 열차편(`RouteTrain`)에 **탑승구간 정차역 수·순서**(`stop_station_count`/`stop_stations`)를 붙이는 기능. 데이터는 한국철도공사 **열차운행정보 API**(`travelerTrainRunInfo2`, data.go.kr B551457)에서 온다.

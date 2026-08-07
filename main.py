@@ -34,7 +34,8 @@ from routers.video import router as video_router
 from routers.user import router as user_router
 from routers.share import router as share_router
 from routers.notification import router as notification_router
-from services import push_service, video_service
+from routers.ticket import router as ticket_router
+from services import push_service, ticket_service, video_service
 from utils.firebase import init_firebase
 
 
@@ -100,6 +101,7 @@ async def lifespan(app: FastAPI):
     tasks = []
     if os.getenv("OPENAPI_EXPORT") != "1":
         push_service.ensure_tables()  # notification·notification_log 자체 provision (마이그레이션 도구 없음)
+        ticket_service.ensure_tables()  # ticket(직접 입력 승차권) 자체 provision (동상)
         video_service.ensure_reels_columns()  # reels.region·thumbnail_url 자체 provision (동상)
         if os.getenv("TRAIN_STOP_AUTOSYNC", "1") == "1":
             tasks.append(asyncio.create_task(_train_stop_daily_loop()))
@@ -146,6 +148,7 @@ app.include_router(ban_router)
 app.include_router(video_router)
 app.include_router(user_router)
 app.include_router(notification_router)
+app.include_router(ticket_router)
 app.include_router(share_router)  # /r/{reels_idx} — 브라우저용 공유 페이지(HTML)
 
 @app.get("/")
