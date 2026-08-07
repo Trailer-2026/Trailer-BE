@@ -10,6 +10,7 @@
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # route_service를 import 하면 databases.database가 import 시점에 엔진을 만든다. Postgres 드라이버도
@@ -17,6 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("OPENAPI_EXPORT", "1")
 
 from services import route_service, train_stop_service
+
+
+class _Db:
+    """DAO를 바꿔치기한 테스트용 빈 세션 — close()만 있으면 된다."""
+
+    def close(self):
+        pass
 
 
 def test_build_links():
@@ -42,12 +50,12 @@ def test_direct_links_caches_empty_result():
         latest_created_at = staticmethod(lambda db: None)
         all_sequences = staticmethod(lambda db: calls.append(db) or [])
 
-    train_stop_service.SessionLocal = lambda: type("_Db", (), {"close": lambda self: None})()
-    train_stop_service.train_stop_dao = _Dao
-    train_stop_service._cache = None
-    assert train_stop_service.direct_links() == frozenset()
-    assert train_stop_service.direct_links() == frozenset()
-    assert len(calls) == 1, "빈 결과도 재사용해야 한다"
+    with patch.object(train_stop_service, "SessionLocal", lambda: _Db()), \
+            patch.object(train_stop_service, "train_stop_dao", _Dao), \
+            patch.object(train_stop_service, "_cache", None):
+        assert train_stop_service.direct_links() == frozenset()
+        assert train_stop_service.direct_links() == frozenset()
+        assert len(calls) == 1, "빈 결과도 재사용해야 한다"
 
 
 def test_direct_links_fails_open_when_session_broken():
@@ -55,21 +63,22 @@ def test_direct_links_fails_open_when_session_broken():
     def _boom():
         raise RuntimeError("no engine")
 
-    train_stop_service.SessionLocal = _boom
-    train_stop_service._cache = None
-    assert train_stop_service.direct_links() == frozenset()
+    with patch.object(train_stop_service, "SessionLocal", _boom), \
+            patch.object(train_stop_service, "_cache", None):
+        assert train_stop_service.direct_links() == frozenset()
 
 
 def test_warmable_filters_only_known_missing():
     """직통이 없다고 '확인된' 구간만 걸러내고, 판정 불가는 남긴다."""
-    train_stop_service.direct_links = lambda: frozenset({("서울", "부산"), ("대전", "부산")})
     pairs = {
         ("N1", "N2", "20260812"),   # 서울→부산: 직통 있음 → 남는다
         ("N2", "N1", "20260814"),   # 부산→서울: 인덱스에 없음 → 걸러진다
         ("N1", "N3", "20260812"),   # 광주송정은 인덱스에 없는 역 → 남는다(판정 불가)
         ("N9", "N2", "20260812"),   # N9는 역명 매핑조차 없음 → 남는다(판정 불가)
     }
-    kept = route_service._warmable(pairs, {"N1": "서울", "N2": "부산", "N3": "광주송정"})
+    index = frozenset({("서울", "부산"), ("대전", "부산")})
+    with patch.object(train_stop_service, "direct_links", lambda: index):
+        kept = route_service._warmable(pairs, {"N1": "서울", "N2": "부산", "N3": "광주송정"})
     assert ("N1", "N2", "20260812") in kept
     assert ("N2", "N1", "20260814") not in kept
     assert ("N1", "N3", "20260812") in kept, "모르는 역은 보수적으로 남겨야 한다"
@@ -78,23 +87,20 @@ def test_warmable_filters_only_known_missing():
 
 def test_warmable_is_noop_without_index():
     """인덱스가 비면(최초 기동·DB 장애) 예전과 똑같이 전부 데운다."""
-    train_stop_service.direct_links = lambda: frozenset()
     pairs = {("N1", "N2", "20260812"), ("N2", "N1", "20260814")}
-    assert route_service._warmable(pairs, {"N1": "서울", "N2": "부산"}) == pairs
+    with patch.object(train_stop_service, "direct_links", frozenset):
+        assert route_service._warmable(pairs, {"N1": "서울", "N2": "부산"}) == pairs
 
 
 if __name__ == "__main__":
-    _orig = train_stop_service.direct_links
-    try:
-        for fn in (
-            test_build_links,
-            test_direct_links_caches_empty_result,  # direct_links 를 갈아끼우는 아래 테스트보다 먼저
-            test_direct_links_fails_open_when_session_broken,
-            test_warmable_filters_only_known_missing,
-            test_warmable_is_noop_without_index,
-        ):
-            fn()
-            print(f"  OK {fn.__name__}")
-    finally:
-        train_stop_service.direct_links = _orig
+    # 각 테스트가 patch.object로 자기 뒤처리를 하므로 실행 순서에 의존하지 않는다.
+    for fn in (
+        test_build_links,
+        test_direct_links_caches_empty_result,
+        test_direct_links_fails_open_when_session_broken,
+        test_warmable_filters_only_known_missing,
+        test_warmable_is_noop_without_index,
+    ):
+        fn()
+        print(f"  OK {fn.__name__}")
     print("prefetch filter selfcheck OK")
