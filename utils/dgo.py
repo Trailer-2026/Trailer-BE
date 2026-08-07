@@ -15,6 +15,8 @@ TourAPI '0000') 공통 검사가 오히려 정상 응답을 오류로 만든다.
     service_key = 키1,키2,키3
 """
 import json
+import random
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -53,19 +55,76 @@ _KEY_ERROR_MARKS = (
 # 거부된 키를 다시 안 쓰는 시간(초). 일일 한도는 자정에 풀리므로 주기적으로 한 번씩만
 # 재탐색하면 알아서 복구된다.
 TRIP_SECONDS = 300
-# (scope, 키) → 거부된 시각(monotonic). **반드시 API별로 따로 센다** — 한도도 승인 상태도
-# API 단위라, TAGO가 키를 거부했다고 그 키로 TourAPI까지 막으면 멀쩡한 관광지 조회가 죽는다.
+# HTTP 429 재시도 횟수와 대기(초) 범위. **429는 키가 죽은 게 아니다** — 초당 트래픽 제한이라
+# 실측상 몇 초면 풀린다. 이걸 키 만료로 보고 TRIP_SECONDS 동안 차단하면 추천 검색 두세 번에
+# 키 3개가 전부 죽어, 그 5분간 모든 사용자의 여정에서 기차가 통째로 빠진다(route_type "현지").
+# 지터를 주는 이유: 16스레드가 동시에 429를 맞으므로 같은 시각에 깨면 그대로 다시 몰린다.
+# 1회인 이유: 초당 제한은 아래 게이트가 앞에서 막으므로 이건 그물을 빠져나간 몫만 받는 보험이다.
+# 더 늘리면 **TourAPI 쪽이 손해다** — 거긴 429가 일일 쿼터 소진이라 재시도해도 절대 안 풀리는데,
+# 소진된 오퍼레이션 호출 한 건이 (재시도+키 3개)만큼 헛콜과 백오프 대기를 그대로 문다.
+RATE_LIMIT_RETRIES = 1
+RATE_LIMIT_BACKOFF = (0.4, 1.2)
+# 최소 호출 간격(초) = 10콜/초. **재시도만으로는 못 막아서 필요하다** — 백오프로 미뤄봐야
+# 16스레드가 다시 몰려 또 429다. 실측: TAGO는 약 17콜/초에서 첫 429라 여유를 뒀다.
+# 추천 1회가 열차 조회 110~200콜이지만 게이트를 걸어도 지연은 그대로였다(병목이 여기가 아니다).
+# TourAPI에는 이걸 더 조여봐야 소용없다 — 거긴 429가 속도가 아니라 오퍼레이션별 일일 쿼터
+# 소진이라(X-RateLimit-Limit=1000, Remaining=0) 5콜/초로 낮춰도 429 건수가 그대로였다.
+# 주의: 프로세스 안에서만 세는 게이트다. 워커를 N개로 띄우면 실제 속도가 N배가 되니
+# 그 땐 이 값을 N으로 나누거나 외부 레이트리미터로 올려라.
+MIN_CALL_INTERVAL = 0.1
+_gate = threading.Lock()  # _locks 딕셔너리 자체만 보호한다(대기는 아래 scope별 락에서)
+_locks: dict[str, threading.Lock] = {}
+_last_call: dict[str, float] = {}
+
+
+def _throttle(scope: str) -> None:
+    """그 API로 나가는 호출을 MIN_CALL_INTERVAL 간격으로 직렬화한다.
+
+    **락을 쥔 채로 잔다** — 그래야 대기 중인 스레드들이 동시에 깨어 한꺼번에 나가지 않는다.
+    **락은 scope별로 따로 둔다** — 하나로 묶으면 열차 조회 대기가 관광지 조회까지 막아
+    두 API의 대기가 더해진다(한 검색에 TAGO 190콜 + TourAPI 80콜이라 체감이 크다).
+    """
+    with _gate:
+        lock = _locks.setdefault(scope, threading.Lock())
+    with lock:
+        now = time.monotonic()
+        wait = _last_call.get(scope, 0.0) + MIN_CALL_INTERVAL - now
+        if wait > 0:
+            time.sleep(wait)
+            now += wait
+        _last_call[scope] = now
+
+
+# (scope, 키) → 거부된 시각(monotonic). **반드시 따로 센다** — TAGO가 키를 거부했다고 그 키로
+# TourAPI까지 막으면 멀쩡한 관광지 조회가 죽는다. 얼마나 잘게 나눌지는 호출측이 정하는데,
+# **쿼터가 걸리는 단위와 같아야 한다**: TourAPI는 일일 한도가 오퍼레이션별이라 tour_api가
+# scope에 operation까지 넣는다(안 그러면 detailIntro2 소진이 관광지 목록까지 막는다).
 _dead: dict[tuple[str, str], float] = {}
 
 
 def live_keys(scope: str) -> list[str]:
-    """그 API(scope)에서 아직 거부되지 않은 서비스 키 목록(설정 순서 유지)."""
+    """그 API(scope)에서 쓸 수 있는 서비스 키 — **거부 이력이 없는 것부터** 순서대로.
+
+    차단 중(TRIP_SECONDS 이내)인 키는 아예 뺀다. 남는 키는 '거부된 적 없음'(설정 순서 유지) →
+    '오래전에 거부됨' → '최근에 거부됨' 순이다.
+
+    왜 순서를 바꾸나: 일일 쿼터가 소진된 키는 **자정까지 안 풀리는데** TRIP_SECONDS(5분)만
+    지나면 후보로 되살아난다. 설정 순서 그대로면 그 죽은 키를 매번 **맨 먼저** 찌르고 거부당한
+    뒤에야 다음 키로 넘어가, 5분마다 오퍼레이션마다 헛호출이 반복된다. 뒤로 미뤄 두면 살아 있는
+    키를 먼저 쓰고, 자정에 한도가 풀렸는지는 다른 키가 다 떨어졌을 때 자연히 확인된다.
+    """
     now = time.monotonic()
     raw = Config.read(_KEY_SECTION, _KEY_NAME) or ""
-    return [
-        k for k in (x.strip() for x in raw.split(",")) if k
-        and now - _dead.get((scope, k), float("-inf")) >= TRIP_SECONDS
-    ]
+    ranked = []
+    for k in (x.strip() for x in raw.split(",")):
+        if not k:
+            continue
+        at = _dead.get((scope, k))
+        if at is not None and now - at < TRIP_SECONDS:
+            continue  # 차단 중
+        ranked.append((at if at is not None else float("-inf"), k))
+    ranked.sort(key=lambda t: t[0])  # 안정 정렬 → 거부 이력 없는 키끼리는 설정 순서 유지
+    return [k for _, k in ranked]
 
 
 def raise_if_key_problem(text: str) -> None:
@@ -77,15 +136,21 @@ def raise_if_key_problem(text: str) -> None:
 def with_key(call, scope: str):
     """살아 있는 키를 차례로 넣어 `call(key)`을 시도한다. 전부 거부되면 PublicApiRejectedError.
 
-    `scope`는 그 API를 식별하는 문자열(보통 base URL) — 죽은 키는 이 단위로만 기억한다.
+    `scope`는 **쿼터가 걸리는 단위**를 식별하는 문자열 — 죽은 키도 속도 제한도 이 단위다.
+    보통 base URL이지만, 한도가 오퍼레이션별인 API는 거기까지 포함시켜라(tour_api 참고).
     `call`은 키 거부를 만나면 `raise_if_key_problem`(또는 HTTP 429 시 `KeyRejected`)으로
     신호를 올려야 다음 키로 넘어간다. 그 밖의 예외는 로테이션 없이 그대로 올라간다.
+
+    **속도 제한(`_throttle`)도 여기서 건다.** 세 클라이언트(train_api·train_stops·tour_api)가
+    전부 이 함수를 지나므로 여기 한 곳이면 우회가 없다. get_body 쪽에만 걸면 fetch_json을
+    직접 부르는 tour_api가 게이트를 통째로 빠져나간다.
     """
     keys = live_keys(scope)
     if not keys:
         raise PublicApiRejectedError()
     for key in keys:
         try:
+            _throttle(scope)
             return call(key)
         except KeyRejected:
             _dead[(scope, key)] = time.monotonic()
@@ -98,15 +163,23 @@ def fetch_json(url: str, timeout: int) -> dict:
     **파싱 전에 원문 문자열로 표식을 찾는다.** 게이트웨이 단계에서 막히면(한도 소진·미등록 키)
     `_type=json`을 줘도 XML(`cmmMsgHeader`)로 답하기 때문에, json으로 먼저 파싱하면
     JSONDecodeError가 터져 키 거부를 영영 못 알아보고 남은 수백 콜을 그대로 다 쏜다.
+
+    **429는 잠깐 자고 같은 키로 재시도한다.** 초당 제한이라 몇 초면 풀리는데, 키를 갈아타봐야
+    같은 제한에 그대로 걸린다(로테이션이 안 먹는 유일한 거부 사유). 재시도까지 다 429면
+    그때는 `KeyRejected`로 넘겨 기존 경로(다음 키 → 전부 죽으면 502)를 그대로 탄다.
     """
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
-            raw = r.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:
-        if e.code == 429:  # 게이트웨이 레이트리밋 — 본문이 비어도 원인이 확정된다
-            raise KeyRejected() from e
-        raise_if_key_problem(e.read().decode("utf-8", "replace"))
-        raise
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                raw = r.read().decode("utf-8", "replace")
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 429:
+                raise_if_key_problem(e.read().decode("utf-8", "replace"))
+                raise
+            if attempt == RATE_LIMIT_RETRIES:
+                raise KeyRejected() from e
+            time.sleep(random.uniform(*RATE_LIMIT_BACKOFF) * (attempt + 1))
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -162,15 +235,21 @@ def _selfcheck() -> None:
     used = []
     dead_api = None  # 설정하면 그 API만 모든 키를 거부한다
     reject_body = BAD  # 거부 응답 형태(서비스 JSON / 게이트웨이 XML)
+    throttle = 0  # 앞에서부터 이 횟수만큼 429를 돌려준다(초당 제한 흉내)
 
     def fake(url, timeout=None):
+        nonlocal throttle
         key = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["serviceKey"][0]
         used.append(key)
+        if throttle:
+            throttle -= 1
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
         rejects = key in rejected or (dead_api is not None and url.startswith(dead_api))
         return _Resp(reject_body if rejects else OK)
 
-    orig_urlopen, orig_read = urllib.request.urlopen, Config.read
+    orig_urlopen, orig_read, orig_sleep = urllib.request.urlopen, Config.read, time.sleep
     urllib.request.urlopen = fake
+    time.sleep = lambda s: None  # 백오프 대기는 건너뛴다(셀프체크는 즉시 끝나야 한다)
     Config.read = staticmethod(lambda s, p, d=None: "k1,k2,k3" if (s, p) == (_KEY_SECTION, _KEY_NAME) else d)
     try:
         # 1) 첫 키가 살아 있으면 그것만 쓴다.
@@ -220,10 +299,78 @@ def _selfcheck() -> None:
         assert get_body(A, {}, 5) == {"items": ""}
         assert used == ["k1", "k2"], used
 
+        # 6) 429는 키를 죽이지 않는다 — 같은 키로 백오프 재시도해서 통과하고, _dead에 안 찍힌다.
+        #    (429를 키 만료로 보면 초당 제한 한 번에 키 전부가 5분간 죽어 기차가 통째로 빠진다.)
+        _dead.clear(); used.clear(); rejected = set(); reject_body = BAD; throttle = 1
+        assert get_body(A, {}, 5) == {"items": ""}
+        assert used == ["k1", "k1"], used  # 키 로테이션 없이 같은 키로 재시도
+        assert _dead == {}, _dead
+
+        # 7) 재시도까지 다 429면 그때는 키 거부로 넘겨 기존 경로를 탄다(다음 키 → 전부 죽으면 502).
+        _dead.clear(); used.clear(); throttle = 99
+        try:
+            get_body(A, {}, 5)
+            raise AssertionError("계속 429면 PublicApiRejectedError가 나야 한다")
+        except PublicApiRejectedError:
+            pass
+        attempts = RATE_LIMIT_RETRIES + 1
+        assert used == ["k1"] * attempts + ["k2"] * attempts + ["k3"] * attempts, used
+
+        # 8) 차단이 풀린 키는 **맨 뒤로** 간다 — 일일 쿼터 소진은 자정까지 안 풀리는데
+        #    TRIP_SECONDS만 지나면 후보로 돌아오므로, 설정 순서를 그대로 두면 죽은 키를
+        #    5분마다 매번 먼저 찔러 헛호출이 반복된다.
+        _dead.clear(); used.clear(); rejected = set(); throttle = 0
+        _dead[(A, "k1")] = time.monotonic() - (TRIP_SECONDS + 1)  # 예전에 거부됐고 차단은 풀림
+        assert live_keys(A) == ["k2", "k3", "k1"], live_keys(A)
+        _dead[(A, "k3")] = time.monotonic() - (TRIP_SECONDS + 100)  # k1보다 더 오래전
+        assert live_keys(A) == ["k2", "k3", "k1"], live_keys(A)
+        _dead[(A, "k2")] = time.monotonic()  # 방금 거부 → 차단 중이라 아예 빠진다
+        assert live_keys(A) == ["k3", "k1"], live_keys(A)
+        assert live_keys(B) == ["k1", "k2", "k3"], "다른 scope는 영향 없어야 한다"
+
         assert items({"items": ""}) == []
     finally:
-        urllib.request.urlopen, Config.read = orig_urlopen, orig_read
+        urllib.request.urlopen, Config.read, time.sleep = orig_urlopen, orig_read, orig_sleep
         _dead.clear()
+
+    # 9) 레이트 게이트: 스레드를 몰아쳐도 scope별로 MIN_CALL_INTERVAL 간격이 지켜진다.
+    #    (여기만 진짜로 잔다 — 위 블록은 time.sleep을 no-op으로 바꿔놨었다.)
+    #    개별 간격이 아니라 총 소요로 본다 — 윈도우 타이머 해상도(~16ms) 탓에 콜 하나하나의
+    #    간격은 흔들리지만, 정작 지켜야 하는 건 구간 평균 속도라 그게 맞는 판정이기도 하다.
+    _last_call.clear(); _locks.clear()
+    threads = [threading.Thread(target=lambda: _throttle("http://gate")) for _ in range(6)]
+    t0 = time.monotonic()
+    for t in threads: t.start()
+    for t in threads: t.join()
+    elapsed = time.monotonic() - t0
+    assert elapsed >= MIN_CALL_INTERVAL * 5 * 0.9, f"게이트가 안 먹었다: {elapsed:.3f}s"
+
+    # 10) 다른 scope는 서로 안 막는다 — 6+6콜을 두 API로 나눠 쏘면 12콜치가 아니라 6콜치 시간.
+    _last_call.clear(); _locks.clear()
+    threads = [threading.Thread(target=lambda s=s: _throttle(s))
+               for s in ("http://x", "http://y") for _ in range(6)]
+    t0 = time.monotonic()
+    for t in threads: t.start()
+    for t in threads: t.join()
+    elapsed = time.monotonic() - t0
+    assert elapsed < MIN_CALL_INTERVAL * 9, f"scope끼리 서로 막고 있다: {elapsed:.3f}s"
+
+    # 11) 게이트는 with_key에 걸려 있다 — fetch_json을 직접 부르는 tour_api 경로도 반드시 탄다.
+    #     (get_body에만 걸면 TourAPI 트래픽 전량이 게이트를 빠져나간다.)
+    _last_call.clear(); _locks.clear()
+    orig_urlopen, orig_read = urllib.request.urlopen, Config.read
+    urllib.request.urlopen = lambda *_a, **_k: _Resp(OK)
+    Config.read = staticmethod(lambda s, p, d=None: "k1" if (s, p) == (_KEY_SECTION, _KEY_NAME) else d)
+    try:
+        t0 = time.monotonic()
+        for _ in range(4):  # tour_api._get과 같은 모양: with_key + fetch_json 직접 호출
+            with_key(lambda k: fetch_json(f"http://tour?serviceKey={k}", 5), "http://tour")
+        elapsed = time.monotonic() - t0
+        assert elapsed >= MIN_CALL_INTERVAL * 3 * 0.9, f"fetch_json 경로가 게이트를 우회했다: {elapsed:.3f}s"
+    finally:
+        urllib.request.urlopen, Config.read = orig_urlopen, orig_read
+        _last_call.clear(); _locks.clear(); _dead.clear()
+
     print("dgo selfcheck OK")
 
 

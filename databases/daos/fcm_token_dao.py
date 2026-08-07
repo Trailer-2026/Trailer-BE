@@ -1,18 +1,7 @@
-import logging
-
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from databases.models.fcm_token import FcmToken
-
-logger = logging.getLogger(__name__)
-
-
-def get_by_token(db: Session, token: str):
-    return db.query(FcmToken).filter(
-        FcmToken.token == token,
-        FcmToken.deleted_at.is_(None),
-    ).first()
 
 
 def get_by_token_including_deleted(db: Session, token: str):

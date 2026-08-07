@@ -16,7 +16,12 @@ _DT_FMT = "%Y%m%d%H%M%S"  # "20260703051300"
 KST = timezone(timedelta(hours=9))
 
 
-@lru_cache(maxsize=512)
+# 추천 1회가 (역,역,날짜) 100~190개를 조회하는데 512로는 검색 3~4번이면 다 밀려나, 방금 받은
+# 구간을 다음 검색에서 또 받는다. 실측(8회 연속 검색): 콜 967 중 331(34%)이 축출 탓 재조회였고
+# 고유 구간은 636뿐이었다. 2048이면 그게 다 들어간다.
+# 메모리: 최번잡 구간(서울↔부산 58편)이 36KB라 이론상 최대 72MB지만, 대부분 구간은 열차가
+# 수~수십 편이라 실사용은 그보다 훨씬 작다. 메모리가 문제면 이 값을 줄여라.
+@lru_cache(maxsize=2048)
 def fetch_trains(dep_nat: str, arr_nat: str, ymd: str) -> tuple:
     """ymd(YYYYMMDD)에 dep_nat→arr_nat 운행 열차 전체. dep_time 순 정렬.
 
