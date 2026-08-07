@@ -68,7 +68,7 @@ class MyReelsItem(BaseModel):
 
 
 class MyReelsListResponse(BaseModel):
-    """마이페이지 릴스 목록 — 최신순, 커서 페이징."""
+    """마이페이지 릴스 목록 — 커서 페이징. 정렬 기준은 엔드포인트마다 다르다."""
 
     items: list[MyReelsItem] = Field(..., description="릴스 목록")
     next_cursor: int | None = Field(

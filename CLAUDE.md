@@ -78,7 +78,7 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 
 **유의할 점**
 
-- **풍경은 이력을 남기지 않는다**(`notify(..., record=False)`). 알림 화면에서 풍경은 목록이 아니라 상단 카드로 뜨고 그 카드는 조회 응답(`based_at`·`items`)으로 그리면 되는데, 중복 억제도 없어서 이력을 남기면 아무도 읽지 않는 행이 호출 횟수만큼 쌓이기 때문이다. 결과적으로 `notification_log`에는 여행 알림 3종(`TRAVEL_SAVED`/`TRAVEL_D1`/`TRAVEL_DELETED`)만 들어간다.
+- **풍경은 이력을 남기지 않는다**(`notify(..., record=False)`). 알림 화면에서 풍경은 목록이 아니라 상단 카드로 뜨고 그 카드는 조회 응답(`based_at`·`items`)으로 그리면 되는데, 중복 억제도 없어서 이력을 남기면 아무도 읽지 않는 행이 호출 횟수만큼 쌓이기 때문이다. 결과적으로 `notification_log`에는 여행 알림 3종(`TRAVEL_SAVED`/`TRAVEL_D1`/`TRAVEL_DELETED`)과 탑승 알림(`TRAIN_D10M`)이 들어간다 — 풍경(`SCENERY`)만 빠진다.
 - **중복 발송을 막는 건 D-1뿐**이다(`push_service.notify_trip_d1`이 `notification_log_dao.exists`로 직접 검사 — 자정 배치와 저장 시점 두 경로가 같은 여행을 건드리므로 여행당 1회). **풍경은 억제하지 않는다** — 조회할 때마다 보내고, 호출 빈도 조절은 앱 몫이다. 이력을 FCM 호출보다 먼저 커밋하므로 **Firebase 장애 시 재시도하지 않는다(at-most-once)** — 대신 알림 화면에는 남는다.
 - **D-1을 저장 시점에도 보내는 이유**: 오늘 저장한 '내일 출발' 여행은 자정 배치만으로는 **영영 알림을 못 받는다**. 다음 자정(= 출발 당일 00:00)의 배치는 '내일 출발'을 찾으므로 그 여행은 이미 대상이 아니기 때문이다.
 - **탑승 알림(`TRAIN_D10M`)은 승차권 두 갈래를 모두 훑는다** — 추천 코스(`schedule` kind=train, 출발 일시 = `travel.start_date` + (`day_no`-1)일 + `start_time`)와 직접 입력(`ticket`, `dep_date`+`dep_time`). '두 소스를 합쳐 내려주지 않는다'는 원칙은 조회 API 얘기고, 알림은 양쪽 다 보내야 한다. 이력에도 `schedule_idx`/`ticket_idx`로 구분돼 남는다.
