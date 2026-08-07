@@ -123,8 +123,10 @@ async def lifespan(app: FastAPI):
     # 다중 워커로 띄우면 워커마다 돌므로, 그 땐 off하고 cron/systemd timer로 스크립트를 돌려라.
     tasks = []
     if os.getenv("OPENAPI_EXPORT") != "1":
-        push_service.ensure_tables()  # notification·notification_log 자체 provision (마이그레이션 도구 없음)
-        ticket_service.ensure_tables()  # ticket(직접 입력 승차권) 자체 provision (동상)
+        # 순서 주의: notification_log가 ticket을 FK로 참조하므로 ticket이 먼저 있어야 한다.
+        # (뒤집으면 ticket이 없는 DB에서 notification_log의 CREATE/ALTER가 FK 대상을 못 찾아 죽는다)
+        ticket_service.ensure_tables()  # ticket(직접 입력 승차권) 자체 provision (마이그레이션 도구 없음)
+        push_service.ensure_tables()  # notification·notification_log 자체 provision (동상)
         video_service.ensure_reels_columns()  # reels.region·thumbnail_url 자체 provision (동상)
         if os.getenv("TRAIN_STOP_AUTOSYNC", "1") == "1":
             tasks.append(asyncio.create_task(_train_stop_daily_loop()))
