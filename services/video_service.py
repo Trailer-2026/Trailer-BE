@@ -53,7 +53,12 @@ from databases.daos import (
     travel_dao,
     travel_image_dao,
 )
-from schemas.video_schema import ReelsRecommendResponse, ReelsShareResponse
+from schemas.video_schema import (
+    MyReelsItem,
+    MyReelsListResponse,
+    ReelsRecommendResponse,
+    ReelsShareResponse,
+)
 from utils import gcs, kakao_local
 
 logger = logging.getLogger(__name__)
@@ -272,6 +277,55 @@ def recommend_reels(
     liked = like_dao.liked_reels_idxs(db, user.user_idx, idxs) if user else set()
     return [
         ReelsRecommendResponse(
+            reels_idx=reels.reels_idx,
+            url=reels.url,
+            title=reels.title,
+            region=reels.region,
+            thumbnail_url=reels.thumbnail_url,
+            like_count=like_counts.get(reels.reels_idx, 0),
+            comment_count=comment_counts.get(reels.reels_idx, 0),
+            is_liked=reels.reels_idx in liked,
+            nickname=nickname,
+            profile_image=profile_image,
+        )
+        for reels, nickname, profile_image in rows
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# 마이페이지 릴스
+# --------------------------------------------------------------------------- #
+def list_my_reels(
+    db: Session, user, limit: int, cursor: int | None
+) -> MyReelsListResponse:
+    """마이페이지 "내가 올린 릴스" — 최신순, 커서 페이징.
+
+    작성자가 호출자뿐이라 닉네임·프로필은 조인 없이 current_user 에서 채운다.
+    """
+    rows = reels_dao.list_by_user(db, user.user_idx, limit + 1, cursor)
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    items = _to_reels_cards(
+        db, user, [(reels, user.nickname, user.profile_image) for reels in rows]
+    )
+    return MyReelsListResponse(
+        items=items,
+        next_cursor=rows[-1].reels_idx if has_more and rows else None,
+    )
+
+
+def _to_reels_cards(db: Session, user, rows) -> list[MyReelsItem]:
+    """(릴스, 닉네임, 프로필) 목록에 좋아요·댓글 수와 내 좋아요 여부를 붙인다.
+
+    recommend_reels 와 같은 이유로 카운트는 행마다 세지 않고 뽑힌 릴스만 묶어
+    일괄 조회한다(N+1 회피).
+    """
+    idxs = [reels.reels_idx for reels, _, _ in rows]
+    like_counts = like_dao.counts_by_reels(db, idxs)
+    comment_counts = comment_dao.counts_by_reels(db, idxs)
+    liked = like_dao.liked_reels_idxs(db, user.user_idx, idxs)
+    return [
+        MyReelsItem(
             reels_idx=reels.reels_idx,
             url=reels.url,
             title=reels.title,

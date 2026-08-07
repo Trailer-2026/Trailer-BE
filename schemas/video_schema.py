@@ -33,6 +33,48 @@ class ReelsRecommendResponse(BaseModel):
     profile_image: str | None = Field(None, description="릴스 작성자 프로필 사진 URL (작성자 없는 옛 릴스는 null)")
 
 
+class MyReelsItem(BaseModel):
+    """마이페이지 릴스 목록 항목 — 홈 피드 카드(ReelsRecommendResponse)와 같은 필드 구성.
+
+    같은 카드 컴포넌트로 그리라고 모양을 맞춘 것이라, 추천 피드 전용 설명이 붙는
+    reels_idx 만 문구가 다르다.
+    """
+
+    reels_idx: int = Field(..., description="릴스 PK", examples=[42])
+    url: str = Field(..., description="릴스 영상 URL")
+    title: str | None = Field(None, description="릴스 제목 (없으면 null)")
+    region: str | None = Field(
+        None, description="지역 태그 — 카드 좌상단 핀 (예: 강원, 부산). 옛 릴스는 null",
+        examples=["강원"],
+    )
+    thumbnail_url: str | None = Field(
+        None,
+        description="카드 썸네일 이미지 URL (영상 대표 프레임). 옛 릴스·추출 실패는 null이니 "
+                    "그 땐 url 영상의 첫 프레임으로 대체하면 됨",
+    )
+    like_count: int = Field(0, description="릴스 좋아요 수")
+    comment_count: int = Field(0, description="릴스 댓글 수 (답글 포함)")
+    is_liked: bool = Field(False, description="내가 좋아요한 릴스인지")
+    nickname: str | None = Field(
+        None, description="릴스 작성자 닉네임 (작성자 없는 옛 릴스·탈퇴 회원은 null)"
+    )
+    profile_image: str | None = Field(
+        None, description="릴스 작성자 프로필 사진 URL (작성자 없는 옛 릴스·탈퇴 회원은 null)"
+    )
+
+
+class MyReelsListResponse(BaseModel):
+    """마이페이지 릴스 목록 — 최신순, 커서 페이징."""
+
+    items: list[MyReelsItem] = Field(..., description="릴스 목록")
+    next_cursor: int | None = Field(
+        None,
+        description="다음 페이지 요청 시 cursor로 그대로 넘길 값. null이면 마지막 페이지. "
+                    "내부 식별자라 값 자체를 해석하지 마세요(목록마다 기준이 다릅니다)",
+        examples=[100],
+    )
+
+
 class ReelsShareResponse(BaseModel):
     """릴스 공유 링크."""
 

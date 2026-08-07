@@ -85,3 +85,24 @@ def get_random_reels(
             Reels.user_idx.is_(None) | Reels.user_idx.notin_(exclude_user_idxs)
         )
     return query.order_by(func.random()).limit(count).all()
+
+
+def list_by_user(
+    db: Session, user_idx: int, limit: int, cursor_idx: int | None = None
+) -> list[Reels]:
+    """내가 올린 릴스를 최신순으로 조회 (soft-delete 제외).
+
+    작성자가 호출자 한 명뿐이라 User 조인 없이 릴스만 돌려준다 — 닉네임·프로필은
+    서비스가 current_user 에서 채운다.
+    cursor_idx 가 있으면 그보다 작은 PK 만 — notification_log 와 같은 커서 페이징이다.
+    url 이 빈 문자열인 행은 렌더가 아직 안 끝난 자리표라 피드와 똑같이 제외한다
+    (재생도 썸네일도 안 되는 카드가 마이페이지 그리드에 뚫린 칸으로 남는다).
+    """
+    query = db.query(Reels).filter(
+        Reels.user_idx == user_idx,
+        Reels.deleted_at.is_(None),
+        Reels.url != "",
+    )
+    if cursor_idx is not None:
+        query = query.filter(Reels.reels_idx < cursor_idx)
+    return query.order_by(Reels.reels_idx.desc()).limit(limit).all()

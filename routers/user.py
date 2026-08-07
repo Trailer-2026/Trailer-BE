@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from databases.database import get_db
@@ -10,7 +10,8 @@ from schemas.notification_schema import (
     NotificationUpdateRequest,
 )
 from schemas.user_schema import ProfileResponse, NicknameUpdateRequest
-from services import notification_service, user_service
+from schemas.video_schema import MyReelsListResponse
+from services import notification_service, user_service, video_service
 
 router = APIRouter(prefix="/api/users", tags=["사용자"])
 
@@ -77,6 +78,29 @@ def update_notification_settings(
 ):
     result = notification_service.update_settings(db, current_user, request_data)
     return CommonResponse.success_response("알림 설정 변경 성공", data=result)
+
+
+@router.get(
+    "/me/reels",
+    summary="내가 올린 릴스 목록",
+    description="마이페이지의 내가 올린 릴스를 최신순으로 반환합니다. 홈 피드 카드와 같은 필드 "
+                "구성이라 같은 카드로 그리면 됩니다. 렌더가 아직 끝나지 않은 릴스는 재생도 "
+                "썸네일도 안 되므로 목록에서 빠집니다. 다음 페이지는 응답의 next_cursor를 "
+                "cursor로 넘겨 요청하고, next_cursor가 null이면 마지막 페이지입니다. "
+                "(access token 인증 필요)\n\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[MyReelsListResponse],
+)
+def get_my_reels(
+    limit: int = Query(20, ge=1, le=100, description="한 번에 가져올 개수 (1~100, 기본 20)"),
+    cursor: int | None = Query(
+        None, ge=1, description="이전 응답의 next_cursor. 첫 페이지는 생략합니다.",
+    ),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    result = video_service.list_my_reels(db, current_user, limit, cursor)
+    return CommonResponse.success_response("내가 올린 릴스 목록 조회 성공", data=result)
 
 
 @router.patch(
