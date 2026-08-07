@@ -87,8 +87,9 @@ def direct_links() -> frozenset[tuple[str, str]]:
     줄이는 최적화일 뿐이라, 못 만들었다고 추천 자체가 죽으면 손해가 훨씬 크다.
     """
     global _cache
-    db = SessionLocal()
+    db = None  # 세션 생성 자체가 터져도(엔진 설정 오류 등) 아래 except로 떨어지게 try 안에서 연다
     try:
+        db = SessionLocal()
         version = train_stop_dao.latest_created_at(db)
         cached = _cache  # 이름 하나만 읽어 버전·내용이 어긋나지 않게 한다
         if cached is not None and cached[0] == version:
@@ -98,7 +99,8 @@ def direct_links() -> frozenset[tuple[str, str]]:
         logger.warning("train_stop 직통 인덱스 조회 실패(프리페치 필터 비활성): %s", e)
         return frozenset()
     finally:
-        db.close()
+        if db is not None:
+            db.close()
     links = _build_links(rows)
     _cache = (version, links)
     logger.info("train_stop 직통 인덱스 구축: %d쌍", len(links))
