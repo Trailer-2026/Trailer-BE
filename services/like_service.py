@@ -61,7 +61,8 @@ def _insert_like(db: Session, user_idx: int, **target) -> None:
 
 
 def _reels_or_404(db: Session, reels_idx: int) -> None:
-    if reels_dao.get_by_idx(db, reels_idx) is None:
+    """좋아요 대상 릴스 존재 확인. 렌더가 아직 안 끝난 자리표 행도 '없음'으로 본다."""
+    if reels_dao.get_ready_by_idx(db, reels_idx) is None:
         raise NotFoundException("릴스를 찾을 수 없습니다.")
 
 

@@ -14,6 +14,24 @@ def get_by_idx(db: Session, reels_idx: int) -> Reels | None:
     ).first()
 
 
+def get_ready_by_idx(db: Session, reels_idx: int) -> Reels | None:
+    """영상이 완성된 릴스만 단건 조회 (soft-delete·렌더 미완료 제외).
+
+    url 이 빈 문자열인 행은 렌더 시작 때 reels_idx 를 발급하려고 만든 자리표라 아직
+    사용자 컨텐츠가 아니다 — 피드(get_random_reels)·마이페이지(list_by_user)가 이미
+    같은 조건으로 거르고 있고, 좋아요·댓글도 같은 규칙을 따라야 한다.
+    자리표 행에 FK 가 걸리면 렌더 실패 시 정리(video_service._discard_pending_reels)가
+    하드 삭제를 못 하고 소프트 삭제로 물러선다.
+
+    렌더 진행률·다운로드처럼 자리표 행 자체를 봐야 하는 경로는 get_by_idx 를 쓴다.
+    """
+    return db.query(Reels).filter(
+        Reels.reels_idx == reels_idx,
+        Reels.deleted_at.is_(None),
+        Reels.url != "",
+    ).first()
+
+
 def create(
     db: Session, *, user_idx: int | None, url: str, title: str | None,
     region: str | None = None,
