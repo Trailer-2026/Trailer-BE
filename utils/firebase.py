@@ -36,17 +36,24 @@ def init_firebase() -> None:
     logger.info("Firebase 초기화 완료")
 
 
-def send_multicast(tokens: list[str], title: str, body: str, data: dict = None):
+def send_multicast(
+    tokens: list[str], title: str, body: str, data: dict = None,
+    image_url: str | None = None,
+):
     """여러 토큰으로 푸시를 발송하고 (성공 수, 실패 수, 죽은 토큰 목록)을 반환한다.
 
     죽은 토큰(UnregisteredError)은 호출 측이 정리할 수 있도록 목록으로 돌려준다.
     이 함수는 FCM 호출만 담당하며 DB는 건드리지 않는다.
+
+    image_url은 알림 배너에 함께 뜨는 사진(공개 HTTPS URL)이다. Android는 그대로
+    큰 사진으로 펼쳐지지만 iOS는 앱에 Notification Service Extension이 있어야 보인다 —
+    없으면 사진만 무시되고 제목·본문은 정상 발송된다.
     """
     if not tokens:
         return 0, 0, []
 
     message = messaging.MulticastMessage(
-        notification=messaging.Notification(title=title, body=body),
+        notification=messaging.Notification(title=title, body=body, image=image_url),
         data={k: str(v) for k, v in (data or {}).items()},  # FCM data 값은 모두 문자열
         tokens=tokens,
     )

@@ -41,11 +41,13 @@ def notify(
     db: Session, user_idx: int, ntype: NotificationType, title: str, body: str,
     travel_idx: int | None = None, scenic_spot_idx: int | None = None,
     schedule_idx: int | None = None, ticket_idx: int | None = None,
-    record: bool = True,
+    record: bool = True, image_url: str | None = None,
 ) -> bool:
     """수신 설정을 확인하고 이력을 남긴 뒤 사용자의 모든 기기로 푸시한다. 발송했으면 True.
 
     - 설정이 OFF면 이력도 남기지 않고 False (알림 화면에도 안 뜨는 게 자연스럽다).
+    - `image_url`은 푸시 배너에 함께 뜨는 사진(현재는 풍경 알림만 쓴다). 이력에는 남기지
+      않는다 — 알림 화면 목록은 텍스트 줄이고, 사진이 붙는 풍경은 애초에 이력이 없다.
     - `record=False`면 푸시만 보내고 이력을 남기지 않는다 — 알림 화면 목록에 쌓지 않을
       종류(풍경)를 위한 것이다.
     - 이력을 먼저 커밋해, FCM 호출이 실패해도 알림 화면에는 남게 한다. 즉 False라도
@@ -76,7 +78,7 @@ def notify(
         # 직접 입력 승차권은 여행이 없어(travel_idx NULL) 승차권 목록으로 보내야 한다.
         if ticket_idx is not None:
             data["ticket_idx"] = ticket_idx
-        result = fcm_service.send_push(db, user_idx, title, body, data=data)
+        result = fcm_service.send_push(db, user_idx, title, body, data=data, image_url=image_url)
 
         # 발송 흔적을 남긴다 — 풍경은 이력도 안 남아서 이 로그가 유일한 확인 수단이다.
         # sent=0은 그 사용자의 기기 토큰이 하나도 등록돼 있지 않다는 뜻(에러 아님).
@@ -231,8 +233,10 @@ def notify_scenery(db: Session, user, items: list[dict], to_station: str) -> boo
     상단 카드로 따로 뜨고, 그 카드는 조회 응답(based_at·items)으로 그리면 된다. 이력을
     남기면 아무도 읽지 않는 행만 호출 횟수만큼 쌓인다.
 
-    푸시 문구는 구간 기준("지금 OO역 스팟을 지나고 있어요")이지만, 딥링크는 가장 가까운
-    관광지를 가리킨다.
+    푸시 문구는 구간 기준("지금 OO역 스팟을 지나고 있어요")이지만, 딥링크와 사진은 가장
+    가까운 관광지(items[0]) 기준이다 — 카테고리별 일러스트를 골라 배너에 함께 띄운다.
+    image_url은 호출 측(scenic_spot_service)이 item에 이미 채워 둔 값을 그대로 쓴다.
+    조회 응답의 카드와 푸시 배너가 같은 그림이어야 해서, 고르는 곳을 한 군데로 둔다.
     """
     if not items:
         return False
@@ -242,6 +246,7 @@ def notify_scenery(db: Session, user, items: list[dict], to_station: str) -> boo
         body=_scenery_body(user.nickname, to_station),
         scenic_spot_idx=items[0].get("scenic_spot_idx"),
         record=False,
+        image_url=items[0].get("image_url"),
     )
 
 

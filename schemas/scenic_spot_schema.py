@@ -8,6 +8,12 @@ class ScenicSpotResponse(BaseModel):
     category: str = Field(..., description="분류 (water | waterway | peak | natural_view)")
     distance_m: float = Field(..., description="현재 좌표로부터의 거리(m)")
     side: Optional[str] = Field(None, description="진행 방향 기준 창밖 좌우 (left | right)")
+    image_url: Optional[str] = Field(
+        None,
+        description="카테고리에 맞는 풍경 일러스트 URL(공개). 알림 화면 상단 풍경 카드와 "
+                    "푸시 배너가 같은 그림을 쓴다. 카테고리별 그림이 준비되기 전까지는 "
+                    "네 카테고리 모두 같은 파일이 내려간다. 버킷 설정이 없으면 null",
+    )
 
 
 class ScenicSpotNearbyResponse(BaseModel):
