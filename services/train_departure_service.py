@@ -73,7 +73,9 @@ def _departures_between(db, after: datetime, until: datetime) -> list[dict]:
             continue
         departures.append({
             "user_idx": schedule.user_idx,
-            "dep_station": schedule.dep_station or travel.title,
+            # dep_station은 nullable이다. 비었으면 그대로 None으로 넘겨 문구에서 역명을
+            # 빼게 한다 — 여행 제목 같은 다른 값으로 메우면 '부산 여행역'이 돼 버린다.
+            "dep_station": schedule.dep_station,
             "dep_at": dep_at,
             "minutes_left": _minutes_left(after, dep_at),
             "train_label": _train_label(schedule),

@@ -20,8 +20,6 @@ from core.exceptions.handlers import (
 )
 from routers.auth import router as auth_router
 from routers.scenic_spot import router as scenic_spot_router
-
-logger = logging.getLogger(__name__)
 from routers.fcm import router as fcm_router
 from routers.station import router as station_router
 from routers.recommend import router as recommend_router
@@ -35,8 +33,10 @@ from routers.user import router as user_router
 from routers.share import router as share_router
 from routers.notification import router as notification_router
 from routers.ticket import router as ticket_router
-from services import push_service, ticket_service, video_service
+from databases import provision
 from utils.firebase import init_firebase
+
+logger = logging.getLogger(__name__)
 
 
 async def _train_stop_daily_loop():
@@ -123,11 +123,9 @@ async def lifespan(app: FastAPI):
     # 다중 워커로 띄우면 워커마다 돌므로, 그 땐 off하고 cron/systemd timer로 스크립트를 돌려라.
     tasks = []
     if os.getenv("OPENAPI_EXPORT") != "1":
-        # 순서 주의: notification_log가 ticket을 FK로 참조하므로 ticket이 먼저 있어야 한다.
-        # (뒤집으면 ticket이 없는 DB에서 notification_log의 CREATE/ALTER가 FK 대상을 못 찾아 죽는다)
-        ticket_service.ensure_tables()  # ticket(직접 입력 승차권) 자체 provision (마이그레이션 도구 없음)
-        push_service.ensure_tables()  # notification·notification_log 자체 provision (동상)
-        video_service.ensure_reels_columns()  # reels.region·thumbnail_url 자체 provision (동상)
+        # 마이그레이션 도구가 없어 테이블·컬럼·인덱스를 앱이 직접 챙긴다. 단계 사이의
+        # 의존 순서(테이블 → 컬럼 → 인덱스)와 FK 순서는 provision 안에서 결정된다.
+        provision.run()
         if os.getenv("TRAIN_STOP_AUTOSYNC", "1") == "1":
             tasks.append(asyncio.create_task(_train_stop_daily_loop()))
         if os.getenv("TRIP_REMINDER_AUTOSYNC", "1") == "1":

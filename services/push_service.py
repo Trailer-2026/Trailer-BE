@@ -12,9 +12,6 @@ from sqlalchemy.orm import Session
 
 from core.enums import NotificationType
 from databases.daos import notification_dao, notification_log_dao
-from databases.database import engine
-from databases.models.notification import Notification
-from databases.models.notification_log import NotificationLog
 from services import fcm_service
 from utils.timezone import now_kst
 
@@ -38,59 +35,6 @@ _NO_DEEPLINK = {NotificationType.TRAVEL_DELETED}
 # 알림 화면이 종류별 라벨로 쓰는 제목(디자인의 "풍경알림" 칩). OS 푸시의 제목이기도 하다.
 _TITLE_TRAVEL = "일정알림"
 _TITLE_SCENERY = "풍경알림"
-
-
-def ensure_tables() -> None:
-    """알림 도메인의 두 테이블(설정 notification, 이력 notification_log)을 없으면 만든다.
-
-    이 저장소엔 마이그레이션 도구가 없어 train_stop과 동일하게 자체 provision한다
-    (services/train_stop_service._ensure_table 선례). 서버 기동 시 1회 호출.
-    설정 테이블까지 여기서 챙기는 이유는, 운영 DB에 수동 DDL을 안 넣으면 알림 설정
-    조회가 그대로 500이 나기 때문이다. 이미 있으면(checkfirst) 아무 일도 안 한다.
-    """
-    # FK로 참조하는 모델(user, travel)이 같은 MetaData에 올라와 있지 않으면 DDL 컴파일이
-    # NoReferencedTableError로 죽는다 — 호출 순서에 기대지 않게 여기서 보장한다.
-    from databases.models.travel import Travel  # noqa: F401
-    from databases.models.user import User  # noqa: F401
-
-    # FK 대상이 되는 schedule·ticket도 같은 이유로 MetaData에 올려 둔다.
-    from databases.models.schedule import Schedule  # noqa: F401
-    from databases.models.ticket import Ticket  # noqa: F401
-
-    Notification.__table__.create(bind=engine, checkfirst=True)
-    NotificationLog.__table__.create(bind=engine, checkfirst=True)
-    _ensure_departure_columns()
-
-
-def _ensure_departure_columns() -> None:
-    """이미 만들어져 있는 notification_log에 TRAIN_D10M용 컬럼·인덱스를 덧붙인다.
-
-    위의 create(checkfirst=True)는 **테이블이 이미 있으면 아무것도 하지 않는다** —
-    운영 DB엔 notification_log가 이미 있어서 새 컬럼이 영영 안 생긴다. reels의
-    region·thumbnail_url과 같은 방식으로 여기서 ALTER를 따로 건다
-    (video_service.ensure_reels_columns 선례).
-    """
-    from sqlalchemy import text
-
-    with engine.begin() as conn:
-        conn.execute(text(
-            "ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS schedule_idx INTEGER "
-            "REFERENCES schedule(schedule_idx)"
-        ))
-        conn.execute(text(
-            "ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS ticket_idx INTEGER "
-            "REFERENCES ticket(ticket_idx)"
-        ))
-        # 중복 발송의 최종 방어 — 모델의 __table_args__와 같은 인덱스지만, 테이블이
-        # 이미 있으면 create가 안 만들어 주므로 여기서도 건다.
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_log_train_schedule "
-            "ON notification_log (user_idx, schedule_idx) WHERE type = 'TRAIN_D10M'"
-        ))
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_log_train_ticket "
-            "ON notification_log (user_idx, ticket_idx) WHERE type = 'TRAIN_D10M'"
-        ))
 
 
 def notify(
@@ -201,7 +145,7 @@ def notify_travel_deleted(db: Session, user_idx: int, travel) -> bool:
 
 
 def notify_train_departure(
-    db: Session, user_idx: int, *, dep_station: str, dep_at, minutes_left: int,
+    db: Session, user_idx: int, *, dep_station: str | None, dep_at, minutes_left: int,
     train_label: str | None = None, seat_label: str | None = None,
     travel_idx: int | None = None, schedule_idx: int | None = None,
     ticket_idx: int | None = None,
@@ -215,6 +159,7 @@ def notify_train_departure(
 
     train_label은 추천 코스만 있다('KTX 101') — 직접 입력 승차권엔 열차번호·등급 입력칸이
     없어 None이다. seat_label은 반대로 직접 입력에만 있을 수 있다('3호차 12A').
+    dep_station도 None일 수 있다(schedule.dep_station이 nullable) — 문구에서 빠진다.
     """
     if notification_log_dao.exists_for_departure(
         db, user_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx
@@ -229,7 +174,7 @@ def notify_train_departure(
 
 
 def _departure_body(
-    dep_station: str, dep_at, minutes_left: int,
+    dep_station: str | None, dep_at, minutes_left: int,
     train_label: str | None, seat_label: str | None,
 ) -> str:
     """탑승 알림 본문 — "10분 뒤 서울역에서 KTX 101 열차가 출발해요 (3호차 12A) · 12:10 출발".
@@ -237,13 +182,24 @@ def _departure_body(
     역명 표기가 출처마다 다르다 — schedule.dep_station은 '서울', ticket은 station을
     조인해 '서울역'이다. 사용자에게 보이는 문구는 하나여야 하므로 '역'을 붙여 맞춘다.
 
+    역명이 없으면(schedule.dep_station은 nullable, 공백만 든 경우 포함) 그 자리를 통째로
+    뺀다. 다른 값으로 메우면 없는 역을 가리키게 되고, 남은 정보(남은 시간·열차·출발
+    시각)만으로도 '지금 나가야 한다'는 알림의 목적은 이룬다. 직접 입력 승차권은 station을
+    조인해 오므로 항상 있다.
+
     분은 상수(10)가 아니라 **실제 남은 시간**을 쓴다. 서버가 잠깐 멈췄다 재개되면 남은
     시간이 10분보다 짧은 열차에도 알림이 나가는데, 그 때 '10분 뒤'라고 하면 3분 남은
     사람을 느긋하게 만든다. 출발 시각을 뒤에 같이 붙이는 것도 같은 이유다.
     """
-    station = dep_station if dep_station.endswith("역") else f"{dep_station}역"
     train = f"{train_label} 열차가" if train_label else "열차가"
-    body = f"{minutes_left}분 뒤 {station}에서 {train} 출발해요"
+    # 공백만 든 역명은 없는 것으로 본다 — 안 그러면 "  역에서"가 만들어진다.
+    station = (dep_station or "").strip()
+    if station:
+        if not station.endswith("역"):
+            station = f"{station}역"
+        body = f"{minutes_left}분 뒤 {station}에서 {train} 출발해요"
+    else:
+        body = f"{minutes_left}분 뒤 {train} 출발해요"
     if seat_label:
         body += f" ({seat_label})"
     return f"{body} · {dep_at:%H:%M} 출발"

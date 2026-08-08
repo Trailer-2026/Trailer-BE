@@ -22,6 +22,10 @@ class Ticket(BaseModel):
     __table_args__ = (
         # 목록 조회 질의(user_idx로 좁히고 출발 일시 오름차순) 그대로를 태운다.
         Index("ix_ticket_user_dep", "user_idx", "dep_date", "dep_time"),
+        # 탑승 알림 배치(ticket_dao.list_departing_on)는 사용자를 가리지 않고 날짜로만
+        # 좁힌다 — 위 인덱스는 선두 컬럼이 user_idx라 그 조회엔 못 쓴다. 1분마다 도는
+        # 조회라 승차권이 쌓이면 seq scan 비용이 그대로 누적되므로 날짜 단독으로 하나 더 둔다.
+        Index("ix_ticket_dep_date", "dep_date"),
         {"comment": "직접 입력 승차권"},
     )
 
