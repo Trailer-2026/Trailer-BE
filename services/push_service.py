@@ -182,17 +182,21 @@ def _departure_body(
     역명 표기가 출처마다 다르다 — schedule.dep_station은 '서울', ticket은 station을
     조인해 '서울역'이다. 사용자에게 보이는 문구는 하나여야 하므로 '역'을 붙여 맞춘다.
 
-    역명이 없으면(schedule.dep_station은 nullable) 그 자리를 통째로 뺀다. 다른 값으로
-    메우면 없는 역을 가리키게 되고, 남은 정보(남은 시간·열차·출발 시각)만으로도 '지금
-    나가야 한다'는 알림의 목적은 이룬다. 직접 입력 승차권은 station 조인이라 항상 있다.
+    역명이 없으면(schedule.dep_station은 nullable, 공백만 든 경우 포함) 그 자리를 통째로
+    뺀다. 다른 값으로 메우면 없는 역을 가리키게 되고, 남은 정보(남은 시간·열차·출발
+    시각)만으로도 '지금 나가야 한다'는 알림의 목적은 이룬다. 직접 입력 승차권은 station을
+    조인해 오므로 항상 있다.
 
     분은 상수(10)가 아니라 **실제 남은 시간**을 쓴다. 서버가 잠깐 멈췄다 재개되면 남은
     시간이 10분보다 짧은 열차에도 알림이 나가는데, 그 때 '10분 뒤'라고 하면 3분 남은
     사람을 느긋하게 만든다. 출발 시각을 뒤에 같이 붙이는 것도 같은 이유다.
     """
     train = f"{train_label} 열차가" if train_label else "열차가"
-    if dep_station:
-        station = dep_station if dep_station.endswith("역") else f"{dep_station}역"
+    # 공백만 든 역명은 없는 것으로 본다 — 안 그러면 "  역에서"가 만들어진다.
+    station = (dep_station or "").strip()
+    if station:
+        if not station.endswith("역"):
+            station = f"{station}역"
         body = f"{minutes_left}분 뒤 {station}에서 {train} 출발해요"
     else:
         body = f"{minutes_left}분 뒤 {train} 출발해요"
