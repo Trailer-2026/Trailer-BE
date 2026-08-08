@@ -12,8 +12,7 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 - Per-endpoint extracted errors: `python scripts/error_index.py`
 - Train stop-list sync (manual): `python scripts/sync_train_stops.py [YYYYMMDD]` (usually auto — see 열차 정차역 섹션)
 - Enable Jira commit hook: `git config core.hooksPath .githooks`
-- Self-checks: `python tests/run_all.py` (또는 개별로 `python tests/test_*.py`). **pytest는 없다** — `tests/`는 프레임워크 없이 assert로 도는 스크립트다.
-- No linter / formatter configured.
+- No tests / linter / formatter configured.
 
 ## Layered flow (one module per layer)
 
