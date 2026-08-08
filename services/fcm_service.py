@@ -41,7 +41,9 @@ def send_push(
         return PushResultResponse(sent=0, failed=0)
 
     sent, failed, dead = firebase.send_multicast(tokens, title, body, data)
-    if dead:
-        fcm_token_dao.soft_delete_by_tokens(db, dead)
+    # 실제로 지워진 행이 있을 때만 커밋한다. 죽은 토큰을 집었어도 UPDATE 가 0행일 수
+    # 있다 — 같은 사용자에게 푸시가 동시에 나가면 양쪽이 같은 토큰을 죽은 것으로 보고,
+    # 늦은 쪽은 이미 지워진 행을 다시 지우려 해 바꿀 게 없다.
+    if dead and fcm_token_dao.soft_delete_by_tokens(db, dead):
         db.commit()
     return PushResultResponse(sent=sent, failed=failed)
