@@ -147,6 +147,24 @@ def test_added_columns_match_models():
     print(f"  OK test_added_columns_match_models ({len(provision._ADDED_COLUMNS)}개)")
 
 
+def test_ticket_dep_date_index_exists():
+    """탑승 알림 배치용 날짜 인덱스가 신규 DB(모델)와 기존 DB(provision) 양쪽에 있다.
+
+    ix_ticket_user_dep 는 선두 컬럼이 user_idx 라, 사용자를 안 가리고 dep_date 로만
+    좁히는 ticket_dao.list_departing_on 은 그 인덱스를 못 탄다.
+    """
+    from databases.models.ticket import Ticket
+
+    names = {index.name for index in Ticket.__table__.indexes}
+    assert "ix_ticket_dep_date" in names, f"모델에 날짜 인덱스가 없다: {names}"
+    assert "ix_ticket_user_dep" in names, "기존 목록 조회용 인덱스가 사라졌다"
+
+    assert any("ix_ticket_dep_date" in s for s in provision._ADDED_INDEXES), (
+        "운영 DB 엔 ticket 이 이미 있어 provision 이 따로 걸어주지 않으면 안 생긴다"
+    )
+    print("  OK test_ticket_dep_date_index_exists")
+
+
 def test_ddl_compiles_for_postgres():
     """ALTER/CREATE INDEX 문이 Postgres 에서 성립하는 형태인지 눈으로 확인한다."""
     for table, column, spec in provision._ADDED_COLUMNS:
@@ -166,6 +184,7 @@ def main():
     test_run_orders_stages()
     test_added_indexes_match_models()
     test_added_columns_match_models()
+    test_ticket_dep_date_index_exists()
     test_ddl_compiles_for_postgres()
     print("provision selfcheck OK")
 

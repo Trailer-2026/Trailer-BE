@@ -65,6 +65,10 @@ _ADDED_INDEXES = (
     "ON notification_log (user_idx, schedule_idx) WHERE type = 'TRAIN_D10M'",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_log_train_ticket "
     "ON notification_log (user_idx, ticket_idx) WHERE type = 'TRAIN_D10M'",
+    # 탑승 알림 배치가 1분마다 도는 조회(ticket_dao.list_departing_on: dep_date IN (...))용.
+    # 기존 ix_ticket_user_dep는 선두 컬럼이 user_idx라, 사용자를 가리지 않는 이 조회는
+    # 그 인덱스를 못 타고 seq scan으로 떨어진다.
+    "CREATE INDEX IF NOT EXISTS ix_ticket_dep_date ON ticket (dep_date)",
 )
 
 
