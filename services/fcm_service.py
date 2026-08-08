@@ -27,7 +27,7 @@ def register_token(db: Session, user_idx: int, token: str) -> None:
 
 
 def send_push(
-    db: Session, user_idx: int, title: str, body: str, data: dict = None,
+    db: Session, user_idx: int, title: str, body: str, data: dict | None = None,
     image_url: str | None = None,
 ) -> PushResultResponse:
     """사용자의 모든 기기로 푸시를 발송하고, 죽은 토큰은 정리한다.

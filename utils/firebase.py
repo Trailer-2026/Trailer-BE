@@ -37,7 +37,7 @@ def init_firebase() -> None:
 
 
 def send_multicast(
-    tokens: list[str], title: str, body: str, data: dict = None,
+    tokens: list[str], title: str, body: str, data: dict | None = None,
     image_url: str | None = None,
 ):
     """여러 토큰으로 푸시를 발송하고 (성공 수, 실패 수, 죽은 토큰 목록)을 반환한다.
