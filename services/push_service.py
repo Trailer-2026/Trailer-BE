@@ -201,7 +201,7 @@ def notify_travel_deleted(db: Session, user_idx: int, travel) -> bool:
 
 
 def notify_train_departure(
-    db: Session, user_idx: int, *, dep_station: str, dep_at, minutes_left: int,
+    db: Session, user_idx: int, *, dep_station: str | None, dep_at, minutes_left: int,
     train_label: str | None = None, seat_label: str | None = None,
     travel_idx: int | None = None, schedule_idx: int | None = None,
     ticket_idx: int | None = None,
@@ -215,6 +215,7 @@ def notify_train_departure(
 
     train_label은 추천 코스만 있다('KTX 101') — 직접 입력 승차권엔 열차번호·등급 입력칸이
     없어 None이다. seat_label은 반대로 직접 입력에만 있을 수 있다('3호차 12A').
+    dep_station도 None일 수 있다(schedule.dep_station이 nullable) — 문구에서 빠진다.
     """
     if notification_log_dao.exists_for_departure(
         db, user_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx
@@ -229,7 +230,7 @@ def notify_train_departure(
 
 
 def _departure_body(
-    dep_station: str, dep_at, minutes_left: int,
+    dep_station: str | None, dep_at, minutes_left: int,
     train_label: str | None, seat_label: str | None,
 ) -> str:
     """탑승 알림 본문 — "10분 뒤 서울역에서 KTX 101 열차가 출발해요 (3호차 12A) · 12:10 출발".
@@ -237,13 +238,20 @@ def _departure_body(
     역명 표기가 출처마다 다르다 — schedule.dep_station은 '서울', ticket은 station을
     조인해 '서울역'이다. 사용자에게 보이는 문구는 하나여야 하므로 '역'을 붙여 맞춘다.
 
+    역명이 없으면(schedule.dep_station은 nullable) 그 자리를 통째로 뺀다. 다른 값으로
+    메우면 없는 역을 가리키게 되고, 남은 정보(남은 시간·열차·출발 시각)만으로도 '지금
+    나가야 한다'는 알림의 목적은 이룬다. 직접 입력 승차권은 station 조인이라 항상 있다.
+
     분은 상수(10)가 아니라 **실제 남은 시간**을 쓴다. 서버가 잠깐 멈췄다 재개되면 남은
     시간이 10분보다 짧은 열차에도 알림이 나가는데, 그 때 '10분 뒤'라고 하면 3분 남은
     사람을 느긋하게 만든다. 출발 시각을 뒤에 같이 붙이는 것도 같은 이유다.
     """
-    station = dep_station if dep_station.endswith("역") else f"{dep_station}역"
     train = f"{train_label} 열차가" if train_label else "열차가"
-    body = f"{minutes_left}분 뒤 {station}에서 {train} 출발해요"
+    if dep_station:
+        station = dep_station if dep_station.endswith("역") else f"{dep_station}역"
+        body = f"{minutes_left}분 뒤 {station}에서 {train} 출발해요"
+    else:
+        body = f"{minutes_left}분 뒤 {train} 출발해요"
     if seat_label:
         body += f" ({seat_label})"
     return f"{body} · {dep_at:%H:%M} 출발"
