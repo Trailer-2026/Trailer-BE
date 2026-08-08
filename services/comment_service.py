@@ -13,8 +13,8 @@ from schemas.comment_schema import CommentResponse
 def create_comment(
     db: Session, user, reels_idx: int, content: str, parent_idx: int | None
 ) -> CommentResponse:
-    """댓글(또는 답글) 1건 작성."""
-    if reels_dao.get_by_idx(db, reels_idx) is None:
+    """댓글(또는 답글) 1건 작성. 렌더가 아직 안 끝난 릴스에는 달 수 없다(404)."""
+    if reels_dao.get_ready_by_idx(db, reels_idx) is None:
         raise NotFoundException("릴스를 찾을 수 없습니다.")
 
     if parent_idx is not None:
@@ -38,8 +38,9 @@ def list_comments(db: Session, user, reels_idx: int) -> list[CommentResponse]:
 
     좋아요 수·내 좋아요 여부는 댓글 PK 전체를 IN 절로 한 번씩만 조회해 붙인다(N+1 회피).
     내가 차단한 사용자의 댓글은 쿼리 단계에서 빠진다.
+    렌더가 아직 안 끝난 릴스는 작성과 같은 규칙으로 404다(댓글이 달릴 수 없는 행이다).
     """
-    if reels_dao.get_by_idx(db, reels_idx) is None:
+    if reels_dao.get_ready_by_idx(db, reels_idx) is None:
         raise NotFoundException("릴스를 찾을 수 없습니다.")
 
     rows = comment_dao.list_by_reels(

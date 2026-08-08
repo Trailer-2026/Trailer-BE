@@ -30,7 +30,7 @@ class NotificationLogItem(BaseModel):
     type: NotificationType = Field(
         ...,
         description="알림 종류 — TRAVEL_SAVED(일정 추가) | TRAVEL_D1(출발 하루 전) | "
-                    "TRAVEL_DELETED(일정 삭제). "
+                    "TRAVEL_DELETED(일정 삭제) | TRAIN_D10M(열차 출발 10분 전). "
                     "풍경 알림(SCENERY)은 푸시로만 나가고 이 목록에는 담기지 않습니다",
         examples=["TRAVEL_SAVED"],
     )
@@ -45,8 +45,16 @@ class NotificationLogItem(BaseModel):
     travel_idx: int | None = Field(
         None,
         description="이 알림이 가리키는 여행 PK — 탭하면 열 여행. TRAVEL_DELETED는 이미 삭제된 "
-                    "여행이라 열면 404이니 이동시키지 마세요",
+                    "여행이라 열면 404이니 이동시키지 마세요. TRAIN_D10M이 직접 입력 승차권에서 "
+                    "나온 경우엔 여행이 없어 null이고 대신 ticket_idx가 채워집니다",
         examples=[42],
+    )
+    ticket_idx: int | None = Field(
+        None,
+        description="이 알림이 가리키는 직접 입력 승차권 PK — TRAIN_D10M에서만 채워집니다. "
+                    "탭하면 승차권 목록(GET /api/tickets)으로 보내면 됩니다. 추천 코스에서 나온 "
+                    "TRAIN_D10M은 travel_idx가 대신 채워지므로 여기가 null입니다",
+        examples=[7],
     )
     is_read: bool = Field(..., description="읽음 여부", examples=[False])
     created_at: datetime = Field(..., description="알림 발송 시각(ISO-8601)", examples=["2026-08-03T00:00:00+09:00"])

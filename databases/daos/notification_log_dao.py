@@ -1,17 +1,19 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
+from core.enums import NotificationType
 from databases.models.notification_log import NotificationLog
 
 
 def create(
     db: Session, user_idx: int, notification_type: str, title: str, body: str,
-    travel_idx: int | None = None,
+    travel_idx: int | None = None, schedule_idx: int | None = None,
+    ticket_idx: int | None = None,
 ) -> NotificationLog:
     """알림 이력 1건 생성. flush만 하고 commit은 서비스가 한다."""
     row = NotificationLog(
         user_idx=user_idx, type=notification_type, title=title, body=body,
-        travel_idx=travel_idx,
+        travel_idx=travel_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx,
     )
     db.add(row)
     db.flush()
@@ -98,4 +100,26 @@ def exists(db: Session, user_idx: int, notification_type: str, travel_idx: int) 
         NotificationLog.type == notification_type,
         NotificationLog.travel_idx == travel_idx,
     )
+    return db.query(query.exists()).scalar()
+
+
+def exists_for_departure(
+    db: Session, user_idx: int, *,
+    schedule_idx: int | None = None, ticket_idx: int | None = None,
+) -> bool:
+    """그 열차 출발에 대해 TRAIN_D10M을 이미 보냈는지 — 출발 1건당 1회.
+
+    schedule_idx(추천 코스) / ticket_idx(직접 입력) 중 하나만 준다. exists()와 같은
+    이유로 soft-delete된 이력도 '보낸 적 있음'으로 센다(지운 알림이 재발송되면 안 된다).
+    """
+    if (schedule_idx is None) == (ticket_idx is None):
+        raise ValueError("schedule_idx 또는 ticket_idx 중 정확히 하나를 줘야 합니다.")
+    query = db.query(NotificationLog).filter(
+        NotificationLog.user_idx == user_idx,
+        NotificationLog.type == NotificationType.TRAIN_D10M.value,
+    )
+    if schedule_idx is not None:
+        query = query.filter(NotificationLog.schedule_idx == schedule_idx)
+    else:
+        query = query.filter(NotificationLog.ticket_idx == ticket_idx)
     return db.query(query.exists()).scalar()

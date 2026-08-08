@@ -12,9 +12,6 @@ from sqlalchemy.orm import Session
 
 from core.enums import NotificationType
 from databases.daos import notification_dao, notification_log_dao
-from databases.database import engine
-from databases.models.notification import Notification
-from databases.models.notification_log import NotificationLog
 from services import fcm_service
 from utils.timezone import now_kst
 
@@ -25,6 +22,9 @@ _ALARM_FIELD = {
     NotificationType.TRAVEL_SAVED: "event_alarm",
     NotificationType.TRAVEL_D1: "event_alarm",
     NotificationType.TRAVEL_DELETED: "event_alarm",
+    # 탑승 알림도 일정 알림 스위치를 따른다 — 설정 화면의 스위치는 두 개(이벤트/풍경)뿐이라
+    # 새 종류를 위해 세 번째를 만들면 앱 설정 화면까지 같이 바꿔야 한다.
+    NotificationType.TRAIN_D10M: "event_alarm",
     NotificationType.SCENERY: "scenery_alarm",
 }
 
@@ -37,26 +37,10 @@ _TITLE_TRAVEL = "일정알림"
 _TITLE_SCENERY = "풍경알림"
 
 
-def ensure_tables() -> None:
-    """알림 도메인의 두 테이블(설정 notification, 이력 notification_log)을 없으면 만든다.
-
-    이 저장소엔 마이그레이션 도구가 없어 train_stop과 동일하게 자체 provision한다
-    (services/train_stop_service._ensure_table 선례). 서버 기동 시 1회 호출.
-    설정 테이블까지 여기서 챙기는 이유는, 운영 DB에 수동 DDL을 안 넣으면 알림 설정
-    조회가 그대로 500이 나기 때문이다. 이미 있으면(checkfirst) 아무 일도 안 한다.
-    """
-    # FK로 참조하는 모델(user, travel)이 같은 MetaData에 올라와 있지 않으면 DDL 컴파일이
-    # NoReferencedTableError로 죽는다 — 호출 순서에 기대지 않게 여기서 보장한다.
-    from databases.models.travel import Travel  # noqa: F401
-    from databases.models.user import User  # noqa: F401
-
-    Notification.__table__.create(bind=engine, checkfirst=True)
-    NotificationLog.__table__.create(bind=engine, checkfirst=True)
-
-
 def notify(
     db: Session, user_idx: int, ntype: NotificationType, title: str, body: str,
     travel_idx: int | None = None, scenic_spot_idx: int | None = None,
+    schedule_idx: int | None = None, ticket_idx: int | None = None,
     record: bool = True,
 ) -> bool:
     """수신 설정을 확인하고 이력을 남긴 뒤 사용자의 모든 기기로 푸시한다. 발송했으면 True.
@@ -77,7 +61,7 @@ def notify(
         if record:
             notification_log_dao.create(
                 db, user_idx=user_idx, notification_type=ntype.value, title=title, body=body,
-                travel_idx=travel_idx,
+                travel_idx=travel_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx,
             )
             db.commit()
 
@@ -89,6 +73,9 @@ def notify(
             data["travel_idx"] = travel_idx
         if scenic_spot_idx is not None:
             data["scenic_spot_idx"] = scenic_spot_idx
+        # 직접 입력 승차권은 여행이 없어(travel_idx NULL) 승차권 목록으로 보내야 한다.
+        if ticket_idx is not None:
+            data["ticket_idx"] = ticket_idx
         result = fcm_service.send_push(db, user_idx, title, body, data=data)
 
         # 발송 흔적을 남긴다 — 풍경은 이력도 안 남아서 이 로그가 유일한 확인 수단이다.
@@ -155,6 +142,67 @@ def notify_travel_deleted(db: Session, user_idx: int, travel) -> bool:
         body=f"'{travel.title}'{_josa_i_ga(travel.title)} 일정에서 삭제되었어요",
         travel_idx=travel.travel_idx,
     )
+
+
+def notify_train_departure(
+    db: Session, user_idx: int, *, dep_station: str | None, dep_at, minutes_left: int,
+    train_label: str | None = None, seat_label: str | None = None,
+    travel_idx: int | None = None, schedule_idx: int | None = None,
+    ticket_idx: int | None = None,
+) -> bool:
+    """'곧 출발이에요' — 열차 출발 직전 발송. 출발 1건당 1회만 나간다(멱등).
+
+    추천 코스 승차권(schedule)과 직접 입력 승차권(ticket) 두 출처를 모두 받는다 —
+    둘 중 하나의 idx만 준다. 1분마다 도는 루프가 같은 열차를 10번 집으므로 이미 보낸
+    이력이 있으면 건너뛴다. 이 검사는 빠른 경로일 뿐이고, 최종 방어는 notification_log의
+    부분 유니크 인덱스가 맡는다(D-1과 같은 구조).
+
+    train_label은 추천 코스만 있다('KTX 101') — 직접 입력 승차권엔 열차번호·등급 입력칸이
+    없어 None이다. seat_label은 반대로 직접 입력에만 있을 수 있다('3호차 12A').
+    dep_station도 None일 수 있다(schedule.dep_station이 nullable) — 문구에서 빠진다.
+    """
+    if notification_log_dao.exists_for_departure(
+        db, user_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx
+    ):
+        return False
+    return notify(
+        db, user_idx, NotificationType.TRAIN_D10M,
+        title=_TITLE_TRAVEL,
+        body=_departure_body(dep_station, dep_at, minutes_left, train_label, seat_label),
+        travel_idx=travel_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx,
+    )
+
+
+def _departure_body(
+    dep_station: str | None, dep_at, minutes_left: int,
+    train_label: str | None, seat_label: str | None,
+) -> str:
+    """탑승 알림 본문 — "10분 뒤 서울역에서 KTX 101 열차가 출발해요 (3호차 12A) · 12:10 출발".
+
+    역명 표기가 출처마다 다르다 — schedule.dep_station은 '서울', ticket은 station을
+    조인해 '서울역'이다. 사용자에게 보이는 문구는 하나여야 하므로 '역'을 붙여 맞춘다.
+
+    역명이 없으면(schedule.dep_station은 nullable, 공백만 든 경우 포함) 그 자리를 통째로
+    뺀다. 다른 값으로 메우면 없는 역을 가리키게 되고, 남은 정보(남은 시간·열차·출발
+    시각)만으로도 '지금 나가야 한다'는 알림의 목적은 이룬다. 직접 입력 승차권은 station을
+    조인해 오므로 항상 있다.
+
+    분은 상수(10)가 아니라 **실제 남은 시간**을 쓴다. 서버가 잠깐 멈췄다 재개되면 남은
+    시간이 10분보다 짧은 열차에도 알림이 나가는데, 그 때 '10분 뒤'라고 하면 3분 남은
+    사람을 느긋하게 만든다. 출발 시각을 뒤에 같이 붙이는 것도 같은 이유다.
+    """
+    train = f"{train_label} 열차가" if train_label else "열차가"
+    # 공백만 든 역명은 없는 것으로 본다 — 안 그러면 "  역에서"가 만들어진다.
+    station = (dep_station or "").strip()
+    if station:
+        if not station.endswith("역"):
+            station = f"{station}역"
+        body = f"{minutes_left}분 뒤 {station}에서 {train} 출발해요"
+    else:
+        body = f"{minutes_left}분 뒤 {train} 출발해요"
+    if seat_label:
+        body += f" ({seat_label})"
+    return f"{body} · {dep_at:%H:%M} 출발"
 
 
 def _josa_i_ga(word: str) -> str:

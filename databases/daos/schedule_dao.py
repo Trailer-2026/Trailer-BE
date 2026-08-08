@@ -1,9 +1,10 @@
-from datetime import time
+from datetime import date, time
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from databases.models.schedule import Schedule
+from databases.models.travel import Travel
 
 
 def create(
@@ -106,6 +107,32 @@ def list_trains_by_travel(db: Session, travel_idx: int) -> list[Schedule]:
             Schedule.travel_idx == travel_idx,
             Schedule.kind == "train",
             Schedule.deleted_at.is_(None),
+        )
+        .order_by(Schedule.day_no, Schedule.sequence)
+        .all()
+    )
+
+
+def list_trains_covering(
+    db: Session, from_date: date, to_date: date
+) -> list[tuple[Schedule, Travel]]:
+    """[from_date, to_date]에 걸치는 여행의 기차 일정을 (일정, 여행)으로 조회 (soft-delete 제외).
+
+    출발 일시는 여행 시작일에서 day_no만큼 민 날짜 + start_time인데, 그 날짜 계산을
+    SQL에 넣으면 DB 방언을 탄다(Postgres의 date + int). 그래서 여기서는 **그 날짜를
+    포함할 수 있는 여행**까지만 넉넉히 좁히고, 정확한 출발 일시 판정은 호출측이
+    파이썬에서 한다(train_departure_service). 진행 중 여행은 많아야 수십 건이라
+    한 번 더 거르는 비용이 무시할 만하다.
+    """
+    return (
+        db.query(Schedule, Travel)
+        .join(Travel, Travel.travel_idx == Schedule.travel_idx)
+        .filter(
+            Schedule.kind == "train",
+            Schedule.deleted_at.is_(None),
+            Travel.deleted_at.is_(None),
+            Travel.start_date <= to_date,
+            Travel.end_date >= from_date,
         )
         .order_by(Schedule.day_no, Schedule.sequence)
         .all()
