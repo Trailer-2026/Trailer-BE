@@ -29,7 +29,13 @@ def register_token(db: Session, user_idx: int, token: str) -> None:
 def send_push(
     db: Session, user_idx: int, title: str, body: str, data: dict = None
 ) -> PushResultResponse:
-    """사용자의 모든 기기로 푸시를 발송하고, 죽은 토큰은 정리한다."""
+    """사용자의 모든 기기로 푸시를 발송하고, 죽은 토큰은 정리한다.
+
+    커밋은 죽은 토큰을 실제로 지웠을 때만 한다. 이 함수는 조회 요청 안에서도 불린다 —
+    풍경 알림은 이력을 남기지 않아(push_service.notify record=False)
+    GET /api/scenic-spots/nearby의 요청 세션에서 그대로 도는데, 남길 변경이 없는데도
+    커밋하면 조회가 쓰기 트랜잭션을 여는 꼴이 된다.
+    """
     tokens = fcm_token_dao.get_tokens_by_user(db, user_idx)
     if not tokens:
         return PushResultResponse(sent=0, failed=0)
@@ -37,5 +43,5 @@ def send_push(
     sent, failed, dead = firebase.send_multicast(tokens, title, body, data)
     if dead:
         fcm_token_dao.soft_delete_by_tokens(db, dead)
-    db.commit()
+        db.commit()
     return PushResultResponse(sent=sent, failed=failed)
