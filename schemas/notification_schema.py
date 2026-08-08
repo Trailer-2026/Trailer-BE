@@ -8,7 +8,13 @@ from core.enums import NotificationType
 class NotificationResponse(BaseModel):
     """알림 설정 화면의 on/off 스위치 상태."""
 
-    event_alarm: bool = Field(..., description="이벤트 알림 수신 여부", examples=[True])
+    event_alarm: bool = Field(
+        ...,
+        description="이벤트 알림 수신 여부 — 일정 알림(여행 추가·출발 하루 전·일정 삭제)과 "
+                    "열차 출발 10분 전 탑승 알림을 함께 켜고 끕니다. 탑승 알림용 스위치가 "
+                    "따로 있지 않습니다",
+        examples=[True],
+    )
     scenery_alarm: bool = Field(..., description="기차역 풍경 알림 수신 여부", examples=[False])
 
 
@@ -16,7 +22,10 @@ class NotificationUpdateRequest(BaseModel):
     """알림 설정 편집 — 보낸 항목만 바뀌고, 안 보낸 항목은 그대로 유지된다."""
 
     event_alarm: bool | None = Field(
-        None, description="이벤트 알림 수신 여부 (미포함 시 기존 값 유지)", examples=[True],
+        None,
+        description="이벤트 알림 수신 여부 (미포함 시 기존 값 유지) — 일정 알림(여행 추가·출발 "
+                    "하루 전·일정 삭제)과 열차 출발 10분 전 탑승 알림이 함께 켜지고 꺼집니다",
+        examples=[True],
     )
     scenery_alarm: bool | None = Field(
         None, description="기차역 풍경 알림 수신 여부 (미포함 시 기존 값 유지)", examples=[False],

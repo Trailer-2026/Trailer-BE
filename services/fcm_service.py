@@ -27,7 +27,8 @@ def register_token(db: Session, user_idx: int, token: str) -> None:
 
 
 def send_push(
-    db: Session, user_idx: int, title: str, body: str, data: dict = None
+    db: Session, user_idx: int, title: str, body: str, data: dict | None = None,
+    image_url: str | None = None,
 ) -> PushResultResponse:
     """사용자의 모든 기기로 푸시를 발송하고, 죽은 토큰은 정리한다.
 
@@ -40,7 +41,7 @@ def send_push(
     if not tokens:
         return PushResultResponse(sent=0, failed=0)
 
-    sent, failed, dead = firebase.send_multicast(tokens, title, body, data)
+    sent, failed, dead = firebase.send_multicast(tokens, title, body, data, image_url)
     # 실제로 지워진 행이 있을 때만 커밋한다. 죽은 토큰을 집었어도 UPDATE 가 0행일 수
     # 있다 — 같은 사용자에게 푸시가 동시에 나가면 양쪽이 같은 토큰을 죽은 것으로 보고,
     # 늦은 쪽은 이미 지워진 행을 다시 지우려 해 바꿀 게 없다.
