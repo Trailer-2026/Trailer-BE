@@ -64,22 +64,6 @@ from utils import gcs, kakao_local
 logger = logging.getLogger(__name__)
 
 
-def ensure_reels_columns() -> None:
-    """reels 에 홈 화면 카드용 컬럼(region·thumbnail_url)을 없으면 추가한다.
-
-    이 저장소엔 마이그레이션 도구가 없어 자체 provision 한다
-    (push_service.ensure_tables·train_stop 선례). 서버 기동 시 1회 호출.
-    """
-    from sqlalchemy import text
-
-    from databases.database import engine
-
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE reels ADD COLUMN IF NOT EXISTS region VARCHAR(50)"))
-        conn.execute(
-            text("ALTER TABLE reels ADD COLUMN IF NOT EXISTS thumbnail_url VARCHAR(200)")
-        )
-
 VIDEO_MAKER_DIR = Path(__file__).resolve().parent / "videoMaker"
 BGM_DIR = VIDEO_MAKER_DIR / "bgm"
 UPLOADS_DIR = VIDEO_MAKER_DIR / "assets" / "uploads"

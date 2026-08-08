@@ -12,9 +12,6 @@ from sqlalchemy.orm import Session
 
 from core.enums import NotificationType
 from databases.daos import notification_dao, notification_log_dao
-from databases.database import engine
-from databases.models.notification import Notification
-from databases.models.notification_log import NotificationLog
 from services import fcm_service
 from utils.timezone import now_kst
 
@@ -38,59 +35,6 @@ _NO_DEEPLINK = {NotificationType.TRAVEL_DELETED}
 # 알림 화면이 종류별 라벨로 쓰는 제목(디자인의 "풍경알림" 칩). OS 푸시의 제목이기도 하다.
 _TITLE_TRAVEL = "일정알림"
 _TITLE_SCENERY = "풍경알림"
-
-
-def ensure_tables() -> None:
-    """알림 도메인의 두 테이블(설정 notification, 이력 notification_log)을 없으면 만든다.
-
-    이 저장소엔 마이그레이션 도구가 없어 train_stop과 동일하게 자체 provision한다
-    (services/train_stop_service._ensure_table 선례). 서버 기동 시 1회 호출.
-    설정 테이블까지 여기서 챙기는 이유는, 운영 DB에 수동 DDL을 안 넣으면 알림 설정
-    조회가 그대로 500이 나기 때문이다. 이미 있으면(checkfirst) 아무 일도 안 한다.
-    """
-    # FK로 참조하는 모델(user, travel)이 같은 MetaData에 올라와 있지 않으면 DDL 컴파일이
-    # NoReferencedTableError로 죽는다 — 호출 순서에 기대지 않게 여기서 보장한다.
-    from databases.models.travel import Travel  # noqa: F401
-    from databases.models.user import User  # noqa: F401
-
-    # FK 대상이 되는 schedule·ticket도 같은 이유로 MetaData에 올려 둔다.
-    from databases.models.schedule import Schedule  # noqa: F401
-    from databases.models.ticket import Ticket  # noqa: F401
-
-    Notification.__table__.create(bind=engine, checkfirst=True)
-    NotificationLog.__table__.create(bind=engine, checkfirst=True)
-    _ensure_departure_columns()
-
-
-def _ensure_departure_columns() -> None:
-    """이미 만들어져 있는 notification_log에 TRAIN_D10M용 컬럼·인덱스를 덧붙인다.
-
-    위의 create(checkfirst=True)는 **테이블이 이미 있으면 아무것도 하지 않는다** —
-    운영 DB엔 notification_log가 이미 있어서 새 컬럼이 영영 안 생긴다. reels의
-    region·thumbnail_url과 같은 방식으로 여기서 ALTER를 따로 건다
-    (video_service.ensure_reels_columns 선례).
-    """
-    from sqlalchemy import text
-
-    with engine.begin() as conn:
-        conn.execute(text(
-            "ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS schedule_idx INTEGER "
-            "REFERENCES schedule(schedule_idx)"
-        ))
-        conn.execute(text(
-            "ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS ticket_idx INTEGER "
-            "REFERENCES ticket(ticket_idx)"
-        ))
-        # 중복 발송의 최종 방어 — 모델의 __table_args__와 같은 인덱스지만, 테이블이
-        # 이미 있으면 create가 안 만들어 주므로 여기서도 건다.
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_log_train_schedule "
-            "ON notification_log (user_idx, schedule_idx) WHERE type = 'TRAIN_D10M'"
-        ))
-        conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_log_train_ticket "
-            "ON notification_log (user_idx, ticket_idx) WHERE type = 'TRAIN_D10M'"
-        ))
 
 
 def notify(

@@ -13,24 +13,9 @@ from sqlalchemy.orm import Session
 
 from core.exceptions.custom import BadRequestException, NotFoundException
 from databases.daos import station_dao, ticket_dao
-from databases.database import engine
 from databases.models.ticket import Ticket
 from schemas.ticket_schema import TicketCreateRequest, TicketListResponse, TicketResponse
 from utils.timezone import now_kst
-
-
-def ensure_tables() -> None:
-    """ticket 테이블을 없으면 만든다. 서버 기동 시 1회 호출.
-
-    이 저장소엔 마이그레이션 도구가 없어 notification·train_stop과 동일하게 자체
-    provision한다(services/push_service.ensure_tables 선례). 이미 있으면 아무 일도 안 한다.
-    """
-    # FK로 참조하는 모델(user, station)이 같은 MetaData에 올라와 있지 않으면 DDL 컴파일이
-    # NoReferencedTableError로 죽는다 — 호출 순서에 기대지 않게 여기서 보장한다.
-    from databases.models.station import Station  # noqa: F401
-    from databases.models.user import User  # noqa: F401
-
-    Ticket.__table__.create(bind=engine, checkfirst=True)
 
 
 def create_ticket(db: Session, user, req: TicketCreateRequest) -> TicketResponse:
