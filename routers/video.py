@@ -13,6 +13,8 @@ from schemas.video_schema import (
     BgmTrackResponse,
     ReelsRecommendResponse,
     ReelsShareResponse,
+    ReelsTitleUpdateRequest,
+    ReelsTitleUpdateResponse,
     VideoEditResponse,
     VideoRenderStatusResponse,
 )
@@ -267,6 +269,31 @@ def recommend_reels(
 ):
     reels = video_service.recommend_reels(db, exclude, current_user, limit)
     return CommonResponse.success_response("릴스 추천 목록 조회 성공", data=reels)
+
+
+@router.patch(
+    "/reels/{reels_idx}/title",
+    summary="릴스 제목 수정 (reels_idx)",
+    description="본인이 올린 릴스(reels_idx)의 제목을 바꿉니다. 영상은 그대로 두고 제목만 "
+                "교체하므로 릴스 PK·영상 url·썸네일은 바뀌지 않고, 추천 피드·마이페이지 "
+                "목록에는 바로 새 제목이 내려갑니다. title 에 빈 문자열이나 null 을 보내면 "
+                "제목 없는(null) 릴스가 됩니다(렌더할 때 제목을 비운 것과 같은 상태). "
+                "제목이 100자를 넘으면 422를 반환합니다.\n\n"
+                "- 404: 릴스 없음 (남의 릴스도 존재 여부를 알리지 않으려고 403이 아닌 404)\n"
+                "- 400: 아직 렌더가 끝나지 않은 릴스\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[ReelsTitleUpdateResponse],
+)
+def update_reels_title(
+    reels_idx: int,
+    req: ReelsTitleUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = video_service.update_reels_title(
+        db, reels_idx, current_user.user_idx, req.title
+    )
+    return CommonResponse.success_response("릴스 제목 수정 성공", data=result)
 
 
 @router.get(
