@@ -79,6 +79,26 @@ class MyReelsListResponse(BaseModel):
     )
 
 
+class ReelsTitleUpdateRequest(BaseModel):
+    """릴스 제목 수정 요청 — 제목만 바꾼다."""
+
+    title: str | None = Field(
+        ...,
+        max_length=100,
+        description="새 릴스 제목 (100자 이내). 빈 문자열이나 null 을 보내면 제목 없는 릴스가 됩니다",
+        examples=["부산 2박 3일"],
+    )
+
+
+class ReelsTitleUpdateResponse(BaseModel):
+    """릴스 제목 수정 결과."""
+
+    reels_idx: int = Field(..., description="수정한 릴스 PK", examples=[42])
+    title: str | None = Field(
+        None, description="수정된 릴스 제목 (제목을 지웠으면 null)", examples=["부산 2박 3일"]
+    )
+
+
 class ReelsShareResponse(BaseModel):
     """릴스 공유 링크."""
 

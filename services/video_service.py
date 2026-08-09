@@ -58,6 +58,7 @@ from schemas.video_schema import (
     MyReelsListResponse,
     ReelsRecommendResponse,
     ReelsShareResponse,
+    ReelsTitleUpdateResponse,
 )
 from utils import gcs, kakao_local
 
@@ -348,6 +349,24 @@ def _to_reels_cards(db: Session, user, rows) -> list[MyReelsItem]:
         )
         for reels, nickname, profile_image in rows
     ]
+
+
+# --------------------------------------------------------------------------- #
+# 릴스 제목 수정
+# --------------------------------------------------------------------------- #
+def update_reels_title(
+    db: Session, reels_idx: int, user_idx: int, title: str | None
+) -> ReelsTitleUpdateResponse:
+    """본인 릴스의 제목만 바꾼다. 남의 릴스·없는 릴스는 404, 렌더 중이면 400.
+
+    제목 정규화는 렌더 시작 때와 같은 _clean_title 을 쓴다 — 공백만 보내면 제목
+    없음(None)이 되어, 처음부터 title 없이 렌더한 릴스와 같은 상태가 된다.
+    영상을 건드리지 않으므로 url·썸네일·PK 는 그대로다.
+    """
+    reels = _load_ready_reels(db, reels_idx, user_idx)
+    reels_dao.update_title(db, reels, _clean_title(title))
+    db.commit()
+    return ReelsTitleUpdateResponse(reels_idx=reels.reels_idx, title=reels.title)
 
 
 # --------------------------------------------------------------------------- #

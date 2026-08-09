@@ -56,6 +56,17 @@ def update_url(db: Session, reels: Reels, url: str, thumbnail_url: str | None) -
     return reels
 
 
+def update_title(db: Session, reels: Reels, title: str | None) -> Reels:
+    """릴스 제목 교체 (flush만 — commit은 서비스가).
+
+    None 을 그대로 써서 '제목 없음'으로 되돌릴 수 있다(렌더 때 빈 title 을 준 릴스와
+    같은 상태). 정규화·길이 검증은 서비스·스키마가 이미 끝낸 값으로 들어온다.
+    """
+    reels.title = title
+    db.flush()
+    return reels
+
+
 def soft_delete(db: Session, reels: Reels) -> None:
     """릴스 소프트 삭제 (flush만 — commit은 서비스가)."""
     reels.deleted_at = func.now()
