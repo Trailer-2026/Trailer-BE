@@ -309,13 +309,14 @@ def update_reels_title(
                 "되고, 비우면 제목 없는(null) 릴스가 됩니다. 대표 프레임(thumbnail_url)은 "
                 "서버가 뽑아 함께 저장하며 실패하면 null 입니다. 지역 태그(region)는 좌표를 "
                 "알 수 없어 항상 null 이라 홈 카드에서는 지역 핀이 숨겨집니다.\n\n"
-                "- 400: 영상 파일이 아니거나(확장자 기준) 손상된 파일, 빈 파일, 300MB 초과\n"
+                "- 400: 영상 파일이 아니거나(확장자 기준) 손상된 파일, 빈 파일, 100MB 초과\n"
+                "- 413: 100MB 초과 (앞단 nginx 가 끊는 경우 — 이 응답은 공통 봉투가 아닙니다)\n"
                 "- 401: 인증 필요\n"
                 "- 502: 영상 저장소(GCS) 업로드 실패",
     response_model=CommonResponse[ReelsUploadResponse],
 )
 def upload_reels_video(
-    video: UploadFile = File(..., description="업로드할 영상 파일 (mp4/mov/webm 등, 최대 300MB)"),
+    video: UploadFile = File(..., description="업로드할 영상 파일 (mp4/mov/webm 등, 최대 100MB)"),
     title: str = _title_form(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
