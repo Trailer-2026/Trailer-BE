@@ -99,6 +99,18 @@ class ReelsTitleUpdateResponse(BaseModel):
     )
 
 
+class ReelsUploadResponse(BaseModel):
+    """직접 만든 영상 업로드 결과 — 렌더 없이 바로 완성된 릴스가 된다."""
+
+    reels_idx: int = Field(..., description="생성된 릴스 PK", examples=[42])
+    url: str = Field(..., description="업로드된 영상의 GCS 공개 URL (릴스 재생 주소)")
+    thumbnail_url: str | None = Field(
+        None, description="대표 프레임 URL (추출 실패 시 null — 앱은 영상 첫 프레임으로 폴백)"
+    )
+    title: str | None = Field(None, description="릴스 제목 (비워서 올렸으면 null)", examples=["부산 2박 3일"])
+    duration_seconds: float = Field(..., description="업로드한 영상 길이(초)")
+
+
 class ReelsShareResponse(BaseModel):
     """릴스 공유 링크."""
 
