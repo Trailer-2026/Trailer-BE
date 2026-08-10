@@ -5,6 +5,7 @@
 station 테이블에서 채운다. 추천 관광지/숙소 대표 이미지는 schedule.image_url에 저장한다.
 숙소는 시각이 없어 'ⓐ 그날 마지막 방문 종료~다음날 첫 일정 시작'으로 잡는다.
 """
+import logging
 from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,7 @@ from schemas.travel_schema import (
     ScheduleCreateRequest,
     ScheduleUpdateRequest,
     TrainTicketResponse,
+    TravelCoverImageResponse,
     TravelDayGroup,
     TravelDetailResponse,
     TravelCard,
@@ -28,12 +30,44 @@ from schemas.travel_schema import (
     TravelScheduleItem,
     TravelTicketsResponse,
 )
-from utils import plan_cache
+from utils import gcs, plan_cache
 from utils.timezone import now_kst
+
+logger = logging.getLogger(__name__)
 
 _LODGING_CHECKIN = time(21, 0)   # 마지막 방문 종료를 못 구할 때 체크인 기본값
 _LODGING_CHECKOUT = time(9, 0)   # 다음날 첫 일정 시작을 못 구할 때 체크아웃 기본값
 _DEFAULT_TIME = time(9, 0)       # 방문/기차 시각이 비어 있을 때 안전 기본값
+
+# 지역별 기본 커버 사진 — 지정 사진도, 일정 이미지도 없을 때 카드가 비지 않게 쓴다.
+# 직접 만든 여행이 그렇다: 장소 검색이 카카오 로컬이라 이미지가 없어 schedule.image_url이 늘 빈다.
+# 값은 AI 추천 커버와 같은 출처(한국관광공사 TourAPI firstimage)라 새로 관리할 게 없다 —
+# 링크가 죽으면 이 상수만 갈아끼운다. 키는 travel.region('역' 떼기 전 도착역명 기준).
+_DEFAULT_COVER_BY_REGION = {
+    "서울": "https://tong.visitkorea.or.kr/cms/resource/98/3487598_image2_1.jpg",   # 경복궁
+    "부산": "https://tong.visitkorea.or.kr/cms/resource/34/3090534_image2_1.JPG",   # 해운대해수욕장
+    "대구": "http://tong.visitkorea.or.kr/cms/resource/56/3572056_image2_1.jpg",    # 팔공산 케이블카
+    "인천": "https://tong.visitkorea.or.kr/cms/resource/94/3518594_image2_1.jpg",   # 월미도
+    "광주": "https://tong.visitkorea.or.kr/cms/resource/66/3495266_image2_1.jpg",   # 무등산국립공원
+    "대전": "https://tong.visitkorea.or.kr/cms/resource_photo/22/3514122_image2_1.jpg",  # 한밭수목원
+    "울산": "http://tong.visitkorea.or.kr/cms/resource/21/3008621_image2_1.jpg",    # 태화강
+    "강릉": "https://tong.visitkorea.or.kr/cms/resource/52/3501452_image2_1.jpg",   # 강릉 경포대
+    "동해": "http://tong.visitkorea.or.kr/cms/resource/83/2921483_image2_1.jpg",    # 추암 촛대바위
+    "춘천": "https://tong.visitkorea.or.kr/cms/resource/45/4067545_image2_1.jpg",   # 남이섬
+    "원주": "https://tong.visitkorea.or.kr/cms/resource/35/3332635_image2_1.jpg",   # 소금산 출렁다리
+    "여수": "http://tong.visitkorea.or.kr/cms/resource/34/3019934_image2_1.jpg",    # 오동도 등대
+    "순천": "https://tong.visitkorea.or.kr/cms/resource/14/4088614_image2_1.jpg",   # 순천만습지
+    "목포": "https://tong.visitkorea.or.kr/cms/resource/11/4067011_image2_1.JPG",   # 유달산
+    "전주": "https://tong.visitkorea.or.kr/cms/resource_photo/45/3365745_image2_1.jpg",  # 전주 경기전
+    "경주": "https://tong.visitkorea.or.kr/cms/resource/70/3506170_image2_1.jpg",   # 경주 불국사
+    "포항": "http://tong.visitkorea.or.kr/cms/resource/98/3410998_image2_1.jpg",    # 호미곶 등대
+    "안동": "https://tong.visitkorea.or.kr/cms/resource/62/4059762_image2_1.jpg",   # 안동 하회마을
+    "진주": "https://tong.visitkorea.or.kr/cms/resource/65/4062165_image2_1.JPG",   # 진주성
+    "천안": "https://tong.visitkorea.or.kr/cms/resource/21/3450021_image2_1.jpg",   # 독립기념관
+    "제주": "https://tong.visitkorea.or.kr/cms/resource/43/4094043_image2_1.jpg",   # 천지연폭포
+}
+# 목록에 없는 지역·지역 미입력용. 기차 여행이라 역 사진으로 둔다(정동진역).
+_DEFAULT_COVER = "https://tong.visitkorea.or.kr/cms/resource/12/4093712_image2_1.jpg"
 _TITLE_MAX = 100                 # travel.title 컬럼 길이 — 자동 생성 제목이 넘으면 INSERT가 깨진다
 # 편집 시 null로 지우면 안 되는 NOT NULL 컬럼(schedule) — 명시적 null 요청을 400으로 막는다.
 _NON_NULL_EDIT_FIELDS = ("title", "start_time", "end_time", "latitude", "longitude")
@@ -173,6 +207,57 @@ def rename_travel(db: Session, user, travel_idx: int, title: str) -> TravelRespo
     )
 
 
+def set_cover_image(
+    db: Session, user, travel_idx: int, data: bytes, content_type: str | None, filename: str | None,
+) -> TravelCoverImageResponse:
+    """여행 대표 사진 지정·교체 — 업로드 이미지를 GCS에 올려 travel.cover_image_url에 박는다.
+
+    직접 만든 여행은 일정에 이미지가 없어 폴백(첫 일정 image_url)이 비므로 이 지정이 유일한
+    썸네일이다. AI 추천으로 저장한 여행에도 같은 엔드포인트로 덮어쓸 수 있다.
+    """
+    travel = _owned_travel(db, user, travel_idx)
+    previous = travel.cover_image_url
+    url = gcs.upload_image(f"travel/{travel_idx}", data, content_type, filename)
+    travel_dao.update_cover_image(db, travel, url)
+    db.commit()
+    _drop_uploaded_image(previous)  # 교체 성공(커밋) 뒤에 옛 사진을 지운다 — 실패 시엔 남겨야 한다
+    return TravelCoverImageResponse(travel_idx=travel.travel_idx, cover_image_url=url)
+
+
+def delete_cover_image(db: Session, user, travel_idx: int) -> TravelCoverImageResponse:
+    """대표 사진 지정 해제 — 지우면 첫 일정 이미지, 그것도 없으면 지역 기본 사진으로 돌아간다."""
+    travel = _owned_travel(db, user, travel_idx)
+    previous = travel.cover_image_url
+    travel_dao.update_cover_image(db, travel, None)
+    db.commit()
+    _drop_uploaded_image(previous)
+    return TravelCoverImageResponse(
+        travel_idx=travel.travel_idx,
+        cover_image_url=schedule_dao.cover_image(db, travel_idx) or _default_cover(travel.region),
+    )
+
+
+def _default_cover(region: str | None) -> str:
+    """지역별 기본 커버 사진. region은 '부산역'(추천 저장)·'부산'(직접 입력) 두 형태라 접미사를 뗀다."""
+    return _DEFAULT_COVER_BY_REGION.get((region or "").strip().removesuffix("역"), _DEFAULT_COVER)
+
+
+def _drop_uploaded_image(url: str | None) -> None:
+    """우리 버킷에 올린 이미지면 객체까지 지운다(외부 URL·None은 무시).
+
+    커밋 뒤에 도는 뒷정리라 무슨 일이 있어도 예외를 올리지 않는다 — 여기서 502가 나면
+    (버킷 설정 문제 등) DB에는 이미 반영된 요청이 실패한 것처럼 보인다. 고아 객체가 남는 게 낫다.
+    """
+    if not url:
+        return
+    try:
+        path = gcs.object_path_from_url(url)
+        if path:
+            gcs.delete_object(path)
+    except Exception:  # noqa: BLE001  뒷정리 실패는 삼킨다
+        logger.warning("대표 사진 객체 정리 실패(무시): %s", url)
+
+
 def delete_travel(db: Session, user, travel_idx: int) -> None:
     """여행 소프트 삭제 — 그 여행의 일정 항목도 함께 삭제한다. 본인 여행이 아니면 404.
 
@@ -203,7 +288,10 @@ def current_travel(db: Session, user) -> HomeTravelCard | None:
         travel_idx=chosen.travel_idx, title=chosen.title,
         start_date=chosen.start_date, end_date=chosen.end_date,
         status=_effective_status(chosen.start_date, chosen.end_date, today),
-        cover_image_url=schedule_dao.cover_image(db, chosen.travel_idx),
+        # 지정 사진 → 첫 일정 이미지(AI 추천 여행) → 지역 기본 사진 순. 카드 사진은 절대 비지 않는다.
+        cover_image_url=chosen.cover_image_url
+        or schedule_dao.cover_image(db, chosen.travel_idx)
+        or _default_cover(chosen.region),
     )
 
 
@@ -228,7 +316,7 @@ def all_travels(db: Session, user) -> TravelListResponse:
             travel_idx=t.travel_idx, title=t.title,
             start_date=t.start_date, end_date=t.end_date,
             status=_effective_status(t.start_date, t.end_date, today),
-            cover_image_url=covers.get(t.travel_idx),
+            cover_image_url=t.cover_image_url or covers.get(t.travel_idx) or _default_cover(t.region),
             liked=t.travel_idx in liked,
         )
         for t in upcoming + past
@@ -253,7 +341,7 @@ def past_travels(db: Session, user) -> PastTravelListResponse:
             travel_idx=t.travel_idx, title=t.title,
             start_date=t.start_date, end_date=t.end_date,
             status="COMPLETED",
-            cover_image_url=covers.get(t.travel_idx),
+            cover_image_url=t.cover_image_url or covers.get(t.travel_idx) or _default_cover(t.region),
             liked=t.travel_idx in liked,
         )
         for t in travels
@@ -285,6 +373,10 @@ def travel_detail(db: Session, user, travel_idx: int) -> TravelDetailResponse:
         travel_idx=travel.travel_idx, title=travel.title,
         start_date=travel.start_date, end_date=travel.end_date, region=travel.region,
         status=_effective_status(travel.start_date, travel.end_date, today),
+        # 일정 이미지 폴백은 이미 읽어 둔 schedules에서 고른다(정렬이 보장돼 별도 쿼리가 필요 없다).
+        cover_image_url=travel.cover_image_url
+        or next((s.image_url for s in schedules if s.image_url), None)
+        or _default_cover(travel.region),
         days=[groups[k] for k in sorted(groups)],
     )
 

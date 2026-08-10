@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.orm import Session
 
 from core.response import CommonResponse
@@ -10,6 +10,7 @@ from schemas.travel_schema import (
     PastTravelListResponse,
     ScheduleCreateRequest,
     ScheduleUpdateRequest,
+    TravelCoverImageResponse,
     TravelCreateRequest,
     TravelDetailResponse,
     TravelLikeResponse,
@@ -181,6 +182,54 @@ def rename_travel(
 ):
     result = travel_service.rename_travel(db, current_user, travel_idx, req.title)
     return CommonResponse.success_response("여행 이름 변경 성공", data=result)
+
+
+@router.patch(
+    "/{travel_idx}/cover-image",
+    summary="여행 대표 사진 지정·변경",
+    description="여행 카드 썸네일로 쓸 대표 사진 이미지 파일을 업로드(multipart/form-data)해 "
+                "지정합니다. 이미 지정돼 있으면 새 사진으로 교체하고 옛 사진은 저장소에서 "
+                "삭제합니다.\n\n"
+                "썸네일 우선순위는 **지정한 대표 사진 → 여행 첫 일정의 대표 이미지(AI 추천으로 "
+                "저장한 여행) → 지역 기본 사진**입니다. 직접 만든 여행은 일정에 이미지가 없어 "
+                "지역 기본 사진이 뜨는데, 이 API로 사용자 사진을 올리면 그걸 덮어씁니다. "
+                "AI 추천으로 저장한 여행의 사진을 바꾸는 데도 씁니다.\n\n"
+                "- 400: 이미지 파일이 아니거나 빈 파일, 10MB 초과\n"
+                "- 404: 존재하지 않거나 본인 여행이 아님\n"
+                "- 401: 인증 필요\n"
+                "- 502: 이미지 저장소(GCS) 업로드 실패",
+    response_model=CommonResponse[TravelCoverImageResponse],
+)
+def set_travel_cover_image(
+    travel_idx: int,
+    image: UploadFile = File(..., description="대표 사진 이미지 파일 (jpg/png/webp 등, 10MB 이하)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = travel_service.set_cover_image(
+        db, current_user, travel_idx, image.file.read(), image.content_type, image.filename
+    )
+    return CommonResponse.success_response("대표 사진 지정 성공", data=result)
+
+
+@router.delete(
+    "/{travel_idx}/cover-image",
+    summary="여행 대표 사진 삭제",
+    description="지정한 대표 사진을 해제하고 저장소에서도 지웁니다. 해제하면 썸네일은 원래 "
+                "규칙(첫 일정의 대표 이미지 → 지역 기본 사진)으로 돌아가고, 응답의 "
+                "`cover_image_url`에 그 복귀한 URL이 담깁니다. 지정된 사진이 없어도 "
+                "성공(멱등)입니다.\n\n"
+                "- 404: 존재하지 않거나 본인 여행이 아님\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[TravelCoverImageResponse],
+)
+def delete_travel_cover_image(
+    travel_idx: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = travel_service.delete_cover_image(db, current_user, travel_idx)
+    return CommonResponse.success_response("대표 사진 삭제 성공", data=result)
 
 
 @router.delete(

@@ -48,6 +48,13 @@ def update_title(db: Session, travel: Travel, title: str) -> Travel:
     return travel
 
 
+def update_cover_image(db: Session, travel: Travel, url: str | None) -> Travel:
+    """대표 사진 URL 지정·해제(None). flush만 하고 commit은 서비스가 한다."""
+    travel.cover_image_url = url
+    db.flush()
+    return travel
+
+
 def soft_delete(db: Session, travel: Travel) -> None:
     """여행 소프트 삭제 (deleted_at 세팅). flush만, commit은 서비스.
 
