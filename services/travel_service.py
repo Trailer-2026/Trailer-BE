@@ -46,21 +46,21 @@ _DEFAULT_TIME = time(9, 0)       # 방문/기차 시각이 비어 있을 때 안
 _DEFAULT_COVER_BY_REGION = {
     "서울": "https://tong.visitkorea.or.kr/cms/resource/98/3487598_image2_1.jpg",   # 경복궁
     "부산": "https://tong.visitkorea.or.kr/cms/resource/34/3090534_image2_1.JPG",   # 해운대해수욕장
-    "대구": "http://tong.visitkorea.or.kr/cms/resource/56/3572056_image2_1.jpg",    # 팔공산 케이블카
+    "대구": "https://tong.visitkorea.or.kr/cms/resource/56/3572056_image2_1.jpg",   # 팔공산 케이블카
     "인천": "https://tong.visitkorea.or.kr/cms/resource/94/3518594_image2_1.jpg",   # 월미도
     "광주": "https://tong.visitkorea.or.kr/cms/resource/66/3495266_image2_1.jpg",   # 무등산국립공원
     "대전": "https://tong.visitkorea.or.kr/cms/resource_photo/22/3514122_image2_1.jpg",  # 한밭수목원
-    "울산": "http://tong.visitkorea.or.kr/cms/resource/21/3008621_image2_1.jpg",    # 태화강
+    "울산": "https://tong.visitkorea.or.kr/cms/resource/21/3008621_image2_1.jpg",   # 태화강
     "강릉": "https://tong.visitkorea.or.kr/cms/resource/52/3501452_image2_1.jpg",   # 강릉 경포대
-    "동해": "http://tong.visitkorea.or.kr/cms/resource/83/2921483_image2_1.jpg",    # 추암 촛대바위
+    "동해": "https://tong.visitkorea.or.kr/cms/resource/83/2921483_image2_1.jpg",   # 추암 촛대바위
     "춘천": "https://tong.visitkorea.or.kr/cms/resource/45/4067545_image2_1.jpg",   # 남이섬
     "원주": "https://tong.visitkorea.or.kr/cms/resource/35/3332635_image2_1.jpg",   # 소금산 출렁다리
-    "여수": "http://tong.visitkorea.or.kr/cms/resource/34/3019934_image2_1.jpg",    # 오동도 등대
+    "여수": "https://tong.visitkorea.or.kr/cms/resource/34/3019934_image2_1.jpg",   # 오동도 등대
     "순천": "https://tong.visitkorea.or.kr/cms/resource/14/4088614_image2_1.jpg",   # 순천만습지
     "목포": "https://tong.visitkorea.or.kr/cms/resource/11/4067011_image2_1.JPG",   # 유달산
     "전주": "https://tong.visitkorea.or.kr/cms/resource_photo/45/3365745_image2_1.jpg",  # 전주 경기전
     "경주": "https://tong.visitkorea.or.kr/cms/resource/70/3506170_image2_1.jpg",   # 경주 불국사
-    "포항": "http://tong.visitkorea.or.kr/cms/resource/98/3410998_image2_1.jpg",    # 호미곶 등대
+    "포항": "https://tong.visitkorea.or.kr/cms/resource/98/3410998_image2_1.jpg",   # 호미곶 등대
     "안동": "https://tong.visitkorea.or.kr/cms/resource/62/4059762_image2_1.jpg",   # 안동 하회마을
     "진주": "https://tong.visitkorea.or.kr/cms/resource/65/4062165_image2_1.JPG",   # 진주성
     "천안": "https://tong.visitkorea.or.kr/cms/resource/21/3450021_image2_1.jpg",   # 독립기념관
