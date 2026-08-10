@@ -15,6 +15,7 @@ from schemas.video_schema import (
     ReelsShareResponse,
     ReelsTitleUpdateRequest,
     ReelsTitleUpdateResponse,
+    ReelsUploadResponse,
     VideoEditResponse,
     VideoRenderStatusResponse,
 )
@@ -294,6 +295,33 @@ def update_reels_title(
         db, reels_idx, current_user.user_idx, req.title
     )
     return CommonResponse.success_response("릴스 제목 수정 성공", data=result)
+
+
+@router.post(
+    "/reels/upload",
+    summary="내 영상 업로드 (직접 만든 영상을 릴스로 등록)",
+    description="사용자가 직접 만든 영상 파일을 그대로 릴스로 올립니다. 렌더링을 거치지 않아 "
+                "진행률 폴링 없이 응답 시점에 이미 완성된 릴스이며(추천 피드·마이페이지에 "
+                "바로 뜹니다), 이후 제목 수정·구간 삭제·이미지 삽입·다운로드·공유는 렌더로 "
+                "만든 릴스와 똑같이 reels_idx 로 씁니다. title 을 주면 그 값이 릴스 제목이 "
+                "되고, 비우면 제목 없는(null) 릴스가 됩니다. 대표 프레임(thumbnail_url)은 "
+                "서버가 뽑아 함께 저장하며 실패하면 null 입니다. 지역 태그(region)는 좌표를 "
+                "알 수 없어 항상 null 이라 홈 카드에서는 지역 핀이 숨겨집니다.\n\n"
+                "- 400: 영상 파일이 아니거나(확장자 기준) 손상된 파일, 빈 파일, 300MB 초과\n"
+                "- 401: 인증 필요\n"
+                "- 502: 영상 저장소(GCS) 업로드 실패",
+    response_model=CommonResponse[ReelsUploadResponse],
+)
+def upload_reels_video(
+    video: UploadFile = File(..., description="업로드할 영상 파일 (mp4/mov/webm 등, 최대 300MB)"),
+    title: str = _title_form(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = video_service.upload_reels(
+        db, current_user.user_idx, video.filename or "", video.file, title
+    )
+    return CommonResponse.success_response("영상 업로드 성공", data=result)
 
 
 @router.get(

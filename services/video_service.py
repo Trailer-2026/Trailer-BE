@@ -21,6 +21,7 @@ import io
 import json
 import logging
 import math
+import mimetypes
 import os
 import re
 import shutil
@@ -59,6 +60,7 @@ from schemas.video_schema import (
     ReelsRecommendResponse,
     ReelsShareResponse,
     ReelsTitleUpdateResponse,
+    ReelsUploadResponse,
 )
 from utils import gcs, kakao_local
 
@@ -537,17 +539,20 @@ def _run_ffmpeg(args: list[str]) -> None:
 THUMBNAIL_AT_SECONDS = 3.5
 
 
-def _publish_thumbnail(video_path: Path) -> str | None:
+def _publish_thumbnail(video_path: Path, at_seconds: float = THUMBNAIL_AT_SECONDS) -> str | None:
     """영상에서 대표 프레임 한 장을 뽑아 버킷에 올린다 → 공개 URL. 실패하면 None.
 
     홈 화면 카드가 영상을 받지 않고 그릴 수 있게 하는 부가 정보라, ffmpeg 이 없거나
-    영상이 THUMBNAIL_AT_SECONDS 보다 짧아 프레임이 안 나와도 렌더/편집 자체는
+    영상이 at_seconds 보다 짧아 프레임이 안 나와도 렌더/편집 자체는
     성공시켜야 한다 — 그래서 여기서 예외를 삼키고 경고만 남긴다.
+
+    at_seconds 는 인트로가 붙는 렌더 결과 기준값이 기본이다. 사용자가 직접 올린
+    영상엔 인트로가 없고 3.5초보다 짧을 수도 있어 업로드 경로가 값을 낮춰 준다.
     """
     target = video_path.with_name(f"{video_path.stem}_thumb.jpg")
     try:
         _run_ffmpeg([
-            "-ss", f"{THUMBNAIL_AT_SECONDS:.1f}", "-i", str(video_path),
+            "-ss", f"{at_seconds:.1f}", "-i", str(video_path),
             "-frames:v", "1", "-vf", "scale=540:-2", "-q:v", "3", str(target),
         ])
         return gcs.upload_bytes(
@@ -771,6 +776,93 @@ def insert_image(
             str(target),
         ])
         return _edit_result(db, reels, started, target)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- #
+# 내 영상 직접 업로드 — 렌더를 거치지 않고 완성 영상을 그대로 릴스로 등록한다.
+# --------------------------------------------------------------------------- #
+# 업로드 상한. 디스크·버킷을 지키는 선이라 넉넉하되 무제한은 아니다.
+MAX_UPLOAD_BYTES = 300 * 1024 * 1024
+
+
+def _save_upload(file_obj, target: Path) -> None:
+    """업로드 스트림을 임시 파일로 흘려 담는다 — 통째로 메모리에 올리지 않는다."""
+    written = 0
+    with target.open("wb") as out:
+        while chunk := file_obj.read(DOWNLOAD_CHUNK_BYTES):
+            written += len(chunk)
+            if written > MAX_UPLOAD_BYTES:
+                raise BadRequestException(
+                    f"영상이 너무 큽니다 (최대 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB)."
+                )
+            out.write(chunk)
+    if not written:
+        raise BadRequestException("빈 파일입니다.")
+
+
+def _upload_content_type(filename: str) -> str:
+    """업로드 파일명 확장자로 content-type 을 정한다. 영상이 아니면 400.
+
+    확장자를 mp4 로 통일하지 않는 이유: mov/webm 을 video/mp4 로 올리면 브라우저가
+    재생을 거부한다. mp4 재인코딩은 업로드마다 ffmpeg 이 도는 값이라 하지 않는다.
+    """
+    suffix = Path(filename or "").suffix.lower()
+    content_type = mimetypes.guess_type(f"x{suffix}")[0] or ""
+    if not content_type.startswith("video/"):
+        raise BadRequestException(f"영상 파일이 아닙니다: {filename or '(파일명 없음)'}")
+    return content_type
+
+
+def upload_reels(
+    db: Session, user_idx: int, filename: str, file_obj, title: str | None
+) -> ReelsUploadResponse:
+    """사용자가 직접 만든 영상을 릴스로 등록한다 (렌더 없음 → 진행률 폴링도 없다).
+
+    렌더 경로와 달리 자리표 행(PENDING_REELS_URL)을 미리 만들지 않는다 — 업로드는
+    요청 안에서 끝나 reels_idx 를 앞당겨 발급할 이유가 없고, 실패하면 남길 행도 없다.
+    지역 태그(region)는 좌표를 알 수 없어 null 이다(홈 카드가 지역 핀을 숨긴다).
+    """
+    content_type = _upload_content_type(filename)
+    if shutil.which("ffprobe") is None:  # 서버 설정 문제 — 아래 400 번역에 섞이면 안 된다
+        raise ExternalServiceException("ffprobe를 찾을 수 없습니다 (PATH 확인).")
+
+    work_dir = _edit_workspace()
+    try:
+        source = work_dir / f"upload{Path(filename).suffix.lower()}"
+        _save_upload(file_obj, source)
+        try:
+            info = _ffprobe_video(source)
+        except ExternalServiceException as error:  # ffprobe 가 있는데 못 읽음 = 파일 문제
+            raise BadRequestException(
+                "영상을 읽을 수 없습니다 (손상됐거나 지원하지 않는 형식)."
+            ) from error
+        duration = float(info["duration"])
+        if duration <= 0 or not info["width"]:
+            raise BadRequestException("영상 트랙이 없는 파일입니다.")
+
+        url = gcs.upload_file(f"reels/{uuid.uuid4().hex}{source.suffix}", source, content_type)
+        # 인트로가 없으니 앞부분에서 뽑되, 3.5초보다 짧은 영상이면 중간 지점에서.
+        thumbnail_url = _publish_thumbnail(source, min(THUMBNAIL_AT_SECONDS, duration / 2))
+        try:
+            reels = reels_dao.create(
+                db, user_idx=user_idx, url=url, title=_clean_title(title)
+            )
+            reels_dao.update_url(db, reels, url, thumbnail_url)  # 썸네일까지 한 번에
+            db.commit()
+        except Exception:
+            db.rollback()
+            _delete_object_quietly(url, "고아 영상 객체")
+            _delete_object_quietly(thumbnail_url, "고아 썸네일")
+            raise
+        return ReelsUploadResponse(
+            reels_idx=reels.reels_idx,
+            url=url,
+            thumbnail_url=thumbnail_url,
+            title=reels.title,
+            duration_seconds=round(duration, 2),
+        )
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
