@@ -50,8 +50,14 @@ def main():
     db = _session()
     me, blocked, other = (_user(db, n) for n in ("me", "blocked", "other"))
 
-    for owner in (blocked.user_idx, other.user_idx, None):  # None = 옛 익명 릴스
-        db.add(Reels(user_idx=owner, url="https://x/v.mp4", title=None))
+    # 작성자별로 url 을 다르게 준다 — 피드 결과를 url 집합으로 확인하므로 같은 값이면
+    # 차단한 사람 것이 섞여 들어와도 어셔션이 통과해 버린다.
+    for owner, url in (
+        (blocked.user_idx, "https://x/blocked.mp4"),
+        (other.user_idx, "https://x/other.mp4"),
+        (None, "https://x/anon.mp4"),  # None = 옛 익명 릴스
+    ):
+        db.add(Reels(user_idx=owner, url=url, title=None))
     db.add(Ban(user_idx=me.user_idx, blocked_user_idx=blocked.user_idx))
     db.flush()
 
@@ -66,7 +72,7 @@ def main():
     db.add(Reels(user_idx=me.user_idx, url="https://x/mine.mp4", title=None))
     db.flush()
     urls = {r.url for r in video_service.recommend_reels(db, "", me)}
-    assert urls == {"https://x/v.mp4"}, urls  # 남의 것 + 익명만 (차단·내 것 제외)
+    assert urls == {"https://x/other.mp4", "https://x/anon.mp4"}, urls
     # 비로그인은 '내 것'이 없으니 전부 보인다
     assert len(video_service.recommend_reels(db, "", None)) == 4
 
