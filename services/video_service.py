@@ -843,7 +843,10 @@ def upload_reels(
         _save_upload(file_obj, source)
         try:
             info = _ffprobe_video(source)
-        except ExternalServiceException as error:  # ffprobe 가 있는데 못 읽음 = 파일 문제
+        except (ExternalServiceException, ValueError, subprocess.TimeoutExpired) as error:
+            # ffprobe 가 있는데 실패 = 서버가 아니라 사용자 파일 문제라 전부 400 이다.
+            # ValueError: stdout 이 JSON 이 아니거나(JSONDecodeError) width·duration 이
+            # 숫자로 안 떨어질 때. TimeoutExpired: 60초 안에 못 읽을 때.
             raise BadRequestException(
                 "영상을 읽을 수 없습니다 (손상됐거나 지원하지 않는 형식)."
             ) from error

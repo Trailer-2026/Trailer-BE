@@ -4,7 +4,9 @@ GCS·ffprobe·ffmpeg 은 스텁으로 갈음한다(네트워크·바이너리 �
 프레임워크 없음(레포에 테스트 설정이 없다) — 깨지면 assert 로 죽는다.
 """
 import io
+import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -114,6 +116,20 @@ def main() -> None:
             "크기 초과",
         )
         assert len(uploaded) == before, "상한 초과분이 버킷에 올라갔다"
+
+        # ffprobe 가 깨진 출력을 내도 500 이 아니라 400 (사용자 파일 문제다)
+        for boom in (
+            lambda path: json.loads("not-json"),          # ValueError(JSONDecodeError)
+            lambda path: int("nope"),                     # ValueError
+            lambda path: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired("ffprobe", 60)  # 제한 시간 초과
+            ),
+        ):
+            video_service._ffprobe_video = boom
+            _expect_bad_request(
+                lambda: video_service.upload_reels(db, 1, "a.mp4", io.BytesIO(b"x"), ""),
+                f"ffprobe 실패({boom})",
+            )
 
         # 짧은 영상은 중간 지점에서 썸네일을 뽑는다 (3.5초 고정이면 프레임이 안 나온다).
         video_service._ffprobe_video = lambda path: {
