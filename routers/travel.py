@@ -22,6 +22,7 @@ from schemas.travel_schema import (
     TravelUpdateRequest,
 )
 from services import travel_like_service, travel_service
+from utils.gcs import MAX_IMAGE_BYTES  # 업로드 상한 — 초과분을 다 읽지 않으려고 라우터에서도 쓴다
 
 router = APIRouter(prefix="/api/travels", tags=["Travel"])
 
@@ -207,7 +208,10 @@ def set_travel_cover_image(
     current_user: User = Depends(get_current_user),
 ):
     result = travel_service.set_cover_image(
-        db, current_user, travel_idx, image.file.read(), image.content_type, image.filename
+        db, current_user, travel_idx,
+        # 상한+1바이트까지만 읽는다 — 초과분을 통째로 메모리에 올리지 않고도 서비스의
+        # 크기 검증(len > MAX_IMAGE_BYTES)이 400으로 거절한다.
+        image.file.read(MAX_IMAGE_BYTES + 1), image.content_type, image.filename,
     )
     return CommonResponse.success_response("대표 사진 지정 성공", data=result)
 
