@@ -22,3 +22,6 @@ class Travel(BaseModel):
     end_date = Column(Date, nullable=False, comment="여행 종료일")
     region = Column(String(100), nullable=True, comment="대표 지역")
     status = Column(String(20), nullable=False, default="PLANNED", comment="PLANNED, ONGOING, COMPLETED")
+    # 사용자가 직접 지정한 대표 사진. null이면 첫 일정(schedule)의 image_url을 썸네일로 쓴다 —
+    # AI 추천 여행은 그 폴백만으로 사진이 있지만, 직접 만든 여행은 일정에 이미지가 없어 비어 보인다.
+    cover_image_url = Column(String(255), nullable=True, comment="대표 사진 URL (사용자 지정)")

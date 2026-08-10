@@ -54,6 +54,8 @@ _ADDED_COLUMNS = (
     # 홈 화면 릴스 카드용 지역 태그·대표 프레임.
     ("reels", "region", "VARCHAR(50)"),
     ("reels", "thumbnail_url", "VARCHAR(200)"),
+    # 사용자가 지정한 여행 대표 사진(직접 만든 여행은 일정 이미지가 없어 썸네일이 빈다).
+    ("travel", "cover_image_url", "VARCHAR(255)"),
 )
 
 # 이미 있는 테이블에 덧붙일 인덱스. 모델 __table_args__의 같은 인덱스와 정의가 일치해야 한다.

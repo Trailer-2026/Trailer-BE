@@ -110,7 +110,7 @@ class HomeTravelCard(BaseModel):
     start_date: date = Field(..., description="여행 시작일")
     end_date: date = Field(..., description="여행 종료일")
     status: str = Field(..., description="PLANNED | ONGOING | COMPLETED (여행 기간·오늘 KST 기준 계산)")
-    cover_image_url: str | None = Field(None, description="카드 썸네일 — 여행 첫 일정 대표 이미지. 없으면 null")
+    cover_image_url: str | None = Field(None, description="카드 썸네일 — 지정한 대표 사진 → 여행 첫 일정 대표 이미지 → 지역 기본 사진 순. 항상 값이 있다")
 
 
 class PastTravelCard(BaseModel):
@@ -124,7 +124,7 @@ class PastTravelCard(BaseModel):
         ..., description="항상 COMPLETED (종료된 여행만 목록에 담긴다)", examples=["COMPLETED"],
     )
     cover_image_url: str | None = Field(
-        None, description="카드 썸네일 — 여행 첫 일정 대표 이미지. 없으면 null",
+        None, description="카드 썸네일 — 지정한 대표 사진 → 여행 첫 일정 대표 이미지 → 지역 기본 사진 순. 항상 값이 있다",
         examples=["http://tong.visitkorea.or.kr/cms/resource/87/2754987_image2_1.jpg"],
     )
     liked: bool = Field(..., description="내가 좋아요(하트)를 누른 여행인지 여부", examples=[False])
@@ -154,7 +154,7 @@ class TravelCard(BaseModel):
         examples=["PLANNED"],
     )
     cover_image_url: str | None = Field(
-        None, description="카드 썸네일 — 여행 첫 일정 대표 이미지. 없으면 null",
+        None, description="카드 썸네일 — 지정한 대표 사진 → 여행 첫 일정 대표 이미지 → 지역 기본 사진 순. 항상 값이 있다",
         examples=["http://tong.visitkorea.or.kr/cms/resource/87/2754987_image2_1.jpg"],
     )
     liked: bool = Field(..., description="내가 좋아요(하트)를 누른 여행인지 여부", examples=[False])
@@ -259,4 +259,18 @@ class TravelDetailResponse(BaseModel):
     end_date: date = Field(..., description="여행 종료일")
     region: str | None = Field(None, description="대표 지역. 없으면 null")
     status: str = Field(..., description="PLANNED | ONGOING | COMPLETED (여행 기간·오늘 KST 기준 계산)")
+    cover_image_url: str | None = Field(
+        None, description="대표 사진 — 지정한 사진 → 첫 일정 대표 이미지 → 지역 기본 사진 순. 항상 값이 있다",
+    )
     days: list[TravelDayGroup] = Field(..., description="일자별 일정 묶음 (day_no 오름차순). 일정이 없으면 빈 배열")
+
+
+class TravelCoverImageResponse(BaseModel):
+    """여행 대표 사진 지정·해제 결과 — 요청 후 그 여행의 대표 사진."""
+
+    travel_idx: int = Field(..., description="여행 PK", examples=[12])
+    cover_image_url: str | None = Field(
+        None,
+        description="적용된 대표 사진 URL. 해제하면 첫 일정 이미지, 그것도 없으면 지역 기본 사진 URL",
+        examples=["https://storage.googleapis.com/trailer-bucket/travel/12/ab12cd.jpg"],
+    )
