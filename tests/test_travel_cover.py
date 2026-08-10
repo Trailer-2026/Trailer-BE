@@ -6,12 +6,14 @@ GCS는 스텁으로 갈음한다(네트워크·버킷 없이 도는 게 목적).
 핵심 규칙 셋을 지킨다: 지정 사진 > 첫 일정 이미지 폴백, 해제하면 폴백으로 복귀,
 교체·해제 때 옛 객체를 버킷에서 지운다.
 """
+import io
 import sys
 from datetime import date, time, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -28,6 +30,13 @@ from utils import gcs
 _BUCKET = "https://storage.googleapis.com/bucket/"
 
 
+def _image(fmt: str = "JPEG", size: tuple[int, int] = (1, 1)) -> bytes:
+    """검증을 통과하는 실물 이미지. 업로드 경로가 헤더를 파싱하므로 가짜 바이트는 못 쓴다."""
+    buf = io.BytesIO()
+    Image.new("RGB", size, (1, 2, 3)).save(buf, format=fmt)
+    return buf.getvalue()
+
+
 def _session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(
@@ -41,18 +50,20 @@ def _session():
 
 
 def _stub_gcs(monkey: dict):
-    """버킷 대신 리스트에 기록한다 — (올린 경로들, 지운 경로들)."""
-    uploaded, deleted = [], []
+    """버킷 대신 리스트에 기록한다 — (올린 경로들, 저장 MIME들, 지운 경로들)."""
+    uploaded, mimes, deleted = [], [], []
     monkey["upload_bytes"] = gcs.upload_bytes
     monkey["object_path_from_url"] = gcs.object_path_from_url
     monkey["delete_object"] = gcs.delete_object
 
-    gcs.upload_bytes = lambda path, data, ctype: (uploaded.append(path) or _BUCKET + path)
+    gcs.upload_bytes = lambda path, data, ctype: (
+        uploaded.append(path), mimes.append(ctype), _BUCKET + path,
+    )[-1]
     gcs.object_path_from_url = lambda url: (
         url[len(_BUCKET):] if url.startswith(_BUCKET) else None
     )
     gcs.delete_object = lambda path: deleted.append(path)
-    return uploaded, deleted
+    return uploaded, mimes, deleted
 
 
 def _restore(monkey: dict):
@@ -71,7 +82,7 @@ def _expect(exc, fn, what: str):
 
 def main() -> None:
     monkey: dict = {}
-    uploaded, deleted = _stub_gcs(monkey)
+    uploaded, mimes, deleted = _stub_gcs(monkey)
     db = _session()
     owner = db.get(User, 1)
     other = db.get(User, 2)
@@ -92,9 +103,10 @@ def main() -> None:
         assert travel_service._default_cover(None) == travel_service._DEFAULT_COVER
 
         # 대표 사진 지정 → 카드·상세·홈 카드 모두 그 URL이 내려간다.
-        result = travel_service.set_cover_image(db, owner, manual.travel_idx, b"jpg", "image/jpeg", "a.JPG")
+        result = travel_service.set_cover_image(db, owner, manual.travel_idx, _image(), "image/jpeg", "a.JPG")
         assert uploaded == [f"travel/{manual.travel_idx}/" + uploaded[0].split("/")[-1]], uploaded
         assert uploaded[0].endswith(".jpg"), uploaded  # 확장자를 살린다
+        assert mimes[0] == "image/jpeg", mimes
         assert result.cover_image_url == _BUCKET + uploaded[0], result
         card = next(c for c in travel_service.all_travels(db, owner).travels
                     if c.travel_idx == manual.travel_idx)
@@ -105,18 +117,18 @@ def main() -> None:
 
         # 교체 → 새 URL로 바뀌고 옛 객체는 버킷에서 지워진다.
         first_path = uploaded[0]
-        replaced = travel_service.set_cover_image(db, owner, manual.travel_idx, b"png", "image/png", "b.png")
+        replaced = travel_service.set_cover_image(db, owner, manual.travel_idx, _image("PNG"), "image/png", "b.png")
         assert replaced.cover_image_url != result.cover_image_url, replaced
         assert deleted == [first_path], deleted
 
         # 파일명이 수상하면 확장자를 버린다 — 객체 경로 모양이 파일명에 휘둘리면 안 된다.
-        travel_service.set_cover_image(db, owner, manual.travel_idx, b"x", "image/jpeg", "a.jpg/../x")
+        travel_service.set_cover_image(db, owner, manual.travel_idx, _image(), "image/jpeg", "a.jpg/../x")
         assert uploaded[-1].count("/") == 2, uploaded[-1]  # travel/{idx}/{uuid} 3토막 고정
 
         # 뒷정리(옛 객체 삭제)가 터져도 요청 자체는 성공해야 한다 — DB엔 이미 반영됐다.
         alive, gcs.delete_object = gcs.delete_object, lambda path: 1 / 0
         assert travel_service.set_cover_image(
-            db, owner, manual.travel_idx, b"x", "image/jpeg", "d.jpg"
+            db, owner, manual.travel_idx, _image(), "image/jpeg", "d.jpg"
         ).cover_image_url.startswith(_BUCKET)
         assert travel_service.delete_cover_image(db, owner, manual.travel_idx) is not None
         gcs.delete_object = alive
@@ -135,7 +147,7 @@ def main() -> None:
         db.commit()
         past = travel_service.past_travels(db, owner).travels[0]
         assert past.cover_image_url == "http://tong.visitkorea.or.kr/a.jpg", past
-        travel_service.set_cover_image(db, owner, ai.travel_idx, b"x", "image/jpeg", "c.jpg")
+        travel_service.set_cover_image(db, owner, ai.travel_idx, _image(), "image/jpeg", "c.jpg")
         past = travel_service.past_travels(db, owner).travels[0]
         assert past.cover_image_url.startswith(_BUCKET), past
 
@@ -161,15 +173,38 @@ def main() -> None:
         _expect(BadRequestException, lambda: travel_service.set_cover_image(
             db, owner, manual.travel_idx, b"\0" * (gcs.MAX_IMAGE_BYTES + 1), "image/jpeg", "a.jpg"),
             "크기 초과")
+        # content_type만 image/*로 적어 보낸 비이미지는 바이트 판별에서 걸린다.
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+        _expect(BadRequestException, lambda: travel_service.set_cover_image(
+            db, owner, manual.travel_idx, svg, "image/svg+xml", "x.svg"), "SVG")
+        _expect(BadRequestException, lambda: travel_service.set_cover_image(
+            db, owner, manual.travel_idx, b"<html><script>alert(1)</script>", "image/png", "x.png"), "HTML 위조")
+        _expect(BadRequestException, lambda: travel_service.set_cover_image(
+            db, owner, manual.travel_idx, _image()[:20], "image/jpeg", "x.jpg"), "헤더가 깨진 JPEG")
         assert len(uploaded) == before, "검증 실패분이 버킷에 올라갔다"
+
+        # 반대로 '헤더는 온전하고 뒤만 잘린 JPEG'는 통과한다 — 의도된 한계(gcs._detect_image_mime 참고).
+        big = _image("JPEG", (200, 200))
+        travel_service.set_cover_image(
+            db, owner, manual.travel_idx, big[: int(len(big) * 0.7)], "image/jpeg", "cut.jpg",
+        )
+        assert mimes[-1] == "image/jpeg", mimes[-1]
+
+        # 저장 MIME은 클라이언트 말이 아니라 실물에서 정한다 — PNG를 image/jpeg 라 우겨도 image/png.
+        travel_service.set_cover_image(db, owner, manual.travel_idx, _image("PNG"), "image/jpeg", "liar.jpg")
+        assert mimes[-1] == "image/png", mimes[-1]
+        # HEIC(아이폰 원본)는 디코더가 없어도 매직바이트로 통과시킨다.
+        heic = b"\0\0\0 ftypheic" + b"\0" * 64
+        travel_service.set_cover_image(db, owner, manual.travel_idx, heic, "image/heic", "p.heic")
+        assert mimes[-1] == "image/heic", mimes[-1]
 
         # 남의 여행·없는 여행은 404 (403 아님).
         _expect(NotFoundException, lambda: travel_service.set_cover_image(
-            db, other, manual.travel_idx, b"x", "image/jpeg", "a.jpg"), "남의 여행 지정")
+            db, other, manual.travel_idx, _image(), "image/jpeg", "a.jpg"), "남의 여행 지정")
         _expect(NotFoundException, lambda: travel_service.delete_cover_image(db, other, manual.travel_idx),
                 "남의 여행 해제")
         _expect(NotFoundException, lambda: travel_service.set_cover_image(
-            db, owner, 9999, b"x", "image/jpeg", "a.jpg"), "없는 여행")
+            db, owner, 9999, _image(), "image/jpeg", "a.jpg"), "없는 여행")
 
         print("OK: 여행 대표 사진 자체 점검 통과")
     finally:
