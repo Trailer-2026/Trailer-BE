@@ -258,8 +258,10 @@ def render_video_from_travel(
                 "썸네일 이미지(thumbnail_url)가 함께 내려가며, 렌더 전에 만들어진 옛 릴스는 "
                 "둘 다 null 이라 그 땐 지역 핀을 숨기고 url 영상의 첫 프레임을 카드 이미지로 "
                 "쓰면 됩니다.\n\n"
-                "인증은 선택입니다 — JWT를 보내면 내가 차단한 사용자의 릴스가 결과에서 빠지고, "
-                "토큰이 없거나 만료됐으면 비로그인으로 간주해 전체에서 추천합니다(401 없음).",
+                "인증은 선택입니다 — JWT를 보내면 내가 올린 릴스와 내가 차단한 사용자의 "
+                "릴스가 결과에서 빠지고(내 릴스는 마이페이지 "
+                "GET /api/users/me/reels 에서 봅니다), 토큰이 없거나 만료됐으면 비로그인으로 "
+                "간주해 전체에서 추천합니다(401 없음).",
     response_model=CommonResponse[list[ReelsRecommendResponse]],
 )
 def recommend_reels(

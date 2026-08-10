@@ -241,7 +241,8 @@ def recommend_reels(
     이미 받은 idx를 누적해 재요청하면 새 릴스만 내려간다. 남은 릴스가 10개
     미만이면 있는 만큼만 반환하고, 제외 후 남은 릴스가 하나도 없으면 exclude를
     무시하고 전체에서 처음부터 다시 추천한다.
-    로그인 상태면 내가 차단한 사용자의 릴스는 두 경로 모두에서 빠진다(비로그인은 user=None).
+    로그인 상태면 내가 차단한 사용자의 릴스와 **내가 올린 릴스**가 두 경로 모두에서
+    빠진다(비로그인은 user=None 이라 전체에서 뽑는다 — 익명 호출자에겐 '내 것'이 없다).
     """
     exclude_idxs: list[int] = []
     for token in exclude.split(","):
@@ -252,11 +253,15 @@ def recommend_reels(
             raise BadRequestException("exclude는 쉼표로 구분한 reels_idx 목록이어야 합니다.")
         exclude_idxs.append(int(token))
 
-    blocked = ban_dao.blocked_user_idxs(db, user.user_idx) if user else []
-    rows = reels_dao.get_random_reels(db, count, exclude_idxs, blocked)
+    # 차단한 사용자 + 나 자신 — 내 릴스는 마이페이지에서 보면 되고, 남의 여행을
+    # 구경하는 피드에 내가 올린 게 섞이면 그만큼 볼 게 줄어든다.
+    hidden_users = (
+        [*ban_dao.blocked_user_idxs(db, user.user_idx), user.user_idx] if user else []
+    )
+    rows = reels_dao.get_random_reels(db, count, exclude_idxs, hidden_users)
     if not rows and exclude_idxs:
         # 전부 이미 추천된 상태 → 한 바퀴 돌았으니 처음부터 다시
-        rows = reels_dao.get_random_reels(db, count, [], blocked)
+        rows = reels_dao.get_random_reels(db, count, [], hidden_users)
     # 좋아요·댓글 수는 행마다 세면 N+1 이라 뽑힌 릴스만 묶어 두 번에 읽는다.
     idxs = [reels.reels_idx for reels, _, _ in rows]
     like_counts = like_dao.counts_by_reels(db, idxs)
