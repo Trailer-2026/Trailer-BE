@@ -6,15 +6,18 @@ trailer-7ef0a 의 서비스 계정 키 — Storage 객체 관리자 권한 부�
 """
 import json
 import logging
+import uuid
 from functools import lru_cache
 
 from google.cloud import storage
 from google.oauth2 import service_account
 
 from config import Config, parser
-from core.exceptions.custom import ExternalServiceException
+from core.exceptions.custom import BadRequestException, ExternalServiceException
 
 logger = logging.getLogger(__name__)
+
+MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 업로드 이미지 상한 — 프로필 사진·여행 대표 사진 공용
 
 
 @lru_cache(maxsize=1)
@@ -62,6 +65,29 @@ def upload_file(object_path: str, path, content_type: str) -> str:
         logger.exception("GCS 업로드 실패: %s", object_path)
         raise ExternalServiceException("영상 저장소 업로드에 실패했습니다.") from exc
     return _public_prefix() + object_path
+
+
+def upload_image(
+    path_prefix: str, data: bytes, content_type: str | None, filename: str | None
+) -> str:
+    """업로드된 이미지 1장을 검증해 `<path_prefix>/<uuid><ext>`로 올리고 공개 URL을 반환한다.
+
+    프로필 사진·여행 대표 사진이 같은 검증(이미지 여부·빈 파일·상한)을 공유한다 — 한 곳만 고친다.
+    확장자를 살려야 브라우저가 타입을 제대로 잡는다(없으면 확장자 없이 올린다).
+
+    확장자는 클라이언트가 준 파일명에서 오므로 영숫자 5자 이내만 받는다 — 'a.jpg/../x' 같은
+    파일명이 객체 경로 모양을 바꾸지 못하게 한다(GCS는 슬래시를 경로로 해석한다).
+    """
+    if not content_type or not content_type.startswith("image/"):
+        raise BadRequestException("이미지 파일만 업로드할 수 있습니다.")
+    if not data:
+        raise BadRequestException("빈 파일입니다.")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise BadRequestException("이미지는 10MB 이하만 가능합니다.")
+
+    raw_ext = filename.rsplit(".", 1)[-1].lower() if filename and "." in filename else ""
+    ext = f".{raw_ext}" if raw_ext.isalnum() and len(raw_ext) <= 5 else ""
+    return upload_bytes(f"{path_prefix}/{uuid.uuid4().hex}{ext}", data, content_type)
 
 
 def object_path_from_url(url: str) -> str | None:
