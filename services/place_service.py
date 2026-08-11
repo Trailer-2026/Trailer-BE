@@ -1,14 +1,22 @@
-"""테마별 여행지 서비스 — 홈 화면 '테마별 여행지' 섹션 데이터를 만든다.
+"""테마별 여행지 서비스 — 홈 화면 '테마별 여행지' 섹션과 그 카드를 누른 상세 화면을 만든다.
 
 관광 데이터는 DB가 아니라 실시간 TourAPI(utils.tour_place)에서 온다. 테마 배너 문구는 서버가
 소유하고, '다른 테마' 버튼은 theme 없이 재호출하면 서버가 랜덤 테마를 골라준다.
+상세 화면의 '가장 가까운 역'만은 관광 데이터가 아니라 DB(station)를 쓴다.
 """
 import logging
+import math
 import random
 
+from sqlalchemy.orm import Session
+
 from core.enums import Theme
-from core.exceptions.custom import ExternalServiceException
+from core.exceptions.custom import ExternalServiceException, NotFoundException
+from databases.daos import station_dao
 from schemas.place_schema import (
+    NearbyRestaurant,
+    NearestStationInfo,
+    PlaceDetailResponse,
     PlaceSearchResponse,
     PlaceSearchResult,
     ThemedPlacesResponse,
@@ -77,7 +85,8 @@ def themed_places(theme: Theme | None = None) -> ThemedPlacesResponse:
     places = tour_place.places_by_theme(theme, limit=_PLACES_LIMIT)
     cards = [
         ThemePlaceCard(
-            name=p.name, region=_short_region(p.region), image_url=p.image_url,
+            content_id=p.content_id, name=p.name,
+            region=_short_region(p.region), image_url=p.image_url,
         )
         for p in places
     ]
@@ -87,4 +96,93 @@ def themed_places(theme: Theme | None = None) -> ThemedPlacesResponse:
         # ponytail: 배너는 대표 관광지(첫 카드) 이미지로 대체. 큐레이션 배너 생기면 테마별 상수로 교체.
         banner_image_url=cards[0].image_url if cards else None,
         places=cards,
+    )
+
+
+# ── 여행지 상세 ───────────────────────────────────────────────────────────────
+
+_RESTAURANT_LIMIT = 6   # 상세 '가까운 맛집' 기본 개수(화면은 2×2로 4장, 여유분 포함)
+_WALK_M_PER_MIN = 80.0  # 도보 속도 4.8km/h(지도앱 보행 안내가 쓰는 통상 속도)
+_WALK_DETOUR = 1.2      # 직선거리 → 실제 보행 경로 보정(횡단보도·블록 우회 감안)
+_WALK_MAX_M = 1500      # 도보 표기 상한(≈23분). 넘으면 걸어갈 거리가 아니라 보고 km로 적는다
+
+
+def _headline(name: str, themes: list[Theme]) -> str:
+    """상세 상단 큰 제목 — '{테마 카피}, {관광지명}'.
+
+    카피는 홈 배너와 같은 _THEME_TITLE을 재사용한다(문구를 서버가 소유한다는 원칙도, 홈에서
+    보던 테마 톤이 상세로 이어지는 것도 그대로 유지된다). 테마가 하나도 안 잡히면 이름만.
+    """
+    if not themes:
+        return name
+    return f"{_THEME_TITLE[themes[0]]}, {name}"
+
+
+def _nearest_station(db: Session, lat: float, lng: float) -> NearestStationInfo | None:
+    """가장 가까운 역 + 노출 문구. 역 데이터가 없으면 None.
+
+    도보 시간은 직선거리에 우회 보정을 곱해 올린 근사라 실제 경로 안내와는 몇 분 차이가 날 수
+    있다. '몇 분 거리인지' 감을 주는 표시라 경로 API를 붙이지 않았다.
+    """
+    found = station_dao.nearest(db, lat, lng)
+    if found is None:
+        return None
+    station, distance_m = found
+
+    walk = None
+    if distance_m <= _WALK_MAX_M:
+        walk = max(1, math.ceil(distance_m * _WALK_DETOUR / _WALK_M_PER_MIN))
+        text = f"{station.station_name}에서 도보 {walk}~{walk + 1}분"
+    else:
+        text = f"{station.station_name}에서 {distance_m / 1000:.1f}km"
+
+    return NearestStationInfo(
+        station_idx=station.station_idx,
+        station_name=station.station_name,
+        distance_m=round(distance_m),
+        walk_minutes=walk,
+        text=text,
+    )
+
+
+def place_detail(db: Session, content_id: str, restaurant_limit: int = _RESTAURANT_LIMIT) -> PlaceDetailResponse:
+    """여행지 상세 — 지역 소개(사진·소개글·가장 가까운 역)와 가까운 맛집을 한 응답에 담는다.
+
+    한 화면에 다 보이는 정보라 앱이 한 번만 호출하도록 합쳤다. 소개는 TourAPI 상세(본문·사진),
+    맛집은 같은 좌표의 위치기반 음식점 조회, 역만 DB에서 온다.
+
+    소개를 못 받으면 화면이 성립하지 않으므로 404/502로 끊고, **맛집과 역은 부가 정보라 비어도
+    상세는 그대로 내려간다**(맛집 조회 실패는 빈 배열, 역은 null).
+    """
+    try:
+        detail = tour_place.fetch_detail(content_id)
+    except Exception as e:
+        logger.warning("TourAPI 여행지 상세(cid=%s) 실패: %s", content_id, e)
+        raise ExternalServiceException("여행지 정보 조회에 실패했습니다.") from e
+
+    if detail is None:
+        raise NotFoundException("여행지를 찾을 수 없습니다.")
+
+    foods = tour_place.nearby_restaurants(detail.lat, detail.lng, limit=restaurant_limit)
+    return PlaceDetailResponse(
+        content_id=detail.content_id,
+        name=detail.name,
+        headline=_headline(detail.name, detail.themes),
+        themes=detail.themes,
+        address=detail.address,
+        latitude=detail.lat,
+        longitude=detail.lng,
+        images=detail.images,
+        overview=detail.overview,
+        tel=detail.tel,
+        homepage=detail.homepage,
+        nearest_station=_nearest_station(db, detail.lat, detail.lng),
+        restaurants=[
+            NearbyRestaurant(
+                content_id=f.content_id, name=f.name, category=f.category,
+                address=f.address, image_url=f.image_url, distance_m=f.distance_m,
+                latitude=f.lat, longitude=f.lng,
+            )
+            for f in foods
+        ],
     )

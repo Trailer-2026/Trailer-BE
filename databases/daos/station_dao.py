@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 
 from databases.models.station import Station
+from utils.scenic import haversine_m
 
 
 def coord_by_name(db: Session, station_name: str) -> tuple[float, float] | None:
@@ -47,6 +48,25 @@ def nearest_major(db: Session, lat: float, lng: float) -> Station | None:
         if rows:
             return min(rows, key=lambda s: (s.latitude - lat) ** 2 + (s.longitude - lng) ** 2)
     return None
+
+
+def nearest(db: Session, lat: float, lng: float) -> tuple[Station, float] | None:
+    """좌표에서 가장 가까운 역과 직선거리(m). 좌표 등록된 역이 하나도 없으면 None.
+
+    nearest_major와 달리 열차 등급을 가리지 않는다 — '이 관광지에서 가장 가까운 역까지
+    도보 몇 분'이라는 표시의 기준은 KTX 정차 여부가 아니라 걸어갈 수 있는 거리라서다.
+    거리도 위경도 제곱합이 아니라 haversine으로 잰다(그 값을 그대로 도보 시간으로 환산하므로
+    경도 1°가 위도 1°보다 짧다는 점이 실제 분 단위 오차로 드러난다).
+    """
+    rows = db.query(Station).filter(
+        Station.deleted_at.is_(None),
+        Station.latitude.isnot(None),
+        Station.longitude.isnot(None),
+    ).all()
+    if not rows:
+        return None
+    best = min(rows, key=lambda s: haversine_m(lat, lng, s.latitude, s.longitude))
+    return best, haversine_m(lat, lng, best.latitude, best.longitude)
 
 
 def get_stations(db: Session, query: str | None = None) -> list[Station]:
