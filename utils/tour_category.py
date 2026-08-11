@@ -83,6 +83,18 @@ def themes_for(
     return sorted(out, key=lambda t: t.value)
 
 
+# 음식점(contentTypeId=39) cat3 → 카드에 표기할 한글 라벨. categoryCode2(A05/A0502) 코드표 그대로.
+FOOD_CATEGORY = {
+    "A05020100": "한식",
+    "A05020200": "서양식",
+    "A05020300": "일식",
+    "A05020400": "중식",
+    "A05020700": "이색음식점",
+    "A05020900": "카페/전통찻집",
+    "A05021000": "클럽",
+}
+
+
 # 숙박(contentTypeId=32) cat3 → 유형 라벨
 LODGING_TYPE = {
     "B02010100": "관광호텔", "B02010500": "콘도미니엄", "B02010600": "유스호스텔",

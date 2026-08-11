@@ -3,6 +3,7 @@
 공모전 정책상 관광데이터는 DB 스냅샷이 아니라 매 요청 실시간 호출로 받아야 한다.
 역(station)은 관광데이터가 아니므로 DB를 그대로 쓴다.
 """
+import html
 import logging
 import math
 import random
@@ -39,6 +40,10 @@ _AREA_CODES = [1, 2, 3, 4, 5, 6, 7, 8, 31, 32, 33, 34, 35, 36, 37, 38, 39]  # �
 # 큰 도(경북·강원 등)의 해안권(포항·강릉)이 내륙 중심에 묻혀 도착역 후보에서 빠지는 것을 막는다.
 _SUBCLUSTER_KM = 60.0
 _MAX_SUBCLUSTERS = 3
+
+# TourAPI 자유텍스트에는 마크업이 섞여 온다(운영시간의 <b>, 소개글의 <br> 등).
+# 운영시간 파서와 상세 소개글 정리가 함께 쓴다.
+_TAG_RE = re.compile(r"<[^>]+>")
 
 
 @dataclass
@@ -84,6 +89,19 @@ def _coords(item: dict) -> tuple[float, float] | None:
     return lat, lng
 
 
+def _image_url(raw: str | None) -> str | None:
+    """TourAPI 사진 URL 정리. 빈 값이면 None, http면 https로 올린다.
+
+    tong.visitkorea.or.kr이 http로 내려오는데 iOS ATS(App Transport Security)가 평문 http
+    이미지를 막아 카드가 통째로 빈다. 같은 호스트가 https로도 동일 이미지를 주는 것을 확인해
+    스킴만 바꾼다(경로는 그대로).
+    """
+    url = (raw or "").strip()
+    if not url:
+        return None
+    return "https://" + url[len("http://"):] if url.startswith("http://") else url
+
+
 def _to_live(item: dict) -> LivePlace | None:
     """TourAPI 응답 항목 1건 → LivePlace. 좌표·테마·contentid 중 하나라도 없으면 None(스킵)."""
     coords = _coords(item)
@@ -105,7 +123,7 @@ def _to_live(item: dict) -> LivePlace | None:
         lat=lat,
         lng=lng,
         themes=themes,
-        image_url=(item.get("firstimage") or None),
+        image_url=_image_url(item.get("firstimage")),
         content_id=cid,
         content_type_id=ctid,
     )
@@ -180,6 +198,191 @@ def places_by_theme(theme: Theme, limit: int = 10) -> list[LivePlace]:
     return list(out.values())
 
 
+# ── 여행지 상세 + 가까운 맛집 (테마별 여행지 카드 → 상세 화면) ──────────────────
+
+_DETAIL_IMAGE_ROWS = 10          # detailImage2로 받아올 추가 사진 수(상세 상단 갤러리용)
+_RESTAURANT_CT = 39              # 음식점 contentTypeId
+# '가까운 맛집' 반경을 단계적으로 넓힌다. 도심은 2km 안에서 끝나지만 시골 관광지(예: 고성
+# 하늬라벤더팜)는 5km에도 TourAPI 등록 음식점이 0건이라 섹션이 통째로 빈다. 첫 단계에서
+# 결과가 나오면 더 넓히지 않으므로 도심에선 추가 호출이 없다(쿼터는 오퍼레이션별 일일 제한).
+_RESTAURANT_RADII_M = (2000, 5000, 10000)
+
+
+@dataclass
+class PlaceDetail:
+    """관광지 1곳의 상세 — detailCommon2(본문)와 detailImage2(추가 사진)를 합친 결과."""
+
+    content_id: str
+    content_type_id: int | None
+    name: str
+    address: str | None
+    lat: float
+    lng: float
+    themes: list[Theme]
+    images: list[str]        # 대표사진이 항상 첫 장. 없으면 빈 리스트
+    overview: str | None     # 소개글(태그·엔티티 제거된 평문)
+    tel: str | None
+    homepage: str | None
+
+
+@dataclass
+class NearbyFood:
+    """상세 화면 '가까운 맛집' 카드 1장."""
+
+    content_id: str
+    name: str
+    category: str | None     # '한식' 등. cat3 미등록이면 None
+    address: str | None
+    image_url: str | None
+    distance_m: int
+    lat: float
+    lng: float
+
+
+def _plain(raw: str | None) -> str | None:
+    """TourAPI 자유텍스트 → 평문. HTML 태그·엔티티를 걷어내고 공백을 정리한다. 비면 None.
+
+    overview·homepage에 `<br>`·`&nbsp;` 같은 마크업이 섞여 오는데 앱은 평문으로 그리므로
+    여기서 없앤다. 줄바꿈(\\n)은 문단 구분이라 살리고 그 외 연속 공백만 한 칸으로 줄인다.
+
+    엔티티는 지우지 않고 **원래 문자로 되돌린다**. 전에는 몇 개를 골라 공백으로 바꿨는데,
+    그러면 '카페 &amp; 베이커리'가 '카페 베이커리'가 돼 상호에서 &가 사라졌다. 골라 담은
+    목록이라 여기 없는 엔티티(&middot; 등)는 그대로 노출되기도 했다.
+    태그를 먼저 걷어낸 뒤 푸는 순서는 유지한다 — 이스케이프된 `&lt;br&gt;`은 원문이 의도한
+    글자이지 마크업이 아니므로 태그 제거 대상이 아니다.
+    """
+    if not raw:
+        return None
+    txt = _TAG_RE.sub(" ", str(raw))
+    # NBSP는 일반 공백으로 눕혀야 아래 공백 정리에 걸린다(\s에 NBSP가 안 잡히는 건 아니지만,
+    # 앱에서 줄바꿈이 어긋나 보이는 걸 막으려면 문자 자체를 바꿔 두는 게 안전하다).
+    txt = html.unescape(txt).replace("\xa0", " ")
+    # 줄바꿈은 보존하되 줄 안쪽 공백만 정리 — 문단이 뭉개지면 소개글이 읽기 어려워진다.
+    lines = [re.sub(r"[^\S\n]+", " ", ln).strip() for ln in txt.split("\n")]
+    out = "\n".join(ln for ln in lines if ln).strip()
+    return out or None
+
+
+_HREF_RE = re.compile(r"""href=["']?(https?://[^"'>\s]+)""", re.I)
+
+
+def _homepage(raw: str | None) -> str | None:
+    """homepage 필드에서 URL만 뽑는다.
+
+    실데이터는 대부분 `<a href="https://...">https://...</a>` 형태라 href를 우선 쓰고,
+    태그 없이 URL만 온 경우를 위해 평문 폴백을 둔다. URL이 아니면 None.
+    """
+    if not raw:
+        return None
+    m = _HREF_RE.search(str(raw))
+    if m:
+        return m.group(1)
+    txt = _plain(raw)
+    return txt if txt and txt.startswith("http") else None
+
+
+def _detail_images(content_id: str) -> list[dict]:
+    """추가 사진 조회 — 실패해도 상세를 못 그릴 이유는 아니라 빈 리스트로 삼킨다."""
+    try:
+        return tour_api.detail_images(content_id=content_id, num_of_rows=_DETAIL_IMAGE_ROWS)
+    except Exception as e:
+        logger.warning("TourAPI 상세이미지(cid=%s) 실패: %s", content_id, e)
+        return []
+
+
+def fetch_detail(content_id: str) -> PlaceDetail | None:
+    """관광지 상세를 실시간 조회한다(본문·추가사진 병렬). 해당 콘텐츠가 없으면 None.
+
+    좌표가 없으면 '가까운 맛집'도 '가장 가까운 역'도 계산할 수 없어 상세 화면이 성립하지
+    않으므로 None으로 본다. TourAPI 호출 자체가 실패하면 예외를 그대로 올린다(호출측에서 502).
+    """
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_images = ex.submit(_detail_images, content_id)
+        common = tour_api.detail_common(content_id=content_id)
+        extra = f_images.result()
+
+    coords = _coords(common)
+    if not common or coords is None:
+        return None
+    lat, lng = coords
+
+    ct = common.get("contenttypeid")
+    ctid = int(ct) if ct is not None and str(ct).isdigit() else None
+
+    # 대표사진이 항상 첫 장(카드에서 보던 그 사진이 상세 첫 장이어야 자연스럽다).
+    # 대표사진이 detailImage2에도 들어오는 경우가 있어 URL로 중복을 제거한다.
+    images: list[str] = []
+    for url in [common.get("firstimage")] + [im.get("originimgurl") for im in extra]:
+        clean = _image_url(url)
+        if clean and clean not in images:
+            images.append(clean)
+
+    return PlaceDetail(
+        content_id=str(common.get("contentid") or content_id),
+        content_type_id=ctid,
+        name=(common.get("title") or "")[:255],
+        address=(common.get("addr1") or None),
+        lat=lat,
+        lng=lng,
+        themes=tour_category.themes_for(
+            ct, common.get("cat1"), common.get("cat2"), common.get("cat3"),
+        ),
+        images=images,
+        overview=_plain(common.get("overview")),
+        tel=_plain(common.get("tel")),
+        homepage=_homepage(common.get("homepage")),
+    )
+
+
+def nearby_restaurants(
+    lat: float, lng: float, limit: int = 6, radii_m: tuple[int, ...] = _RESTAURANT_RADII_M,
+) -> list[NearbyFood]:
+    """좌표 근처 음식점을 가까운 순으로 조회한다(상세 화면 '가까운 맛집').
+
+    반경을 좁은 것부터 넓혀 가며 처음 결과가 나온 단계에서 멈춘다 — 도심은 첫 반경에서
+    끝나고, 주변에 등록 음식점이 드문 시골 관광지만 넓은 반경까지 간다.
+
+    사진 있는 곳을 앞으로 당긴다 — 카드가 사진 중심이라 사진 없는 항목이 섞이면 눈에 띄게
+    빈다. 사진 유무 안에서는 거리순이 그대로 유지된다(정렬 키가 (사진없음, 거리)).
+    조회 실패는 빈 리스트 — 맛집은 부가 섹션이라 상세 전체를 깨지 않는다.
+    """
+    items: list[dict] = []
+    for radius_m in radii_m:
+        try:
+            items, _ = tour_api.location_based_list(
+                lat=lat, lng=lng, radius_m=radius_m, content_type_id=_RESTAURANT_CT,
+                num_of_rows=max(limit * 3, 30), arrange="E",
+            )
+        except Exception as e:
+            logger.warning("TourAPI 근처 음식점(lat=%s, lng=%s, r=%s) 실패: %s", lat, lng, radius_m, e)
+            return []
+        if items:
+            break
+
+    out: list[NearbyFood] = []
+    for it in items:
+        coords = _coords(it)
+        cid = str(it.get("contentid") or "")
+        if coords is None or not cid.isdigit():
+            continue
+        try:
+            dist = float(it.get("dist") or 0)
+        except (TypeError, ValueError):
+            continue
+        out.append(NearbyFood(
+            content_id=cid,
+            name=(it.get("title") or "")[:255],
+            category=tour_category.FOOD_CATEGORY.get(it.get("cat3") or ""),
+            address=(it.get("addr1") or None),
+            image_url=_image_url(it.get("firstimage")),
+            distance_m=round(dist),
+            lat=coords[0], lng=coords[1],
+        ))
+
+    out.sort(key=lambda f: (f.image_url is None, f.distance_m))
+    return out[:limit]
+
+
 # ── 운영시간(오픈/마감·휴무요일) ─────────────────────────────────────────────
 # detailIntro2는 유형(contentTypeId)마다 시간/휴무 필드명이 다르다. (시간필드, 휴무필드).
 _HOURS_FIELDS = {
@@ -191,7 +394,6 @@ _HOURS_FIELDS = {
     39: ("opentimefood", "restdatefood"),   # 음식점
 }
 _TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
-_TAG_RE = re.compile(r"<[^>]+>")
 _WEEKDAYS = {"월": 0, "화": 1, "수": 2, "목": 3, "금": 4, "토": 5, "일": 6}
 # 특정 주차만 쉬는 표현(격주/첫째주 등)은 요일 단위로 환원하면 과도하게 막으므로 무시한다.
 _IRREGULAR_REST = ("첫째", "둘째", "셋째", "넷째", "다섯째", "마지막", "격주")
@@ -292,7 +494,7 @@ def _to_lodging(it: dict) -> Lodging | None:
         region=(it.get("addr1") or None),
         lat=lat2, lng=lng2,
         tel=(it.get("tel") or None),
-        image_url=(it.get("firstimage") or None),
+        image_url=_image_url(it.get("firstimage")),
     )
 
 

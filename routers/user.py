@@ -9,9 +9,10 @@ from schemas.notification_schema import (
     NotificationResponse,
     NotificationUpdateRequest,
 )
+from schemas.stamp_schema import StampListResponse
 from schemas.user_schema import ProfileResponse, NicknameUpdateRequest
 from schemas.video_schema import MyReelsListResponse
-from services import notification_service, user_service, video_service
+from services import notification_service, stamp_service, user_service, video_service
 
 router = APIRouter(prefix="/api/users", tags=["사용자"])
 
@@ -80,6 +81,31 @@ def update_notification_settings(
 ):
     result = notification_service.update_settings(db, current_user, request_data)
     return CommonResponse.success_response("알림 설정 변경 성공", data=result)
+
+
+@router.get(
+    "/me/stamps",
+    summary="내 스탬프 목록",
+    description="마이페이지 '스탬프' 탭 데이터입니다. **미달성 칸까지 전부** 담아 내려주므로 "
+                "응답 순서 그대로 그리드에 그리면 됩니다(앱이 정렬하지 않습니다). 잠긴 칸은 "
+                "`achieved=false`이고, 그 위에 자물쇠 아이콘을 덮는 건 앱 몫입니다.\n\n"
+                "- 상단 '스탬프 달성 현황 N개'는 `achieved_count`입니다.\n"
+                "- `progress`/`goal`로 '10곳 중 3곳'처럼 진행도를 보여줄 수 있습니다.\n"
+                "- 조건은 **다녀온 여행**(종료일이 지난 여행)을 기준으로 판정합니다. "
+                "예정·진행 중인 여행은 아직 세지 않습니다.\n"
+                "- `SCENERY_PHOTOS`(풍경 사진)는 촬영 기록을 받는 API가 아직 없어 **항상 "
+                "잠금**입니다. 앱이 사진을 보내기 시작하면 그때 열립니다.\n"
+                "- `AI_COURSE_DONE`은 `travel.source` 컬럼이 생긴 뒤 저장한 여행부터 세므로, "
+                "그 전에 저장한 추천 여행은 반영되지 않습니다.\n\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[StampListResponse],
+)
+def get_my_stamps(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    result = stamp_service.list_stamps(db, current_user.user_idx)
+    return CommonResponse.success_response("스탬프 목록 조회 성공", data=result)
 
 
 @router.get(

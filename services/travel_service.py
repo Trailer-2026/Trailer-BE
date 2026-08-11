@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.orm import Session
 
+from core.enums import TravelSource
 from core.exceptions.custom import BadRequestException, NotFoundException
 from databases.daos import schedule_dao, station_dao, travel_dao, travel_like_dao, user_dao
 from services import push_service
@@ -89,7 +90,7 @@ def save_selected_plan(db: Session, user, plan_id: str) -> TravelResponse:
         db, user_idx=user.user_idx,
         title=_travel_title(payload.get("region"), start_date, end_date, it.title),
         start_date=start_date, end_date=end_date, region=payload.get("region"),
-        status="PLANNED",
+        status="PLANNED", source=TravelSource.RECOMMEND,
     )
 
     day_first, day_last = _day_bounds(it.segments)
@@ -130,7 +131,7 @@ def create_manual(db: Session, user, req: TravelManualCreateRequest) -> TravelRe
     travel = travel_dao.create(
         db, user_idx=user.user_idx, title=title,
         start_date=req.start_date, end_date=req.end_date,
-        region=req.region, status="PLANNED",
+        region=req.region, status="PLANNED", source=TravelSource.MANUAL,
     )
     db.commit()
     push_service.notify_travel_saved(db, user.user_idx, travel)  # 커밋 뒤 발송(실패해도 무해)

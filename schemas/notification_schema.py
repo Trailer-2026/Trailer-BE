@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from core.enums import NotificationType
+from core.enums import NotificationType, StampType
 
 
 class NotificationResponse(BaseModel):
@@ -64,6 +64,12 @@ class NotificationLogItem(BaseModel):
                     "탭하면 승차권 목록(GET /api/tickets)으로 보내면 됩니다. 추천 코스에서 나온 "
                     "TRAIN_D10M은 travel_idx가 대신 채워지므로 여기가 null입니다",
         examples=[7],
+    )
+    stamp_type: StampType | None = Field(
+        None,
+        description="이 알림이 가리키는 스탬프 종류 — STAMP_EARNED에서만 채워집니다. "
+                    "탭하면 마이페이지 스탬프 탭으로 보내고 이 종류의 칸을 짚으면 됩니다",
+        examples=["FIRST_TRAIN_TRIP"],
     )
     is_read: bool = Field(..., description="읽음 여부", examples=[False])
     created_at: datetime = Field(..., description="알림 발송 시각(ISO-8601)", examples=["2026-08-03T00:00:00+09:00"])

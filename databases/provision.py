@@ -39,11 +39,12 @@ from databases.models.schedule import Schedule  # noqa: F401  notification_log�
 from databases.models.station import Station  # noqa: F401  ticket의 FK 대상
 from databases.models.ticket import Ticket
 from databases.models.travel import Travel  # noqa: F401  notification_log의 FK 대상
-from databases.models.user import User  # noqa: F401  세 테이블 모두의 FK 대상
+from databases.models.user import User  # noqa: F401  네 테이블 모두의 FK 대상
+from databases.models.user_stamp import UserStamp
 
 # 없으면 만들 테이블. **순서는 신경 쓰지 않는다** — create_all이 FK 의존 그래프를
 # 위상정렬해 부모부터 만든다(ticket·travel·schedule → notification_log).
-_TABLES = (Ticket, Notification, NotificationLog)
+_TABLES = (Ticket, Notification, NotificationLog, UserStamp)
 
 # 이미 있는 테이블에 덧붙일 컬럼 — (테이블, 컬럼명, 타입·제약).
 # 모델 정의와 같은 내용이어야 한다. 새 컬럼을 모델에 넣었다면 여기에도 넣어라.
@@ -56,6 +57,10 @@ _ADDED_COLUMNS = (
     ("reels", "thumbnail_url", "VARCHAR(200)"),
     # 사용자가 지정한 여행 대표 사진(직접 만든 여행은 일정 이미지가 없어 썸네일이 빈다).
     ("travel", "cover_image_url", "VARCHAR(255)"),
+    # 저장 출처(RECOMMEND | MANUAL) — 'AI 추천 코스로 여행 완료' 스탬프 판정용.
+    ("travel", "source", "VARCHAR(20)"),
+    # 스탬프 획득 알림이 어느 칸인지 — FK가 아니라 종류 문자열이다(notification_log 참조).
+    ("notification_log", "stamp_type", "VARCHAR(30)"),
 )
 
 # 이미 있는 테이블에 덧붙일 인덱스. 모델 __table_args__의 같은 인덱스와 정의가 일치해야 한다.
@@ -71,6 +76,9 @@ _ADDED_INDEXES = (
     # 기존 ix_ticket_user_dep는 선두 컬럼이 user_idx라, 사용자를 가리지 않는 이 조회는
     # 그 인덱스를 못 타고 seq scan으로 떨어진다.
     "CREATE INDEX IF NOT EXISTS ix_ticket_dep_date ON ticket (dep_date)",
+    # 스탬프 자정 배치가 '그 기간에 여행이 끝난 사용자'를 고르는 조회용. 사용자를 안 가리는
+    # 조회라 선두 컬럼이 user_idx인 기존 인덱스를 못 타고 seq scan으로 떨어진다.
+    "CREATE INDEX IF NOT EXISTS ix_travel_end_date ON travel (end_date)",
 )
 
 

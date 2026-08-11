@@ -29,6 +29,36 @@ class NotificationType(str, enum.Enum):
     TRAVEL_DELETED = "TRAVEL_DELETED"    # 일정에서 삭제되었습니다
     TRAIN_D10M = "TRAIN_D10M"            # 열차 출발 10분 전 (추천 코스·직접 입력 승차권 공통)
     SCENERY = "SCENERY"                  # 실시간 창밖 풍경 (푸시만, 이력 미기록)
+    STAMP_EARNED = "STAMP_EARNED"        # 마이페이지 스탬프 획득
+
+
+class TravelSource(str, enum.Enum):
+    """여행이 저장된 경로. travel.source에 value가 그대로 들어간다.
+
+    'AI 추천 코스로 여행 완료' 스탬프가 이걸로 판정한다. 컬럼이 생기기 전에 저장된
+    여행은 null이라 어느 쪽도 아니다(스탬프 판정에서 빠진다).
+    """
+
+    RECOMMEND = "RECOMMEND"  # 추천 플랜을 골라 저장 (POST /api/travels)
+    MANUAL = "MANUAL"        # 직접 일정 만들기
+
+
+class StampType(str, enum.Enum):
+    """마이페이지 스탬프 종류. 조건 판정은 services/stamp_service가 한다.
+
+    DB에 적립하지 않고 조회할 때마다 계산하므로 여기 value는 앱과의 계약(아이콘 매칭용
+    키)일 뿐이다. 순서가 곧 화면에 찍히는 순서다.
+    """
+
+    FIRST_TRAIN_TRIP = "FIRST_TRAIN_TRIP"    # 첫 기차여행
+    AI_COURSE_DONE = "AI_COURSE_DONE"        # AI 추천 코스로 여행 완료
+    FIVE_CITIES = "FIVE_CITIES"              # 서로 다른 도시 5곳 여행
+    TEN_ATTRACTIONS = "TEN_ATTRACTIONS"      # 지역 명소 10곳 방문
+    TWENTY_STATIONS = "TWENTY_STATIONS"      # 기차역 20곳 방문
+    MUGUNGHWA = "MUGUNGHWA"                  # 무궁화호 1회 이용
+    SCENERY_PHOTOS = "SCENERY_PHOTOS"        # 풍경 사진 10장 촬영
+    FIVE_REELS = "FIVE_REELS"                # 여행 영상 5개 제작
+    FOUR_SEASONS = "FOUR_SEASONS"            # 봄·여름·가을·겨울 여행 완료
 
 
 # 테마 한글 라벨 (응답·추천 이유 표시용)

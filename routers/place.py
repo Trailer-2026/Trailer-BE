@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Path, Query
 
 from core.enums import Theme
 from core.response import CommonResponse
-from schemas.place_schema import PlaceSearchResponse, ThemedPlacesResponse
+from schemas.place_schema import PlaceDetailResponse, PlaceSearchResponse, ThemedPlacesResponse
 from services import place_service
 
 router = APIRouter(prefix="/api/places", tags=["Place"])
@@ -39,3 +39,35 @@ def get_themed_places(
 ):
     result = place_service.themed_places(theme)
     return CommonResponse.success_response("테마별 여행지 조회 성공", data=result)
+
+
+@router.get(
+    "/{content_id}",
+    summary="여행지 상세 조회 (지역 소개 + 가까운 맛집)",
+    description="홈 '테마별 여행지' 카드를 눌렀을 때 뜨는 상세 화면 데이터입니다. "
+                "`content_id`는 `GET /api/places/themed` 응답 카드의 `content_id`를 그대로 씁니다. "
+                "한 화면에 다 보이는 정보라 **지역 소개와 가까운 맛집을 한 응답에** 담습니다.\n\n"
+                "- **지역 소개**: `headline`(상단 큰 제목), `images`(대표 사진이 첫 장), "
+                "`overview`(소개글 평문), `address`, `nearest_station`.\n"
+                "- **가까운 역**: `nearest_station.text`를 그대로 노출하면 됩니다"
+                "(예: '양천향교역에서 도보 10~11분'). 지하철역과 기차역을 함께 보고 가장 가까운 "
+                "하나를 고르며, **1.5km 안에 역이 없으면 `nearest_station`이 null**이니 그 땐 "
+                "이 줄을 숨기면 됩니다(제주·산간 등). 도보 시간은 직선거리 기반 근사입니다.\n"
+                "- **가까운 맛집**: 사진 있는 곳 우선·거리순으로 최대 `restaurant_limit`개. "
+                "반경은 2km→5km→10km로 넓히다 처음 결과가 나온 곳에서 멈추므로, 시골 관광지는 "
+                "수 km 떨어진 곳이 나올 수 있습니다(`distance_m` 참고).\n\n"
+                "관광 정보는 실시간 TourAPI에서, 역은 카카오 로컬에서 옵니다. "
+                "맛집 조회나 역 조회가 실패해도 상세 자체는 내려갑니다(각각 빈 배열·null).\n\n"
+                "- 404: 해당 콘텐츠가 TourAPI에 없거나 좌표가 없어 상세를 만들 수 없음\n"
+                "- 502: 관광 정보 서비스(TourAPI) 호출 실패",
+    response_model=CommonResponse[PlaceDetailResponse],
+)
+def get_place_detail(
+    # 숫자만 허용해 위의 /search·/themed 경로와 겹치지 않게 한다(선언 순서에 기대지 않음).
+    # example은 Swagger 'Try it out' 입력칸에 미리 채워진다 — 서울식물원(강서구)으로 고정해
+    # 소개·사진·도보권 역·맛집이 다 있는 케이스를 바로 눌러볼 수 있게 한다.
+    content_id: str = Path(..., pattern=r"^\d+$", description="TourAPI 콘텐츠 ID", example="2589349"),
+    restaurant_limit: int = Query(6, ge=1, le=20, description="가까운 맛집 최대 개수"),
+):
+    result = place_service.place_detail(content_id, restaurant_limit)
+    return CommonResponse.success_response("여행지 상세 조회 성공", data=result)

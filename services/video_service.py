@@ -1534,7 +1534,14 @@ def _publish_reels_video(reels_idx: int, video_path: Path) -> str:
         if reels is None:
             raise NotFoundException(f"릴스(reels_idx={reels_idx})가 사라졌습니다.")
         reels_dao.update_url(db, reels, url, thumbnail_url)
+        user_idx = reels.user_idx
         db.commit()
+        # '여행 영상 5개 제작' 스탬프 재판정 — 커밋 뒤에 부른다. 날짜가 아니라 행동으로
+        # 켜지는 유일한 스탬프라 자정 배치로는 하루가 늦는다. 예외는 안에서 삼킨다.
+        # (옛 익명 릴스는 user_idx가 없어 판정할 대상이 없다.)
+        if user_idx is not None:
+            from services import stamp_service
+            stamp_service.award_after_reels(user_idx)
         return url
     except Exception:
         db.rollback()
