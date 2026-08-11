@@ -3,6 +3,7 @@
 공모전 정책상 관광데이터는 DB 스냅샷이 아니라 매 요청 실시간 호출로 받아야 한다.
 역(station)은 관광데이터가 아니므로 DB를 그대로 쓴다.
 """
+import html
 import logging
 import math
 import random
@@ -205,7 +206,6 @@ _RESTAURANT_CT = 39              # 음식점 contentTypeId
 # 하늬라벤더팜)는 5km에도 TourAPI 등록 음식점이 0건이라 섹션이 통째로 빈다. 첫 단계에서
 # 결과가 나오면 더 넓히지 않으므로 도심에선 추가 호출이 없다(쿼터는 오퍼레이션별 일일 제한).
 _RESTAURANT_RADII_M = (2000, 5000, 10000)
-_ENTITY_RE = re.compile(r"&(?:nbsp|lt|gt|amp|quot|#39);")
 
 
 @dataclass
@@ -244,11 +244,19 @@ def _plain(raw: str | None) -> str | None:
 
     overview·homepage에 `<br>`·`&nbsp;` 같은 마크업이 섞여 오는데 앱은 평문으로 그리므로
     여기서 없앤다. 줄바꿈(\\n)은 문단 구분이라 살리고 그 외 연속 공백만 한 칸으로 줄인다.
+
+    엔티티는 지우지 않고 **원래 문자로 되돌린다**. 전에는 몇 개를 골라 공백으로 바꿨는데,
+    그러면 '카페 &amp; 베이커리'가 '카페 베이커리'가 돼 상호에서 &가 사라졌다. 골라 담은
+    목록이라 여기 없는 엔티티(&middot; 등)는 그대로 노출되기도 했다.
+    태그를 먼저 걷어낸 뒤 푸는 순서는 유지한다 — 이스케이프된 `&lt;br&gt;`은 원문이 의도한
+    글자이지 마크업이 아니므로 태그 제거 대상이 아니다.
     """
     if not raw:
         return None
     txt = _TAG_RE.sub(" ", str(raw))
-    txt = _ENTITY_RE.sub(" ", txt)
+    # NBSP는 일반 공백으로 눕혀야 아래 공백 정리에 걸린다(\s에 NBSP가 안 잡히는 건 아니지만,
+    # 앱에서 줄바꿈이 어긋나 보이는 걸 막으려면 문자 자체를 바꿔 두는 게 안전하다).
+    txt = html.unescape(txt).replace("\xa0", " ")
     # 줄바꿈은 보존하되 줄 안쪽 공백만 정리 — 문단이 뭉개지면 소개글이 읽기 어려워진다.
     lines = [re.sub(r"[^\S\n]+", " ", ln).strip() for ln in txt.split("\n")]
     out = "\n".join(ln for ln in lines if ln).strip()
