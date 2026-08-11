@@ -7,6 +7,7 @@
 import logging
 import math
 import random
+from concurrent.futures import ThreadPoolExecutor
 
 from core.enums import Theme
 from core.exceptions.custom import ExternalServiceException, NotFoundException
@@ -163,7 +164,13 @@ def place_detail(content_id: str, restaurant_limit: int = _RESTAURANT_LIMIT) -> 
     if detail is None:
         raise NotFoundException("여행지를 찾을 수 없습니다.")
 
-    foods = tour_place.nearby_restaurants(detail.lat, detail.lng, limit=restaurant_limit)
+    # 맛집(TourAPI)과 역(카카오)은 서로 다른 외부 서비스라 기다릴 이유가 없다 — 둘을 겹쳐
+    # 부르면 상세 응답이 느린 쪽 하나만큼만 걸린다(fetch_detail이 본문·사진에 쓰는 방식과 같다).
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_station = ex.submit(_nearest_station, detail.lat, detail.lng)
+        foods = tour_place.nearby_restaurants(detail.lat, detail.lng, limit=restaurant_limit)
+        nearest = f_station.result()
+
     return PlaceDetailResponse(
         content_id=detail.content_id,
         name=detail.name,
@@ -176,7 +183,7 @@ def place_detail(content_id: str, restaurant_limit: int = _RESTAURANT_LIMIT) -> 
         overview=detail.overview,
         tel=detail.tel,
         homepage=detail.homepage,
-        nearest_station=_nearest_station(detail.lat, detail.lng),
+        nearest_station=nearest,
         restaurants=[
             NearbyRestaurant(
                 content_id=f.content_id, name=f.name, category=f.category,
