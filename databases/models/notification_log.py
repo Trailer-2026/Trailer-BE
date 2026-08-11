@@ -60,7 +60,7 @@ class NotificationLog(BaseModel):
     )
     type = Column(
         String(20), nullable=False,
-        comment="TRAVEL_SAVED | TRAVEL_D1 | TRAVEL_DELETED | TRAIN_D10M",
+        comment="TRAVEL_SAVED | TRAVEL_D1 | TRAVEL_DELETED | TRAIN_D10M | STAMP_EARNED",
     )
     title = Column(String(100), nullable=False, comment="알림 제목")
     body = Column(String(255), nullable=False, comment="알림 본문")
@@ -78,6 +78,14 @@ class NotificationLog(BaseModel):
         Integer, ForeignKey('ticket.ticket_idx'), nullable=True,
         comment="FK 승차권 — TRAIN_D10M이 직접 입력 승차권(ticket)에서 나왔을 때. "
                 "중복 발송 판정 키(출발 1건당 1회)",
+    )
+    # 스탬프 알림의 대상. 다른 대상들과 달리 FK가 아니라 종류 문자열이다 — 앱이 열 화면이
+    # user_stamp 행 하나가 아니라 '스탬프 탭의 그 칸'이고, 칸은 PK가 아니라 종류로 식별된다.
+    # 한 번만 발송하는 건 user_stamp의 (user_idx, type) 유니크가 이미 보장하므로
+    # 여기엔 부분 유니크 인덱스를 걸지 않는다.
+    stamp_type = Column(
+        String(30), nullable=True,
+        comment="스탬프 종류 (STAMP_EARNED일 때만, core.enums.StampType)",
     )
     read_at = Column(
         DateTime(timezone=True), nullable=True, comment="읽은 시각 (null이면 안 읽음)"

@@ -95,6 +95,34 @@ def location_based_list(
     return dgo.items(body), int(body.get("totalCount") or 0)
 
 
+def detail_common(*, content_id: str, timeout: int = 20) -> dict:
+    """공통정보 조회(detailCommon2) 1건. 항목이 없으면 빈 dict.
+
+    detailIntro2와 달리 contentTypeId 없이 contentId만으로 부른다 — 응답의 contenttypeid로
+    유형을 역으로 알 수 있어, 상세 화면처럼 ID만 들고 진입하는 경로에서 그대로 쓸 수 있다.
+
+    item 주요 필드: title, addr1, mapx(경도), mapy(위도), firstimage, overview(소개글),
+    tel, homepage(`<a href=...>` HTML), cat1/cat2/cat3, contenttypeid.
+    """
+    body = _get("detailCommon2", {"contentId": content_id}, timeout=timeout)
+    items = dgo.items(body)
+    return items[0] if items else {}
+
+
+def detail_images(*, content_id: str, num_of_rows: int = 10, timeout: int = 20) -> list[dict]:
+    """이미지정보 조회(detailImage2). 추가 사진 목록(0건이면 빈 리스트).
+
+    item 필드: originimgurl(원본), smallimageurl(썸네일), imgname.
+    대표사진(detailCommon2의 firstimage)은 여기 안 섞여 올 수 있어 호출측에서 합친다.
+    """
+    body = _get(
+        "detailImage2",
+        {"contentId": content_id, "imageYN": "Y", "numOfRows": num_of_rows},
+        timeout=timeout,
+    )
+    return dgo.items(body)
+
+
 def detail_intro(*, content_id: str, content_type_id: int, timeout: int = 20) -> dict:
     """공통정보 상세 조회(detailIntro2) 1건. 유형별 운영시간·휴무 필드를 담은 item(dict) 반환.
 

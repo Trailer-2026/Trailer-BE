@@ -25,6 +25,8 @@ _ALARM_FIELD = {
     # 탑승 알림도 일정 알림 스위치를 따른다 — 설정 화면의 스위치는 두 개(이벤트/풍경)뿐이라
     # 새 종류를 위해 세 번째를 만들면 앱 설정 화면까지 같이 바꿔야 한다.
     NotificationType.TRAIN_D10M: "event_alarm",
+    # 스탬프 획득도 같은 이유로 이벤트 스위치를 따른다(설정 화면 스위치는 둘뿐).
+    NotificationType.STAMP_EARNED: "event_alarm",
     NotificationType.SCENERY: "scenery_alarm",
 }
 
@@ -35,12 +37,16 @@ _NO_DEEPLINK = {NotificationType.TRAVEL_DELETED}
 # 알림 화면이 종류별 라벨로 쓰는 제목(디자인의 "풍경알림" 칩). OS 푸시의 제목이기도 하다.
 _TITLE_TRAVEL = "일정알림"
 _TITLE_SCENERY = "풍경알림"
+# 스탬프는 일정과 성격이 달라 칩을 새로 뒀다. 값은 그냥 표시 문자열이라 서버만 바꾸면 되지만,
+# 앱이 칩 색을 제목별로 지정해 뒀다면 이 값도 함께 등록해야 한다.
+_TITLE_STAMP = "스탬프알림"
 
 
 def notify(
     db: Session, user_idx: int, ntype: NotificationType, title: str, body: str,
     travel_idx: int | None = None, scenic_spot_idx: int | None = None,
     schedule_idx: int | None = None, ticket_idx: int | None = None,
+    stamp_type: str | None = None,
     record: bool = True, image_url: str | None = None,
 ) -> bool:
     """수신 설정을 확인하고 이력을 남긴 뒤 사용자의 모든 기기로 푸시한다. 발송했으면 True.
@@ -64,6 +70,7 @@ def notify(
             notification_log_dao.create(
                 db, user_idx=user_idx, notification_type=ntype.value, title=title, body=body,
                 travel_idx=travel_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx,
+                stamp_type=stamp_type,
             )
             db.commit()
 
@@ -78,6 +85,9 @@ def notify(
         # 직접 입력 승차권은 여행이 없어(travel_idx NULL) 승차권 목록으로 보내야 한다.
         if ticket_idx is not None:
             data["ticket_idx"] = ticket_idx
+        # 스탬프는 열 화면이 마이페이지 스탬프 탭이고, 어느 칸을 짚을지는 종류로 정한다.
+        if stamp_type is not None:
+            data["stamp_type"] = stamp_type
         result = fcm_service.send_push(db, user_idx, title, body, data=data, image_url=image_url)
 
         # 발송 흔적을 남긴다 — 풍경은 이력도 안 남아서 이 로그가 유일한 확인 수단이다.
@@ -222,6 +232,21 @@ def _josa_i_ga(word: str) -> str:
     return "이" if has_jong else "가"
 
 
+def notify_stamp_earned(db: Session, user_idx: int, stamp_type: str, stamp_title: str) -> bool:
+    """'스탬프를 획득했어요' — 스탬프가 처음 찍힌 직후 발송.
+
+    **반드시 user_stamp 적립을 커밋한 뒤에 호출한다.** 적립이 '한 번만'을 보장하는 지점이라
+    (user_stamp의 유니크 제약), 적립에 성공한 호출만 여기까지 온다 = 알림도 평생 한 번이다.
+    그래서 다른 알림들과 달리 여기선 이력을 다시 뒤져 중복을 거르지 않는다.
+    """
+    return notify(
+        db, user_idx, NotificationType.STAMP_EARNED,
+        title=_TITLE_STAMP,
+        body=f"'{stamp_title}' 스탬프를 획득했어요",
+        stamp_type=stamp_type,
+    )
+
+
 def notify_scenery(db: Session, user, items: list[dict], to_station: str) -> bool:
     """구간별 창밖 관광지 조회 결과로 풍경 알림을 보낸다. 보냈으면 True.
 
@@ -258,6 +283,16 @@ def _scenery_body(nickname: str | None, to_station: str) -> str:
     if nickname:
         return f"{nickname} 님, 지금 {to_station} 스팟을 지나고 있어요"
     return f"지금 {to_station} 스팟을 지나고 있어요"
+
+
+def is_enabled(db: Session, user_idx: int, ntype: NotificationType) -> bool:
+    """수신 설정이 켜져 있는지 — notify를 부르기 전에 미리 알아야 하는 호출부용 공개 창구.
+
+    스탬프 적립이 이걸 쓴다. 알림을 보낼 때는 notify가 이력을 만들며 적립까지 함께
+    커밋하지만, 설정이 꺼져 있으면 notify가 아무것도 커밋하지 않고 빠지므로 적립을
+    직접 커밋해야 한다 — 그 갈림길을 판단하려면 미리 물어봐야 한다.
+    """
+    return _is_enabled(db, user_idx, ntype)
 
 
 def _is_enabled(db: Session, user_idx: int, ntype: NotificationType) -> bool:
