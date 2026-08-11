@@ -56,7 +56,7 @@ _ADDED_COLUMNS = (
     ("reels", "thumbnail_url", "VARCHAR(200)"),
     # 사용자가 지정한 여행 대표 사진(직접 만든 여행은 일정 이미지가 없어 썸네일이 빈다).
     ("travel", "cover_image_url", "VARCHAR(255)"),
-    # 저장 출처(RECOMMEND | MANUAL) — 추천 코스로 저장한 여행인지 구분한다.
+    # 저장 출처(RECOMMEND | MANUAL) — 'AI 추천 코스로 여행 완료' 스탬프 판정용.
     ("travel", "source", "VARCHAR(20)"),
 )
 
