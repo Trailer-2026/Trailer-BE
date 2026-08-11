@@ -17,7 +17,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from core.enums import NotificationType, StampType, TravelSource
-from databases.daos import notification_log_dao
+from databases.daos import notification_log_dao, stamp_dao
 from databases.models.base import Base
 from databases.models.notification import Notification
 from databases.models.notification_log import NotificationLog
@@ -40,6 +40,7 @@ CREATE TABLE station (
 """
 
 USER = 1
+OTHER = 2      # 승차권만 있고 여행은 없는 사용자
 TODAY = date.today()
 PAST = TODAY - timedelta(days=30)      # 이미 다녀온 여행
 FUTURE = TODAY + timedelta(days=30)    # 아직 안 간 여행
@@ -249,6 +250,24 @@ def main():
         assert off_earned, "수신 거부여도 적립은 돼야 한다"
         _check("수신 거부면 이력 없음", db.query(NotificationLog).count(), 0)
         _check("그래도 적립은 남음", db.query(UserStamp).count(), len(off_earned))
+
+        # ── 승차권만 있고 여행이 없는 사용자도 배치 대상이다 ────────────────
+        #    자정 배치가 여행만 훑으면, 승차권만 저장한 사람은 앱을 열기 전까지
+        #    '첫 기차여행'을 못 받는다.
+        db.add(User(user_idx=OTHER, nickname="ticket-only", provider="google",
+                    provider_id="p2"))
+        db.add(Ticket(
+            user_idx=OTHER, dep_station_idx=1, arr_station_idx=2,
+            dep_date=PAST, dep_time=time(9, 0), arr_date=PAST, arr_time=time(11, 0),
+        ))
+        db.commit()
+        _check("여행이 하나도 없다",
+               db.query(Travel).filter(Travel.user_idx == OTHER).count(), 0)
+        _check("그래도 배치 대상에 잡힌다",
+               OTHER in stamp_dao.user_idxs_with_trip_ending_between(db, PAST, PAST), True)
+        ticket_only = _by_type(stamp_service.list_stamps(db, OTHER))
+        _check("첫 기차여행이 켜진다", ticket_only[StampType.FIRST_TRAIN_TRIP].achieved, True)
+        _check("역 2곳도 센다", ticket_only[StampType.TWENTY_STATIONS].progress, 2)
 
         print("OK: 마이페이지 스탬프 자체 점검 통과")
     finally:

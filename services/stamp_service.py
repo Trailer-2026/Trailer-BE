@@ -240,7 +240,7 @@ def award_for_finished_travels(lookback_days: int = 1) -> int:
     db = SessionLocal()
     try:
         total = 0
-        for user_idx in stamp_dao.user_idxs_with_travel_ending_between(db, start, end):
+        for user_idx in stamp_dao.user_idxs_with_trip_ending_between(db, start, end):
             try:
                 total += len(evaluate(db, user_idx))
             except Exception as e:

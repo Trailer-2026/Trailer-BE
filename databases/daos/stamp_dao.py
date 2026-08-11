@@ -155,17 +155,21 @@ def count_my_reels(db: Session, user_idx: int) -> int:
     ).count()
 
 
-def user_idxs_with_travel_ending_between(db: Session, start: date, end: date) -> list[int]:
-    """그 기간에 여행이 끝난 사용자들. 자정 배치가 재판정할 대상을 고른다.
+def user_idxs_with_trip_ending_between(db: Session, start: date, end: date) -> list[int]:
+    """그 기간에 여행을 다녀온 사용자들. 자정 배치가 재판정할 대상을 고른다.
 
     스탬프 대부분은 '다녀왔을 때' 켜지는데 그건 사용자의 행동이 아니라 날짜가 지나서
     일어나는 일이라, 이렇게 시간으로 훑지 않으면 앱을 열기 전까지 아무도 모른다.
 
+    **여행과 직접 입력 승차권 양쪽을 본다.** 승차권만 저장하고 여행은 만들지 않은 사용자도
+    기차를 탄 것이고(count_train_rides가 두 소스를 합쳐 센다), 여행만 훑으면 그런 사용자는
+    배치에 영영 안 잡혀 앱을 열기 전까지 '첫 기차여행'을 못 받는다.
+
     **하루가 아니라 기간인 이유**: 서버가 이틀 넘게 꺼져 있었다면 그 사이 끝난 여행은
     어제 하루만 봐서는 영영 잡히지 않는다. 스탬프 조건은 한 번 참이 되면 계속 참이라
-    (여행이 끝난 사실은 변하지 않는다) 과거로 넓혀 훑어도 결과가 달라지지 않는다.
+    (다녀온 사실은 변하지 않는다) 과거로 넓혀 훑어도 결과가 달라지지 않는다.
     """
-    rows = (
+    travels = (
         db.query(Travel.user_idx)
         .filter(
             Travel.deleted_at.is_(None),
@@ -173,9 +177,19 @@ def user_idxs_with_travel_ending_between(db: Session, start: date, end: date) ->
             Travel.end_date <= end,
         )
         .distinct()
-        .all()
     )
-    return [r.user_idx for r in rows]
+    tickets = (
+        db.query(Ticket.user_idx)
+        .filter(
+            Ticket.deleted_at.is_(None),
+            Ticket.dep_date >= start,
+            Ticket.dep_date <= end,
+        )
+        .distinct()
+    )
+    # 두 축을 파이썬에서 합친다 — UNION으로 묶어도 되지만, 한 사용자가 양쪽에 다 걸리는 게
+    # 흔해서 어차피 중복 제거가 필요하고 대상자 수도 하루치라 작다.
+    return sorted({r.user_idx for r in travels.all()} | {r.user_idx for r in tickets.all()})
 
 
 def finished_travel_periods(db: Session, user_idx: int, today: date) -> list[tuple[date, date]]:
