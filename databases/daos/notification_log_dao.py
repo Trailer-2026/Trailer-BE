@@ -8,12 +8,13 @@ from databases.models.notification_log import NotificationLog
 def create(
     db: Session, user_idx: int, notification_type: str, title: str, body: str,
     travel_idx: int | None = None, schedule_idx: int | None = None,
-    ticket_idx: int | None = None,
+    ticket_idx: int | None = None, stamp_type: str | None = None,
 ) -> NotificationLog:
     """알림 이력 1건 생성. flush만 하고 commit은 서비스가 한다."""
     row = NotificationLog(
         user_idx=user_idx, type=notification_type, title=title, body=body,
         travel_idx=travel_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx,
+        stamp_type=stamp_type,
     )
     db.add(row)
     db.flush()

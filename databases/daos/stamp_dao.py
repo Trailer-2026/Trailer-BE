@@ -155,6 +155,29 @@ def count_my_reels(db: Session, user_idx: int) -> int:
     ).count()
 
 
+def user_idxs_with_travel_ending_between(db: Session, start: date, end: date) -> list[int]:
+    """그 기간에 여행이 끝난 사용자들. 자정 배치가 재판정할 대상을 고른다.
+
+    스탬프 대부분은 '다녀왔을 때' 켜지는데 그건 사용자의 행동이 아니라 날짜가 지나서
+    일어나는 일이라, 이렇게 시간으로 훑지 않으면 앱을 열기 전까지 아무도 모른다.
+
+    **하루가 아니라 기간인 이유**: 서버가 이틀 넘게 꺼져 있었다면 그 사이 끝난 여행은
+    어제 하루만 봐서는 영영 잡히지 않는다. 스탬프 조건은 한 번 참이 되면 계속 참이라
+    (여행이 끝난 사실은 변하지 않는다) 과거로 넓혀 훑어도 결과가 달라지지 않는다.
+    """
+    rows = (
+        db.query(Travel.user_idx)
+        .filter(
+            Travel.deleted_at.is_(None),
+            Travel.end_date >= start,
+            Travel.end_date <= end,
+        )
+        .distinct()
+        .all()
+    )
+    return [r.user_idx for r in rows]
+
+
 def finished_travel_periods(db: Session, user_idx: int, today: date) -> list[tuple[date, date]]:
     """다녀온 여행의 (시작일, 종료일) 목록. 계절 판정용."""
     rows = (

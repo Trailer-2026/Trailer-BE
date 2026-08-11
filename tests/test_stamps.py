@@ -1,10 +1,11 @@
 """마이페이지 스탬프 자체 점검 — `python tests/test_stamps.py`.
 
 프레임워크 없음(레포에 테스트 설정이 없다) — 깨지면 assert 로 죽는다.
-인메모리 SQLite 라 네트워크·운영 DB 없이 돈다.
+인메모리 SQLite 라 네트워크·운영 DB 없이 돈다. FCM 발송은 스텁으로 갈음한다.
 
 지키려는 규칙: 아직 안 끝난 여행은 세지 않는다, 표기가 다른 역·도시를 하나로 묶는다,
-승차권과 추천 코스 일정을 합쳐 센다, 계절은 여행 기간이 걸친 달을 모두 본다.
+승차권과 추천 코스 일정을 합쳐 센다, 계절은 여행 기간이 걸친 달을 모두 본다,
+**획득 알림은 스탬프당 평생 1회**, 한 번 딴 스탬프는 조건이 어긋나도 유지된다.
 """
 import sys
 from datetime import date, time, timedelta
@@ -15,14 +16,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from core.enums import StampType, TravelSource
+from core.enums import NotificationType, StampType, TravelSource
+from databases.daos import notification_log_dao
 from databases.models.base import Base
+from databases.models.notification import Notification
+from databases.models.notification_log import NotificationLog
 from databases.models.reels import Reels
 from databases.models.schedule import Schedule
 from databases.models.ticket import Ticket
 from databases.models.travel import Travel
 from databases.models.user import User
-from services import stamp_service
+from databases.models.user_stamp import UserStamp
+from services import fcm_service, stamp_service
 
 # station 모델은 Postgres 전용 타입(ENUM 배열)을 써서 SQLite 가 만들지 못한다. 승차권 조인이
 # 읽는 건 station_idx·station_name·deleted_at 셋뿐이라 그만큼만 손으로 만든다.
@@ -42,14 +47,30 @@ FUTURE = TODAY + timedelta(days=30)    # 아직 안 간 여행
 
 def _session():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(
-        engine, tables=[t.__table__ for t in (User, Travel, Schedule, Ticket, Reels)],
-    )
+    Base.metadata.create_all(engine, tables=[t.__table__ for t in (
+        User, Travel, Schedule, Ticket, Reels, Notification, NotificationLog, UserStamp,
+    )])
     db = sessionmaker(bind=engine)()
     db.execute(text(_STATION_DDL))
     db.add(User(user_idx=USER, nickname="tester", provider="google", provider_id="p1"))
     db.commit()
     return db
+
+
+def _stub_fcm() -> list[dict]:
+    """FCM 대신 리스트에 기록한다 — 발송된 푸시의 (제목, 본문, data)."""
+    sent: list[dict] = []
+
+    class _Result:  # push_service가 로그에 쓰는 두 필드만 있으면 된다
+        sent = 0
+        failed = 0
+
+    def fake(db, user_idx, title, body, data=None, image_url=None):
+        sent.append({"user_idx": user_idx, "title": title, "body": body, "data": data or {}})
+        return _Result()
+
+    fcm_service.send_push = fake
+    return sent
 
 
 def _travel(db, *, start: date, end: date, region=None, source=None) -> Travel:
@@ -79,7 +100,9 @@ def _check(label, got, want):
 
 
 def main():
+    original_send = fcm_service.send_push
     db = _session()
+    pushes = _stub_fcm()
     try:
         # ── 아무것도 없으면 전부 잠금 ──────────────────────────────────────
         result = stamp_service.list_stamps(db, USER)
@@ -162,9 +185,75 @@ def main():
         for item in stamp_service.list_stamps(db, USER).stamps:
             assert item.progress <= item.goal, f"{item.title} progress가 goal 초과"
 
+        # ── 알림: 획득한 스탬프마다 한 통씩, 그리고 다시는 안 온다 ───────────
+        earned = {s.type for s in stamp_service.list_stamps(db, USER).stamps if s.achieved}
+        stamp_pushes = [p for p in pushes if p["data"].get("type") == "STAMP_EARNED"]
+        _check("획득 수만큼 푸시", len(stamp_pushes), len(earned))
+        _check("푸시가 가리키는 스탬프",
+               {p["data"]["stamp_type"] for p in stamp_pushes}, {t.value for t in earned})
+        _check("푸시 제목(알림 화면 칩)", {p["title"] for p in stamp_pushes}, {"스탬프알림"})
+
+        logs = db.query(NotificationLog).filter(
+            NotificationLog.type == NotificationType.STAMP_EARNED.value
+        ).all()
+        _check("이력도 같은 수", len(logs), len(earned))
+        _check("이력에 스탬프 종류가 남는다",
+               {row.stamp_type for row in logs}, {t.value for t in earned})
+
+        before = len(pushes)
+        stamp_service.list_stamps(db, USER)
+        stamp_service.list_stamps(db, USER)
+        _check("다시 조회해도 재발송 없음", len(pushes), before)
+
+        # 배치가 같은 사용자를 또 집어도 마찬가지다(멱등).
+        _check("재판정해도 새로 찍히는 것 없음", stamp_service.evaluate(db, USER), [])
+        _check("재판정 후에도 푸시 그대로", len(pushes), before)
+
+        # ── 한 번 딴 스탬프는 조건이 어긋나도 유지된다 ─────────────────────
+        db.query(Reels).filter(Reels.user_idx == USER).delete(synchronize_session=False)
+        db.commit()
+        after = _by_type(stamp_service.list_stamps(db, USER))[StampType.FIVE_REELS]
+        _check("릴스를 다 지워도 유지", after.achieved, True)
+        _check("유지된 칸은 progress도 목표치", after.progress, after.goal)
+        assert after.achieved_at is not None, "획득 시각이 있어야 한다"
+
+        # ── 이력 저장이 실패하면 적립도 안 남아야 한다 (다음 재판정에서 재시도) ──
+        #    적립만 커밋해 버리면 '이미 딴 스탬프'로 판정돼 알림이 영영 0통이 된다.
+        db.query(UserStamp).delete(synchronize_session=False)
+        db.query(NotificationLog).delete(synchronize_session=False)
+        db.commit()
+        db.expunge_all()  # 벌크 삭제라 식별자 맵이 남는다(경고만, 제품 동작과 무관)
+        original_create = notification_log_dao.create
+
+        def broken_create(*a, **k):
+            raise RuntimeError("이력 INSERT 실패")
+
+        notification_log_dao.create = broken_create
+        try:
+            _check("이력 실패 시 적립 0건", stamp_service.evaluate(db, USER), [])
+            _check("적립도 안 남는다", db.query(UserStamp).count(), 0)
+        finally:
+            notification_log_dao.create = original_create
+        recovered = stamp_service.evaluate(db, USER)
+        assert recovered, "복구 후 재판정에서 다시 찍혀야 한다"
+        _check("복구 후 적립·이력 수 일치",
+               db.query(UserStamp).count(), db.query(NotificationLog).count())
+
+        # ── 수신 거부여도 스탬프는 적립된다(알림·이력만 없다) ──────────────
+        db.query(UserStamp).delete(synchronize_session=False)
+        db.query(NotificationLog).delete(synchronize_session=False)
+        db.add(Notification(user_idx=USER, event_alarm=False, scenery_alarm=False))
+        db.commit()
+        db.expunge_all()
+        off_earned = stamp_service.evaluate(db, USER)
+        assert off_earned, "수신 거부여도 적립은 돼야 한다"
+        _check("수신 거부면 이력 없음", db.query(NotificationLog).count(), 0)
+        _check("그래도 적립은 남음", db.query(UserStamp).count(), len(off_earned))
+
         print("OK: 마이페이지 스탬프 자체 점검 통과")
     finally:
         db.close()
+        fcm_service.send_push = original_send
 
 
 if __name__ == "__main__":

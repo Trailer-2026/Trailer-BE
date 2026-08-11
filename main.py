@@ -93,6 +93,38 @@ async def _trip_reminder_daily_loop():
             log.warning("D-1 여행 알림 실패(다음 자정에 재시도): %s", e)
 
 
+async def _stamp_daily_loop():
+    """매일 KST 자정에 '어제 여행이 끝난' 사용자의 스탬프를 재판정한다.
+
+    스탬프 대부분은 다녀와야 켜지는데 그건 사용자의 행동이 아니라 날짜가 지나서 일어나는
+    일이다. 이 루프가 없으면 사용자가 스탬프 탭을 열기 전까지 알림이 나가지 않는다.
+
+    시작 시 1회 보정 실행 — 자정에 서버가 꺼져 있었어도 놓친 판정을 채운다. 여기서만
+    CATCHUP_DAYS만큼 거슬러 본다(며칠씩 꺼져 있었으면 어제 하루로는 못 잡는다). 이미 찍힌
+    스탬프는 user_stamp 유니크 제약에 걸러지므로 몇 번 돌아도 중복 알림이 없다.
+    """
+    from services import stamp_service, trip_reminder_service
+
+    log = logging.getLogger(__name__)
+    try:
+        n = await asyncio.to_thread(
+            stamp_service.award_for_finished_travels, stamp_service.CATCHUP_DAYS,
+        )
+        if n:
+            log.info("스탬프 시작 보정 발급: %d건", n)
+    except Exception as e:
+        log.warning("스탬프 시작 보정 실패(다음 자정에 재시도): %s", e)
+    while True:
+        try:
+            await asyncio.sleep(trip_reminder_service.seconds_until_next_midnight_kst())
+            n = await asyncio.to_thread(stamp_service.award_for_finished_travels)
+            log.info("스탬프 일일 발급: %d건", n)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("스탬프 일일 발급 실패(다음 자정에 재시도): %s", e)
+
+
 async def _train_departure_loop():
     """1분마다 '열차가 10분 뒤 출발해요' 알림을 보낸다 (추천 코스·직접 입력 승차권 공통).
 
@@ -132,6 +164,8 @@ async def lifespan(app: FastAPI):
             tasks.append(asyncio.create_task(_trip_reminder_daily_loop()))
         if os.getenv("TRAIN_DEPARTURE_AUTOSYNC", "1") == "1":
             tasks.append(asyncio.create_task(_train_departure_loop()))
+        if os.getenv("STAMP_AUTOSYNC", "1") == "1":
+            tasks.append(asyncio.create_task(_stamp_daily_loop()))
     try:
         yield
     finally:

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, ForeignKey
+from sqlalchemy import Column, Index, Integer, String, Date, ForeignKey
 
 from databases.models.base import BaseModel
 
@@ -11,7 +11,12 @@ class Travel(BaseModel):
     """
 
     __tablename__ = "travel"
-    __table_args__ = ({"comment": "일정(여행)"},)
+    __table_args__ = (
+        # 스탬프 자정 배치가 '그 기간에 끝난 여행'으로 대상자를 고른다(사용자를 안 가린다).
+        # user_idx 인덱스는 선두 컬럼이 달라 이 조회엔 못 쓰므로 end_date 단독 인덱스를 둔다.
+        Index("ix_travel_end_date", "end_date"),
+        {"comment": "일정(여행)"},
+    )
 
     travel_idx = Column(Integer, primary_key=True, autoincrement=True, comment="PK")
     user_idx = Column(
@@ -25,7 +30,7 @@ class Travel(BaseModel):
     # 사용자가 직접 지정한 대표 사진. null이면 첫 일정(schedule)의 image_url을 썸네일로 쓴다 —
     # AI 추천 여행은 그 폴백만으로 사진이 있지만, 직접 만든 여행은 일정에 이미지가 없어 비어 보인다.
     cover_image_url = Column(String(255), nullable=True, comment="대표 사진 URL (사용자 지정)")
-    # 이 여행이 어디서 왔는지. 저장 경로가 save_selected_plan / create_manual 둘인데 남는
-    # 데이터가 같아서, 기록해 두지 않으면 나중에 구분할 방법이 없다. 컬럼 추가 전에 저장된
-    # 여행은 null이다.
+    # 이 여행이 어디서 왔는지. 'AI 추천 코스로 여행 완료' 스탬프의 판정 근거다 — 저장 경로가
+    # save_selected_plan / create_manual 둘인데 남는 데이터가 같아서, 기록해 두지 않으면
+    # 나중에 구분할 방법이 없다. 컬럼 추가 전에 저장된 여행은 null이라 스탬프 판정에서 빠진다.
     source = Column(String(20), nullable=True, comment="저장 출처 (RECOMMEND | MANUAL)")

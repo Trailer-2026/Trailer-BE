@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from core.enums import StampType
@@ -21,9 +23,15 @@ class StampItem(BaseModel):
     )
     achieved: bool = Field(..., description="달성 여부", examples=[True])
     progress: int = Field(
-        ..., description="현재 진행 수치(goal에서 멈춘다). 달성이면 goal과 같다", examples=[1],
+        ..., description="현재 진행 수치(goal에서 멈춘다). 달성이면 항상 goal과 같다", examples=[1],
     )
     goal: int = Field(..., description="달성에 필요한 수치", examples=[1])
+    achieved_at: datetime | None = Field(
+        None,
+        description="처음 획득한 시각(ISO-8601). 미달성이면 null. 한 번 획득하면 조건이 "
+                    "나중에 어긋나도(여행 삭제 등) 유지된다",
+        examples=["2026-08-11T17:40:00+09:00"],
+    )
 
 
 class StampListResponse(BaseModel):
