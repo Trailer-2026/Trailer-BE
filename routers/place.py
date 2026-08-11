@@ -64,7 +64,9 @@ def get_themed_places(
 )
 def get_place_detail(
     # 숫자만 허용해 위의 /search·/themed 경로와 겹치지 않게 한다(선언 순서에 기대지 않음).
-    content_id: str = Path(..., pattern=r"^\d+$", description="TourAPI 콘텐츠 ID", example="1623750"),
+    # example은 Swagger 'Try it out' 입력칸에 미리 채워진다 — 서울식물원(강서구)으로 고정해
+    # 소개·사진·도보권 역·맛집이 다 있는 케이스를 바로 눌러볼 수 있게 한다.
+    content_id: str = Path(..., pattern=r"^\d+$", description="TourAPI 콘텐츠 ID", example="2589349"),
     restaurant_limit: int = Query(6, ge=1, le=20, description="가까운 맛집 최대 개수"),
 ):
     result = place_service.place_detail(content_id, restaurant_limit)
