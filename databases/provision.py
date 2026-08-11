@@ -56,6 +56,8 @@ _ADDED_COLUMNS = (
     ("reels", "thumbnail_url", "VARCHAR(200)"),
     # 사용자가 지정한 여행 대표 사진(직접 만든 여행은 일정 이미지가 없어 썸네일이 빈다).
     ("travel", "cover_image_url", "VARCHAR(255)"),
+    # 저장 출처(RECOMMEND | MANUAL) — 추천 코스로 저장한 여행인지 구분한다.
+    ("travel", "source", "VARCHAR(20)"),
 )
 
 # 이미 있는 테이블에 덧붙일 인덱스. 모델 __table_args__의 같은 인덱스와 정의가 일치해야 한다.

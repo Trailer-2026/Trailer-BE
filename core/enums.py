@@ -31,6 +31,18 @@ class NotificationType(str, enum.Enum):
     SCENERY = "SCENERY"                  # 실시간 창밖 풍경 (푸시만, 이력 미기록)
 
 
+class TravelSource(str, enum.Enum):
+    """여행이 저장된 경로. travel.source에 value가 그대로 들어간다.
+
+    두 저장 경로(save_selected_plan / create_manual)가 남기는 데이터가 같아서, 기록해
+    두지 않으면 나중에 추천 코스로 저장한 여행인지 구분할 방법이 없다. 컬럼이 생기기
+    전에 저장된 여행은 null이라 어느 쪽도 아니다.
+    """
+
+    RECOMMEND = "RECOMMEND"  # 추천 플랜을 골라 저장 (POST /api/travels)
+    MANUAL = "MANUAL"        # 직접 일정 만들기
+
+
 # 테마 한글 라벨 (응답·추천 이유 표시용)
 THEME_LABELS = {
     Theme.NATURE: "자연",

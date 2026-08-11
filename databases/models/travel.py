@@ -25,3 +25,7 @@ class Travel(BaseModel):
     # 사용자가 직접 지정한 대표 사진. null이면 첫 일정(schedule)의 image_url을 썸네일로 쓴다 —
     # AI 추천 여행은 그 폴백만으로 사진이 있지만, 직접 만든 여행은 일정에 이미지가 없어 비어 보인다.
     cover_image_url = Column(String(255), nullable=True, comment="대표 사진 URL (사용자 지정)")
+    # 이 여행이 어디서 왔는지. 저장 경로가 save_selected_plan / create_manual 둘인데 남는
+    # 데이터가 같아서, 기록해 두지 않으면 나중에 구분할 방법이 없다. 컬럼 추가 전에 저장된
+    # 여행은 null이다.
+    source = Column(String(20), nullable=True, comment="저장 출처 (RECOMMEND | MANUAL)")
