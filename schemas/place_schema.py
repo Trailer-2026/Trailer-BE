@@ -61,22 +61,25 @@ class ThemedPlacesResponse(BaseModel):
 
 
 class NearestStationInfo(BaseModel):
-    """관광지에서 가장 가까운 기차역 — 상세 화면의 '대전역에서 도보 7~8분' 한 줄."""
+    """관광지에서 걸어갈 수 있는 가장 가까운 역 — 상세 화면의 '대전역에서 도보 7~8분' 한 줄."""
 
-    station_idx: int = Field(..., description="역 PK", examples=[12])
-    station_name: str = Field(..., description="역명('역' 접미사 포함)", examples=["대전역"])
-    distance_m: int = Field(..., description="관광지↔역 직선거리(m)", examples=[520])
-    walk_minutes: int | None = Field(
+    station_name: str = Field(
+        ..., description="역명('역' 접미사 포함, 노선 접미사는 뺀 것)", examples=["양천향교역"],
+    )
+    line: str | None = Field(
         None,
-        description="도보 예상 시간(분). 걸어갈 만한 거리(1.5km 이내)일 때만 채워지고 그 밖이면 null. "
-                    "직선거리에 우회 보정(1.2배)을 곱해 4.8km/h로 환산한 근사값",
-        examples=[8],
+        description="노선명. 지하철역이면 '9호선'·'경춘선'처럼 채워지고, 기차역이면 null",
+        examples=["9호선"],
+    )
+    distance_m: int = Field(..., description="관광지↔역 직선거리(m). 1500 이하", examples=[628])
+    walk_minutes: int = Field(
+        ...,
+        description="도보 예상 시간(분). 직선거리에 우회 보정(1.2배)을 곱해 4.8km/h로 환산한 근사값",
+        examples=[10],
     )
     text: str = Field(
-        ...,
-        description="그대로 노출하는 완성 문구. 도보권이면 '{역명}에서 도보 N~N+1분', "
-                    "아니면 '{역명}에서 N.Nkm'",
-        examples=["대전역에서 도보 8~9분"],
+        ..., description="그대로 노출하는 완성 문구 '{역명}에서 도보 N~N+1분'",
+        examples=["양천향교역에서 도보 10~11분"],
     )
 
 
@@ -122,7 +125,9 @@ class PlaceDetailResponse(BaseModel):
     tel: str | None = Field(None, description="전화번호. 없으면 null")
     homepage: str | None = Field(None, description="홈페이지 URL. 없으면 null")
     nearest_station: NearestStationInfo | None = Field(
-        None, description="가장 가까운 기차역. 역 데이터가 없으면 null",
+        None,
+        description="걸어갈 수 있는 가장 가까운 역(지하철·기차 통합). 1.5km 안에 역이 없거나 "
+                    "조회에 실패하면 null이고, 그 땐 앱이 이 줄을 통째로 숨긴다",
     )
     restaurants: list[NearbyRestaurant] = Field(
         ...,

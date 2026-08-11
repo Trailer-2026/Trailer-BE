@@ -2,17 +2,14 @@
 
 관광 데이터는 DB가 아니라 실시간 TourAPI(utils.tour_place)에서 온다. 테마 배너 문구는 서버가
 소유하고, '다른 테마' 버튼은 theme 없이 재호출하면 서버가 랜덤 테마를 골라준다.
-상세 화면의 '가장 가까운 역'만은 관광 데이터가 아니라 DB(station)를 쓴다.
+상세 화면의 '가장 가까운 역'만은 관광 데이터가 아니라 카카오 로컬(utils.kakao_local)에서 온다.
 """
 import logging
 import math
 import random
 
-from sqlalchemy.orm import Session
-
 from core.enums import Theme
 from core.exceptions.custom import ExternalServiceException, NotFoundException
-from databases.daos import station_dao
 from schemas.place_schema import (
     NearbyRestaurant,
     NearestStationInfo,
@@ -104,7 +101,7 @@ def themed_places(theme: Theme | None = None) -> ThemedPlacesResponse:
 _RESTAURANT_LIMIT = 6   # 상세 '가까운 맛집' 기본 개수(화면은 2×2로 4장, 여유분 포함)
 _WALK_M_PER_MIN = 80.0  # 도보 속도 4.8km/h(지도앱 보행 안내가 쓰는 통상 속도)
 _WALK_DETOUR = 1.2      # 직선거리 → 실제 보행 경로 보정(횡단보도·블록 우회 감안)
-_WALK_MAX_M = 1500      # 도보 표기 상한(≈23분). 넘으면 걸어갈 거리가 아니라 보고 km로 적는다
+_WALK_MAX_M = 1500      # 걸어갈 만한 거리의 상한(≈23분). 역 검색 반경이자 노출 여부의 기준
 
 
 def _headline(name: str, themes: list[Theme]) -> str:
@@ -118,38 +115,41 @@ def _headline(name: str, themes: list[Theme]) -> str:
     return f"{_THEME_TITLE[themes[0]]}, {name}"
 
 
-def _nearest_station(db: Session, lat: float, lng: float) -> NearestStationInfo | None:
-    """가장 가까운 역 + 노출 문구. 역 데이터가 없으면 None.
+def _nearest_station(lat: float, lng: float) -> NearestStationInfo | None:
+    """걸어갈 수 있는 가장 가까운 역 + 노출 문구. 도보권에 역이 없거나 조회 실패면 None.
 
-    도보 시간은 직선거리에 우회 보정을 곱해 올린 근사라 실제 경로 안내와는 몇 분 차이가 날 수
-    있다. '몇 분 거리인지' 감을 주는 표시라 경로 API를 붙이지 않았다.
+    **도보권(_WALK_MAX_M)만 내려준다.** 그 밖의 역은 '안동역에서 14.6km'처럼 걸어갈 수 없는
+    거리를 도보 안내 자리에 적는 셈이라 보여줄 값이 못 된다. 카카오에 그 반경을 그대로 넘기므로
+    역이 없는 지역(제주·산간)은 응답이 비고, 앱은 이 줄을 숨긴다.
+
+    도보 시간은 직선거리에 우회 보정을 곱해 올린 근사다 — 카카오도 보행자 경로 API는 주지 않고,
+    1.5km 안에서는 근사 오차가 몇 분 수준이라 '몇 분 거리인지' 감을 주는 데엔 충분하다.
+
+    부가 정보라 조회가 실패해도 상세는 그대로 내려가야 하므로 예외를 삼키고 None을 준다.
     """
-    found = station_dao.nearest(db, lat, lng)
-    if found is None:
+    try:
+        station = kakao_local.nearest_station(lat, lng, radius_m=_WALK_MAX_M)
+    except Exception as e:
+        logger.warning("카카오 최근접 역(%.5f,%.5f) 실패: %s", lat, lng, e)
         return None
-    station, distance_m = found
+    if station is None:
+        return None
 
-    walk = None
-    if distance_m <= _WALK_MAX_M:
-        walk = max(1, math.ceil(distance_m * _WALK_DETOUR / _WALK_M_PER_MIN))
-        text = f"{station.station_name}에서 도보 {walk}~{walk + 1}분"
-    else:
-        text = f"{station.station_name}에서 {distance_m / 1000:.1f}km"
-
+    walk = max(1, math.ceil(station.distance_m * _WALK_DETOUR / _WALK_M_PER_MIN))
     return NearestStationInfo(
-        station_idx=station.station_idx,
-        station_name=station.station_name,
-        distance_m=round(distance_m),
+        station_name=station.name,
+        line=station.line,
+        distance_m=station.distance_m,
         walk_minutes=walk,
-        text=text,
+        text=f"{station.name}에서 도보 {walk}~{walk + 1}분",
     )
 
 
-def place_detail(db: Session, content_id: str, restaurant_limit: int = _RESTAURANT_LIMIT) -> PlaceDetailResponse:
+def place_detail(content_id: str, restaurant_limit: int = _RESTAURANT_LIMIT) -> PlaceDetailResponse:
     """여행지 상세 — 지역 소개(사진·소개글·가장 가까운 역)와 가까운 맛집을 한 응답에 담는다.
 
     한 화면에 다 보이는 정보라 앱이 한 번만 호출하도록 합쳤다. 소개는 TourAPI 상세(본문·사진),
-    맛집은 같은 좌표의 위치기반 음식점 조회, 역만 DB에서 온다.
+    맛집은 같은 좌표의 위치기반 음식점 조회, 역은 카카오 로컬에서 온다 — DB는 쓰지 않는다.
 
     소개를 못 받으면 화면이 성립하지 않으므로 404/502로 끊고, **맛집과 역은 부가 정보라 비어도
     상세는 그대로 내려간다**(맛집 조회 실패는 빈 배열, 역은 null).
@@ -176,7 +176,7 @@ def place_detail(db: Session, content_id: str, restaurant_limit: int = _RESTAURA
         overview=detail.overview,
         tel=detail.tel,
         homepage=detail.homepage,
-        nearest_station=_nearest_station(db, detail.lat, detail.lng),
+        nearest_station=_nearest_station(detail.lat, detail.lng),
         restaurants=[
             NearbyRestaurant(
                 content_id=f.content_id, name=f.name, category=f.category,

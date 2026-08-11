@@ -1,9 +1,7 @@
-from fastapi import APIRouter, Depends, Path, Query
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Path, Query
 
 from core.enums import Theme
 from core.response import CommonResponse
-from databases.database import get_db
 from schemas.place_schema import PlaceDetailResponse, PlaceSearchResponse, ThemedPlacesResponse
 from services import place_service
 
@@ -52,12 +50,13 @@ def get_themed_places(
                 "- **지역 소개**: `headline`(상단 큰 제목), `images`(대표 사진이 첫 장), "
                 "`overview`(소개글 평문), `address`, `nearest_station`.\n"
                 "- **가까운 역**: `nearest_station.text`를 그대로 노출하면 됩니다"
-                "(예: '대전역에서 도보 8~9분'). 도보 시간은 직선거리 기반 근사이고, "
-                "1.5km를 넘으면 `walk_minutes`가 null이 되며 문구도 km 표기로 바뀝니다.\n"
+                "(예: '양천향교역에서 도보 10~11분'). 지하철역과 기차역을 함께 보고 가장 가까운 "
+                "하나를 고르며, **1.5km 안에 역이 없으면 `nearest_station`이 null**이니 그 땐 "
+                "이 줄을 숨기면 됩니다(제주·산간 등). 도보 시간은 직선거리 기반 근사입니다.\n"
                 "- **가까운 맛집**: 사진 있는 곳 우선·거리순으로 최대 `restaurant_limit`개. "
                 "반경은 2km→5km→10km로 넓히다 처음 결과가 나온 곳에서 멈추므로, 시골 관광지는 "
                 "수 km 떨어진 곳이 나올 수 있습니다(`distance_m` 참고).\n\n"
-                "관광 정보는 실시간 TourAPI에서 오고, 역만 서버 DB에서 옵니다. "
+                "관광 정보는 실시간 TourAPI에서, 역은 카카오 로컬에서 옵니다. "
                 "맛집 조회나 역 조회가 실패해도 상세 자체는 내려갑니다(각각 빈 배열·null).\n\n"
                 "- 404: 해당 콘텐츠가 TourAPI에 없거나 좌표가 없어 상세를 만들 수 없음\n"
                 "- 502: 관광 정보 서비스(TourAPI) 호출 실패",
@@ -67,7 +66,6 @@ def get_place_detail(
     # 숫자만 허용해 위의 /search·/themed 경로와 겹치지 않게 한다(선언 순서에 기대지 않음).
     content_id: str = Path(..., pattern=r"^\d+$", description="TourAPI 콘텐츠 ID", example="1623750"),
     restaurant_limit: int = Query(6, ge=1, le=20, description="가까운 맛집 최대 개수"),
-    db: Session = Depends(get_db),
 ):
-    result = place_service.place_detail(db, content_id, restaurant_limit)
+    result = place_service.place_detail(content_id, restaurant_limit)
     return CommonResponse.success_response("여행지 상세 조회 성공", data=result)
