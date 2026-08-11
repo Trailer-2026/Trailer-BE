@@ -135,7 +135,7 @@ def nearest_station(
     stations = [
         NearStation(*_split_line(d["place_name"]), int(d["distance"]))
         for d in docs
-        if _boardable(d) and d.get("distance")
+        if _boardable(d) and d.get("place_name") and d.get("distance")
     ]
     # 기차역을 앞에 두고 같은 역명은 첫 항목만 남긴다 — 서울역·부전역처럼 기차역과 지하철역이
     # 겹치는 곳에서 "서울역 1호선"이 아니라 "서울역"으로 나와야 기차 여행 앱의 문구가 된다.
