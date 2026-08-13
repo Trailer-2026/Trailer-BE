@@ -277,6 +277,7 @@ def recommend_reels(
             like_count=like_counts.get(reels.reels_idx, 0),
             comment_count=comment_counts.get(reels.reels_idx, 0),
             is_liked=reels.reels_idx in liked,
+            user_idx=reels.user_idx,
             nickname=nickname,
             profile_image=profile_image,
         )
@@ -351,6 +352,7 @@ def _to_reels_cards(db: Session, user, rows) -> list[MyReelsItem]:
             like_count=like_counts.get(reels.reels_idx, 0),
             comment_count=comment_counts.get(reels.reels_idx, 0),
             is_liked=reels.reels_idx in liked,
+            user_idx=reels.user_idx,
             nickname=nickname,
             profile_image=profile_image,
         )
