@@ -1,8 +1,8 @@
 """알림 서비스 — 수신 설정(on/off)과 알림 화면 목록(이력 조회·읽음 처리)을 담당한다.
 
 - 설정: 사용자당 1행(notification). 가입 시점에 만들지 않고 처음 조회·수정할 때 기본값
-  (모두 수신)으로 만든다 — 기존 가입자에게 행을 일괄 생성하는 마이그레이션 없이도
-  동작하게 하기 위해서다.
+  (알림은 모두 수신, 마케팅 활용 동의는 미동의)으로 만든다 — 기존 가입자에게 행을 일괄
+  생성하는 마이그레이션 없이도 동작하게 하기 위해서다.
 - 이력: 발송된 알림(notification_log)을 최신순으로 읽고 읽음 처리한다.
   발송(쓰기)은 services/push_service가 맡는다 — 발송/조회 책임 분리.
 """
@@ -19,7 +19,7 @@ from schemas.notification_schema import (
 
 
 def get_settings(db: Session, user) -> NotificationResponse:
-    """내 알림 설정 조회. 설정 행이 없으면 기본값(모두 수신)으로 만들어 반환한다."""
+    """내 알림 설정 조회. 행이 없으면 기본값(알림 수신 O, 마케팅 동의 X)으로 만들어 반환한다."""
     setting = _get_or_create(db, user.user_idx)
     db.commit()
     return _to_response(setting)
@@ -97,4 +97,5 @@ def _to_response(setting) -> NotificationResponse:
     return NotificationResponse(
         event_alarm=setting.event_alarm,
         scenery_alarm=setting.scenery_alarm,
+        marketing_agree=setting.marketing_agree,
     )
