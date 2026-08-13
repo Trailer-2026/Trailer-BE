@@ -726,7 +726,9 @@ def _selfcheck() -> None:
         else:
             exif = Image.Exif()
             def dms(v):  # 도/분/초 3쌍 — _extract_photo_meta 의 to_decimal 이 읽는 형식
-                d = int(abs(v)); m = int((abs(v) - d) * 60); s = (abs(v) - d - m / 60) * 3600
+                d = int(abs(v))
+                m = int((abs(v) - d) * 60)
+                s = (abs(v) - d - m / 60) * 3600
                 return (float(d), float(m), round(s, 2))
             exif.get_ifd(0x8825).update({
                 1: "N" if lat >= 0 else "S", 2: dms(lat),
