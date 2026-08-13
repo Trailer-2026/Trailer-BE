@@ -61,6 +61,9 @@ _ADDED_COLUMNS = (
     ("travel", "source", "VARCHAR(20)"),
     # 스탬프 획득 알림이 어느 칸인지 — FK가 아니라 종류 문자열이다(notification_log 참조).
     ("notification_log", "stamp_type", "VARCHAR(30)"),
+    # 이벤트·마케팅 활용 동의. 알림 두 컬럼과 달리 기본값이 false다 — 선택 동의라
+    # 이미 설정 행이 있는 사용자를 동의한 것으로 채우면 안 된다.
+    ("notification", "marketing_agree", "BOOLEAN NOT NULL DEFAULT false"),
 )
 
 # 이미 있는 테이블에 덧붙일 인덱스. 모델 __table_args__의 같은 인덱스와 정의가 일치해야 한다.
