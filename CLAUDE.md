@@ -59,7 +59,7 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 
 알림은 **설정**과 **이력** 두 테이블로 나뉜다. 헷갈리지 말 것.
 
-- `notification` — 수신 on/off **설정**, 사용자당 1행(`event_alarm`/`scenery_alarm`). `GET·PATCH /api/users/me/notifications`.
+- `notification` — 수신 on/off **설정**, 사용자당 1행(`event_alarm`/`scenery_alarm`). `GET·PATCH /api/users/me/notifications`. 같은 행에 `marketing_agree`(이벤트·마케팅 활용 동의)도 얹혀 있는데 **발송과 무관한 선택 동의**라 `_ALARM_FIELD`에 넣지 않는다 — 기본값도 알림 둘과 달리 `false`다(안 만진 사용자를 동의한 것으로 볼 수 없다).
 - `notification_log` — 실제로 보낸 알림 **이력**. 앱의 "알림 화면" 목록이 이 테이블이다. `GET /api/notifications`(커서 페이징), `PATCH .../{idx}/read`, `PATCH .../read-all`.
 
 **발송 경로**: 트리거 → `services/push_service.notify()` → 설정 확인(`notification_dao`) → 이력 저장·커밋(`notification_log_dao`) → `services/fcm_service.send_push` → `utils/firebase.send_multicast`.
