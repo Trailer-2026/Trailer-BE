@@ -16,15 +16,23 @@ def get_by_user(db: Session, user_idx: int) -> Notification | None:
 
 
 def create(db: Session, user_idx: int) -> Notification:
-    """알림 설정 1건을 기본값(모두 수신)으로 생성. flush만 하고 commit은 서비스가 한다."""
-    setting = Notification(user_idx=user_idx, event_alarm=True, scenery_alarm=True)
+    """설정 1건을 기본값(알림은 모두 수신, 마케팅 동의는 미동의)으로 생성.
+
+    flush만 하고 commit은 서비스가 한다.
+    """
+    setting = Notification(
+        user_idx=user_idx, event_alarm=True, scenery_alarm=True, marketing_agree=False,
+    )
     db.add(setting)
     db.flush()
     return setting
 
 
 def update(db: Session, setting: Notification, **fields) -> Notification:
-    """보낸 필드만 수정(event_alarm·scenery_alarm). flush만 하고 commit은 서비스가 한다."""
+    """보낸 필드만 수정(event_alarm·scenery_alarm·marketing_agree).
+
+    flush만 하고 commit은 서비스가 한다.
+    """
     for name, value in fields.items():
         setattr(setting, name, value)
     db.flush()
