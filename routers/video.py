@@ -261,7 +261,10 @@ def render_video_from_travel(
                 "인증은 선택입니다 — JWT를 보내면 내가 올린 릴스와 내가 차단한 사용자의 "
                 "릴스가 결과에서 빠지고(내 릴스는 마이페이지 "
                 "GET /api/users/me/reels 에서 봅니다), 토큰이 없거나 만료됐으면 비로그인으로 "
-                "간주해 전체에서 추천합니다(401 없음).",
+                "간주해 전체에서 추천합니다(401 없음).\n\n"
+                "카드마다 작성자 PK(user_idx)가 함께 내려갑니다 — 차단은 "
+                "POST /api/blocks/{user_idx} 라 이 값이 있어야 피드에서 바로 차단할 수 "
+                "있습니다. 작성자 없는 옛 릴스는 null 이니 그 땐 차단 버튼을 숨기세요.",
     response_model=CommonResponse[list[ReelsRecommendResponse]],
 )
 def recommend_reels(

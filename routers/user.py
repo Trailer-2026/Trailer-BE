@@ -143,6 +143,9 @@ def get_my_reels(
                 "사용자의 릴스와 삭제된 릴스는 포함되지 않습니다. 다음 페이지는 응답의 "
                 "next_cursor를 cursor로 넘겨 요청하고, next_cursor가 null이면 마지막 "
                 "페이지입니다. (access token 인증 필요)\n\n"
+                "카드마다 작성자 PK(user_idx)가 함께 내려가므로 이 목록에서도 바로 "
+                "차단(POST /api/blocks/{user_idx})할 수 있습니다. 작성자 없는 옛 릴스는 "
+                "null 이니 그 땐 차단 버튼을 숨기세요.\n\n"
                 "- 401: 인증 필요",
     response_model=CommonResponse[MyReelsListResponse],
 )
