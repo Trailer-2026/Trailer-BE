@@ -56,6 +56,28 @@ def update_url(db: Session, reels: Reels, url: str, thumbnail_url: str | None) -
     return reels
 
 
+def update_url_if_alive(
+    db: Session, reels_idx: int, url: str, thumbnail_url: str | None
+) -> bool:
+    """삭제되지 않은 릴스에만 영상·썸네일 URL 을 채운다 → 갱신했으면 True (flush만).
+
+    렌더 도중에도 사용자가 그 릴스를 지울 수 있어(delete_reels 는 렌더 미완료 릴스도
+    허용한다) 조회 시점엔 살아 있던 행이 커밋 직전에 소프트 삭제될 수 있다. 그 틈에
+    url 을 채우면 아무도 볼 수 없는 행에 버킷 객체만 매달려 영영 고아가 되므로,
+    삭제 여부를 UPDATE 의 WHERE 로 다시 확인해 0건이면 호출부가 정리하게 한다.
+    """
+    updated = (
+        db.query(Reels)
+        .filter(Reels.reels_idx == reels_idx, Reels.deleted_at.is_(None))
+        .update(
+            {Reels.url: url, Reels.thumbnail_url: thumbnail_url},
+            synchronize_session=False,
+        )
+    )
+    db.flush()
+    return updated > 0
+
+
 def update_title(db: Session, reels: Reels, title: str | None) -> Reels:
     """릴스 제목 교체 (flush만 — commit은 서비스가).
 

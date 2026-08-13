@@ -176,6 +176,28 @@ class TravelLikeResponse(BaseModel):
     liked: bool = Field(..., description="좋아요 상태 (POST 후 true, DELETE 후 false)", examples=[True])
 
 
+class TravelImageItem(BaseModel):
+    """여행 중 찍어 올린 사진 1장 (travel_image 1행) — 영상에 들어가는 사진이다."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    image_idx: int = Field(..., description="이미지 PK (삭제에 사용)", examples=[7])
+    schedule_idx: int | None = Field(
+        None, description="사진이 붙은 일정 항목 PK. 일정을 고르지 않고 올렸으면 null", examples=[3],
+    )
+    url: str = Field(
+        ..., description="이미지 URL",
+        examples=["https://storage.googleapis.com/trailer-bucket/travel/12/photos/ab12cd.jpg"],
+    )
+
+
+class TravelImagesResponse(BaseModel):
+    """여행 사진 추가 결과 — 이번 요청으로 붙은 사진들."""
+
+    travel_idx: int = Field(..., description="여행 PK", examples=[12])
+    images: list[TravelImageItem] = Field(..., description="추가된 사진 목록 (보낸 순서)")
+
+
 class TravelScheduleItem(BaseModel):
     """일정표 타임라인의 한 항목 (기차/방문지/숙소 공통, schedule 1행)."""
 
@@ -211,6 +233,10 @@ class TravelScheduleItem(BaseModel):
         examples=["http://tong.visitkorea.or.kr/cms/resource/87/2754987_image2_1.jpg"],
     )
     memo: str | None = Field(None, description="메모. 없으면 null", examples=[None])
+    images: list[TravelImageItem] = Field(
+        default_factory=list,
+        description="이 일정에 붙인 여행 사진 (오래된 순). 없으면 빈 배열",
+    )
 
 
 class TrainTicketResponse(BaseModel):
@@ -263,6 +289,11 @@ class TravelDetailResponse(BaseModel):
         None, description="대표 사진 — 지정한 사진 → 첫 일정 대표 이미지 → 지역 기본 사진 순. 항상 값이 있다",
     )
     days: list[TravelDayGroup] = Field(..., description="일자별 일정 묶음 (day_no 오름차순). 일정이 없으면 빈 배열")
+    images: list[TravelImageItem] = Field(
+        default_factory=list,
+        description="일정에 붙이지 않고 여행에만 올린 사진 (오래된 순). 일정에 붙인 사진은 "
+                    "days[].items[].images 에 들어 있다",
+    )
 
 
 class TravelCoverImageResponse(BaseModel):
