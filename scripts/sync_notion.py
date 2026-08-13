@@ -43,6 +43,8 @@ NOTION_VERSION = "2022-06-28"
 RICH_TEXT_LIMIT = 2000  # Notion rich_text 단일 텍스트 길이 상한
 CHILDREN_LIMIT = 100  # children 블록 1회 추가 상한
 THROTTLE_SEC = 0.34  # Notion rate limit(평균 3 req/s) 회피용
+_APPEND_RETRIES = 4  # 본문 추가 400(방금 지운 블록 커서) 재시도 횟수
+_CLEAR_MAX_ROUNDS = 20  # 본문 삭제 라운드 상한(100블록 × 20) — 무한루프 방지
 
 HTTP_METHODS = ("get", "post", "put", "patch", "delete", "options", "head")
 
@@ -412,29 +414,48 @@ def _row_properties(row: dict, author: str | None = None) -> dict:
 
 
 def _clear_children(page_id: str):
-    """페이지의 기존 본문 블록을 모두 삭제(본문 갱신 전)."""
-    cursor = None
-    while True:
-        url = f"{NOTION_API}/blocks/{page_id}/children?page_size=100"
-        if cursor:
-            url += f"&start_cursor={cursor}"
-        res = _request("GET", url)
+    """페이지의 기존 본문 블록을 모두 삭제(본문 갱신 전).
+
+    **커서를 이어 쓰지 않고 매번 첫 페이지를 다시 조회한다.** 블록 children 페이징의
+    next_cursor 는 블록 id 라, 방금 지운 블록을 가리키는 커서로 다음 페이지를 달라고 하면
+    400(`start_cursor ... invalid`)이 난다 — 지우면서 그 목록을 페이징할 수는 없다.
+    """
+    for _ in range(_CLEAR_MAX_ROUNDS):
+        res = _request("GET", f"{NOTION_API}/blocks/{page_id}/children?page_size=100")
         if res.status_code >= 300:
-            return  # 조회 실패 시 갱신 생략(best-effort)
-        data = res.json()
-        for block in data["results"]:
-            _request("DELETE", f"{NOTION_API}/blocks/{block['id']}")
-        if not data.get("has_more"):
-            break
-        cursor = data.get("next_cursor")
+            print(f"  ! 본문 조회 실패 [{res.status_code}] — 삭제 생략(best-effort)")
+            return
+        blocks = res.json().get("results", [])
+        if not blocks:
+            return
+        deleted = 0
+        for block in blocks:
+            if _request("DELETE", f"{NOTION_API}/blocks/{block['id']}").status_code < 300:
+                deleted += 1
+        if deleted == 0:  # 한 건도 못 지웠으면 다시 돌아도 같은 목록이다
+            print("  ! 본문 삭제 실패 — 삭제 생략(best-effort)")
+            return
 
 
-def _append_children(page_id: str, blocks: list[dict]):
+def _append_children(page_id: str, blocks: list[dict]) -> str | None:
+    """본문 블록을 100개씩 나눠 추가한다. 성공이면 None, 실패면 사유 문자열.
+
+    방금 비운 페이지에 곧바로 붙이면 Notion 이 archive 된 옛 블록을 가리키는 커서를 붙들고
+    400(`start_cursor ... invalid`)을 내는 일이 있다. 잠깐 뒤엔 통하므로 400 은 몇 번 더
+    시도한다(그래도 안 되면 사유를 돌려주고, 호출부가 다음 엔드포인트로 넘어간다).
+    """
     for i in range(0, len(blocks), CHILDREN_LIMIT):
         chunk = blocks[i:i + CHILDREN_LIMIT]
-        res = _request("PATCH", f"{NOTION_API}/blocks/{page_id}/children", json={"children": chunk})
-        if res.status_code >= 300:
-            sys.exit(f"ERROR: 본문 추가 실패 [{res.status_code}] {res.text}")
+        for attempt in range(_APPEND_RETRIES):
+            res = _request("PATCH", f"{NOTION_API}/blocks/{page_id}/children", json={"children": chunk})
+            if res.status_code < 300:
+                break
+            if res.status_code != 400 or attempt == _APPEND_RETRIES - 1:
+                return f"[{res.status_code}] {res.text}"
+            wait = min(2 ** attempt, 8)
+            print(f"  ! 본문 추가 400 — {wait}s 후 재시도 ({attempt + 1}/{_APPEND_RETRIES})")
+            time.sleep(wait)
+    return None
 
 
 def sync():
@@ -454,6 +475,7 @@ def sync():
     spec_keys = {r["key"] for r in rows}
 
     created = updated = archived = 0
+    failed: list[str] = []
 
     for row in rows:
         author = author_index.get((row["method"], row["path"]), "")
@@ -467,7 +489,12 @@ def sync():
             if res.status_code >= 300:
                 sys.exit(f"ERROR: update 실패 ({row['key']}) [{res.status_code}] {res.text}")
             _clear_children(page_id)
-            _append_children(page_id, blocks)
+            # 본문 추가가 실패해도 남은 엔드포인트는 계속 동기화한다 — 한 페이지 때문에
+            # 뒤의 수십 개가 통째로 빠지면 명세가 더 어긋난다. 실패는 모아서 끝에 알린다.
+            error = _append_children(page_id, blocks)
+            if error:
+                print(f"  ! 본문 추가 실패 ({row['key']}) {error}")
+                failed.append(row["key"])
             updated += 1
         else:
             res = _request("POST", f"{NOTION_API}/pages", json={
@@ -479,7 +506,10 @@ def sync():
                 sys.exit(f"ERROR: create 실패 ({row['key']}) [{res.status_code}] {res.text}")
             new_id = res.json()["id"]
             if len(blocks) > CHILDREN_LIMIT:
-                _append_children(new_id, blocks[CHILDREN_LIMIT:])
+                error = _append_children(new_id, blocks[CHILDREN_LIMIT:])
+                if error:
+                    print(f"  ! 본문 추가 실패 ({row['key']}) {error}")
+                    failed.append(row["key"])
             created += 1
         print(f"  · {row['key']}")
 
@@ -491,6 +521,9 @@ def sync():
                 archived += 1
 
     print(f"\nOK: created={created}, updated={updated}, archived={archived}, total_spec={len(rows)}")
+    if failed:
+        # 나머지는 다 맞춰 놓고, 워크플로엔 실패로 알린다(본문이 빈 페이지가 남는다).
+        sys.exit(f"ERROR: 본문 추가 실패 {len(failed)}건 — {', '.join(failed)}")
 
 
 def migrate_columns():
@@ -570,7 +603,9 @@ def rebuild():
             sys.exit(f"ERROR: create 실패 ({row['key']}) [{res.status_code}] {res.text}")
         new_id = res.json()["id"]
         if len(blocks) > CHILDREN_LIMIT:
-            _append_children(new_id, blocks[CHILDREN_LIMIT:])
+            error = _append_children(new_id, blocks[CHILDREN_LIMIT:])
+            if error:
+                sys.exit(f"ERROR: 본문 추가 실패 ({row['key']}) {error}")
         created += 1
         print(f"  · {row['key']}")
     print(f"\nOK: rebuild created={created} (archived {len(existing)})")
