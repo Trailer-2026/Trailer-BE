@@ -376,6 +376,28 @@ def update_reels_title(
     return ReelsTitleUpdateResponse(reels_idx=reels.reels_idx, title=reels.title)
 
 
+def delete_reels(db: Session, reels_idx: int, user_idx: int) -> None:
+    """본인 릴스를 삭제한다. 없거나 남의 릴스면 404.
+
+    행은 **소프트 삭제**다 — 댓글·좋아요가 FK 로 참조하고 있어 하드 삭제하면 무결성이
+    깨진다(렌더 실패 자리표만 하드 삭제하는 것과 다르다). 소프트 삭제만으로 추천
+    피드·마이페이지·공유 링크에서 즉시 사라진다(읽기 쿼리가 deleted_at 을 거른다).
+
+    커밋 뒤 영상·썸네일 객체도 버킷에서 지운다 — 공개 버킷이라 URL 을 아는 사람은
+    행이 지워져도 계속 볼 수 있기 때문이다. 정리 실패는 삼킨다(고아 객체가 남는 게
+    이미 커밋된 삭제를 502 로 되돌리는 것보다 낫다).
+
+    렌더가 아직 안 끝난 릴스도 지울 수 있다 — 멈춘 렌더를 치우는 게 사용자가 원하는
+    동작이다. 그 뒤 렌더가 성공하면 삭제된 행에 url 만 채워지고 어디에도 안 보인다.
+    """
+    reels = _load_own_reels(db, reels_idx, user_idx)
+    video_url, thumbnail_url = reels.url, reels.thumbnail_url
+    reels_dao.soft_delete(db, reels)
+    db.commit()
+    _delete_object_quietly(video_url, "삭제한 릴스 영상")
+    _delete_object_quietly(thumbnail_url, "삭제한 릴스 썸네일")
+
+
 # --------------------------------------------------------------------------- #
 # 릴스 공유
 # --------------------------------------------------------------------------- #

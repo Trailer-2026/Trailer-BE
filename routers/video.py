@@ -299,6 +299,28 @@ def update_reels_title(
     return CommonResponse.success_response("릴스 제목 수정 성공", data=result)
 
 
+@router.delete(
+    "/reels/{reels_idx}",
+    summary="릴스 삭제 (reels_idx)",
+    description="본인이 올린 릴스(reels_idx)를 삭제합니다. 추천 피드·마이페이지 목록·공유 "
+                "링크에서 즉시 사라지고, 영상과 썸네일 파일도 저장소에서 지워집니다"
+                "(**복구 불가**). 이미 발급된 공유 링크(/r/{reels_idx})는 404가 됩니다.\n\n"
+                "렌더가 아직 끝나지 않은 릴스도 지울 수 있습니다 — 멈춘 렌더를 치우는 "
+                "용도입니다. 그 릴스에 달린 댓글·좋아요는 함께 지우지 않지만 릴스가 "
+                "노출되지 않으므로 어디에서도 보이지 않습니다.\n\n"
+                "- 404: 릴스 없음 (남의 릴스도 존재 여부를 알리지 않으려고 403이 아닌 404)\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[None],
+)
+def delete_reels(
+    reels_idx: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    video_service.delete_reels(db, reels_idx, current_user.user_idx)
+    return CommonResponse.success_response("릴스 삭제 성공")
+
+
 @router.post(
     "/reels/upload",
     summary="내 영상 업로드 (직접 만든 영상을 릴스로 등록)",
