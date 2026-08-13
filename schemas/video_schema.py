@@ -29,6 +29,13 @@ class ReelsRecommendResponse(BaseModel):
     like_count: int = Field(0, description="릴스 좋아요 수")
     comment_count: int = Field(0, description="릴스 댓글 수 (답글 포함)")
     is_liked: bool = Field(False, description="내가 좋아요한 릴스인지 (비로그인은 항상 false)")
+    user_idx: int | None = Field(
+        None,
+        description="릴스 작성자 PK — 차단(POST /api/blocks/{user_idx})에 그대로 넘기면 됨. "
+                    "작성자 없는 옛 릴스는 null 이라 그 땐 차단 버튼을 숨기세요 "
+                    "(닉네임만 null 인 탈퇴 회원은 값이 남아 있습니다)",
+        examples=[2],
+    )
     nickname: str | None = Field(None, description="릴스 작성자 닉네임 (작성자 없는 옛 릴스는 null)")
     profile_image: str | None = Field(None, description="릴스 작성자 프로필 사진 URL (작성자 없는 옛 릴스는 null)")
 
@@ -58,6 +65,14 @@ class MyReelsItem(BaseModel):
         False,
         description="내가 좋아요한 릴스인지 — 좋아요한 릴스 목록에서는 항상 true입니다. "
                     "목록에서 바로 하트를 해제할 수 있게 함께 내려줍니다",
+    )
+    user_idx: int | None = Field(
+        None,
+        description="릴스 작성자 PK — 차단(POST /api/blocks/{user_idx})에 그대로 넘기면 됨. "
+                    "내가 올린 릴스 목록에서는 항상 내 PK 입니다(차단할 일이 없습니다). "
+                    "작성자 없는 옛 릴스는 null 이라 그 땐 차단 버튼을 숨기세요 "
+                    "(닉네임만 null 인 탈퇴 회원은 값이 남아 있습니다)",
+        examples=[2],
     )
     nickname: str | None = Field(
         None, description="릴스 작성자 닉네임 (작성자 없는 옛 릴스·탈퇴 회원은 null)"
