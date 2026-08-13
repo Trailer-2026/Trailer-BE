@@ -384,11 +384,14 @@ def delete_reels(db: Session, reels_idx: int, user_idx: int) -> None:
     피드·마이페이지·공유 링크에서 즉시 사라진다(읽기 쿼리가 deleted_at 을 거른다).
 
     커밋 뒤 영상·썸네일 객체도 버킷에서 지운다 — 공개 버킷이라 URL 을 아는 사람은
-    행이 지워져도 계속 볼 수 있기 때문이다. 정리 실패는 삼킨다(고아 객체가 남는 게
-    이미 커밋된 삭제를 502 로 되돌리는 것보다 낫다).
+    행이 지워져도 계속 볼 수 있기 때문이다. 정리 실패는 삼키되 객체 경로를 경고
+    로그로 남긴다(고아 객체가 남는 게 이미 커밋된 삭제를 502 로 되돌리는 것보다
+    낫다 — 대신 로그의 경로로 나중에 손으로 지울 수 있다). 그래서 엔드포인트 설명도
+    '지워진다'가 아니라 '삭제를 시도한다'로 적혀 있다.
 
     렌더가 아직 안 끝난 릴스도 지울 수 있다 — 멈춘 렌더를 치우는 게 사용자가 원하는
-    동작이다. 그 뒤 렌더가 성공하면 삭제된 행에 url 만 채워지고 어디에도 안 보인다.
+    동작이다. 그 뒤 렌더가 끝나면 _publish_reels_video 가 삭제된 행을 알아채고(삭제
+    안 된 행에만 거는 조건부 갱신) 방금 올린 영상·썸네일을 버킷에서 되돌린다.
     """
     reels = _load_own_reels(db, reels_idx, user_idx)
     video_url, thumbnail_url = reels.url, reels.thumbnail_url
@@ -1569,6 +1572,12 @@ def _publish_reels_video(reels_idx: int, video_path: Path) -> str:
 
     행은 렌더 시작 때 이미 만들어져 있으므로(작성자 매핑도 그 때 끝) 여기서는
     url 만 채운다. 렌더 스레드에서 도므로 요청 세션이 아닌 새 세션을 쓴다.
+
+    갱신은 '아직 삭제되지 않은 행'에만 건다(update_url_if_alive) — 렌더 중인 릴스도
+    삭제할 수 있어서, 조회와 커밋 사이에 사용자가 지우면 아무도 볼 수 없는 행에
+    방금 올린 객체만 매달리기 때문이다. 갱신하지 못하면 예외로 빠져 업로드한
+    영상·썸네일을 버킷에서 되돌린다(정리 실패는 객체 경로와 함께 로그로 남겨
+    나중에 손으로 회수할 수 있게 둔다).
     """
     from databases.database import SessionLocal
 
@@ -1579,8 +1588,9 @@ def _publish_reels_video(reels_idx: int, video_path: Path) -> str:
         reels = reels_dao.get_by_idx(db, reels_idx)
         if reels is None:
             raise NotFoundException(f"릴스(reels_idx={reels_idx})가 사라졌습니다.")
-        reels_dao.update_url(db, reels, url, thumbnail_url)
         user_idx = reels.user_idx
+        if not reels_dao.update_url_if_alive(db, reels_idx, url, thumbnail_url):
+            raise NotFoundException(f"릴스(reels_idx={reels_idx})가 삭제되었습니다.")
         db.commit()
         # '여행 영상 5개 제작' 스탬프 재판정 — 커밋 뒤에 부른다. 날짜가 아니라 행동으로
         # 켜지는 유일한 스탬프라 자정 배치로는 하루가 늦는다. 예외는 안에서 삼킨다.
@@ -1591,7 +1601,8 @@ def _publish_reels_video(reels_idx: int, video_path: Path) -> str:
         return url
     except Exception:
         db.rollback()
-        gcs.delete_object(gcs.object_path_from_url(url) or url)  # 고아 객체 정리
+        # 행 갱신이 안 됐으니 방금 올린 둘 다 되돌린다(정리 실패는 경로만 로그로).
+        _delete_object_quietly(url, "고아 영상")
         _delete_object_quietly(thumbnail_url, "고아 썸네일")
         raise
     finally:
