@@ -276,16 +276,25 @@ def add_images(
     candidates = [] if schedule_idx is not None else schedule_dao.list_by_travel(db, travel_idx)
 
     images = []
-    for stream, content_type, filename in files:
-        # 대표 사진과 같은 이유로 상한+1바이트까지만 읽는다(초과분을 메모리에 안 올린다).
-        # 다음 회차에서 data가 새로 묶이며 직전 장은 바로 풀린다 — 동시에 드는 건 1장뿐.
-        data = stream.read(gcs.MAX_IMAGE_BYTES + 1)
-        # 업로드(형식·크기 검증 포함)를 먼저 통과시킨 뒤에 좌표를 본다 — 어차피 거절될
-        # 파일의 EXIF를 파싱하지 않으려는 것.
-        url = gcs.upload_image(f"travel/{travel_idx}/photos", data, content_type, filename)
-        target = schedule_idx if schedule_idx is not None else _snap_to_schedule(data, candidates)
-        images.append(travel_image_dao.create(db, travel_idx, target, url))
-    db.commit()
+    uploaded: list[str] = []  # 도중에 실패하면 여기 담긴 객체를 되돌린다(아래 except)
+    try:
+        for stream, content_type, filename in files:
+            # 대표 사진과 같은 이유로 상한+1바이트까지만 읽는다(초과분을 메모리에 안 올린다).
+            # 다음 회차에서 data가 새로 묶이며 직전 장은 바로 풀린다 — 동시에 드는 건 1장뿐.
+            data = stream.read(gcs.MAX_IMAGE_BYTES + 1)
+            # 업로드(형식·크기 검증 포함)를 먼저 통과시킨 뒤에 좌표를 본다 — 어차피 거절될
+            # 파일의 EXIF를 파싱하지 않으려는 것.
+            url = gcs.upload_image(f"travel/{travel_idx}/photos", data, content_type, filename)
+            uploaded.append(url)
+            target = schedule_idx if schedule_idx is not None else _snap_to_schedule(data, candidates)
+            images.append(travel_image_dao.create(db, travel_idx, target, url))
+        db.commit()
+    except Exception:
+        # 5장 중 3장째가 거절되면(형식·크기) 앞선 2장은 DB가 롤백돼 아무도 못 보는데
+        # GCS에만 남는다. 커밋 전에 실패한 업로드는 전부 지우고 원래 예외를 그대로 올린다.
+        for url in uploaded:
+            _drop_uploaded_image(url)  # 정리 실패는 안에서 삼킨다 — 원래 예외를 가리지 않는다
+        raise
     return TravelImagesResponse(
         travel_idx=travel_idx,
         images=[TravelImageItem.model_validate(image) for image in images],
