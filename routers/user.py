@@ -49,10 +49,12 @@ def update_nickname(
 @router.get(
     "/me/notifications",
     summary="알림 설정 조회",
-    description="알림 설정 화면의 on/off 스위치 상태를 반환합니다 — 이벤트 알림, 기차역 풍경 알림. "
-                "스위치는 이 둘뿐입니다. 열차 출발 10분 전 탑승 알림은 별도 스위치 없이 이벤트 "
-                "알림(event_alarm)에 함께 묶여 있습니다. "
-                "설정을 한 번도 바꾼 적 없는 사용자는 기본값(둘 다 수신)으로 만들어 반환합니다. "
+    description="알림 설정 화면의 on/off 스위치 상태를 반환합니다 — 이벤트 알림, 기차역 풍경 알림, "
+                "이벤트 및 마케팅 활용 동의. 푸시 발송을 좌우하는 스위치는 앞의 둘뿐이고, "
+                "marketing_agree는 알림 발송과 무관한 선택 동의 항목입니다. 열차 출발 10분 전 탑승 "
+                "알림은 별도 스위치 없이 이벤트 알림(event_alarm)에 함께 묶여 있습니다. "
+                "설정을 한 번도 바꾼 적 없는 사용자는 기본값(알림 둘 다 수신, 마케팅 활용 미동의)으로 "
+                "만들어 반환합니다. "
                 "(access token 인증 필요)\n\n"
                 "- 401: 인증 필요",
     response_model=CommonResponse[NotificationResponse],
@@ -68,8 +70,9 @@ def get_notification_settings(
 @router.patch(
     "/me/notifications",
     summary="알림 설정 편집",
-    description="알림 수신 여부를 변경합니다. 보낸 항목만 바뀌고 안 보낸 항목은 그대로 유지되므로, "
-                "스위치 하나만 토글할 때는 그 항목만 보내면 됩니다. 변경 후 갱신된 설정을 반환합니다. "
+    description="알림 수신 여부와 이벤트·마케팅 활용 동의를 변경합니다. 보낸 항목만 바뀌고 안 보낸 "
+                "항목은 그대로 유지되므로, 스위치 하나만 토글할 때는 그 항목만 보내면 됩니다. "
+                "변경 후 갱신된 설정을 반환합니다. "
                 "(access token 인증 필요)\n\n"
                 "- 401: 인증 필요",
     response_model=CommonResponse[NotificationResponse],

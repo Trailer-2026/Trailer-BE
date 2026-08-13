@@ -6,7 +6,7 @@ from core.enums import NotificationType, StampType
 
 
 class NotificationResponse(BaseModel):
-    """알림 설정 화면의 on/off 스위치 상태."""
+    """알림 설정 화면의 on/off 스위치 상태 (알림 수신 2종 + 마케팅 활용 동의)."""
 
     event_alarm: bool = Field(
         ...,
@@ -16,6 +16,12 @@ class NotificationResponse(BaseModel):
         examples=[True],
     )
     scenery_alarm: bool = Field(..., description="기차역 풍경 알림 수신 여부", examples=[False])
+    marketing_agree: bool = Field(
+        ...,
+        description="이벤트 및 마케팅 활용 동의 여부 — 선택 동의라 한 번도 켠 적 없는 사용자는 "
+                    "false입니다(알림 두 항목만 기본값이 true)",
+        examples=[False],
+    )
 
 
 class NotificationUpdateRequest(BaseModel):
@@ -29,6 +35,12 @@ class NotificationUpdateRequest(BaseModel):
     )
     scenery_alarm: bool | None = Field(
         None, description="기차역 풍경 알림 수신 여부 (미포함 시 기존 값 유지)", examples=[False],
+    )
+    marketing_agree: bool | None = Field(
+        None,
+        description="이벤트 및 마케팅 활용 동의 여부 (미포함 시 기존 값 유지) — 알림 수신과 별개인 "
+                    "선택 동의 항목입니다",
+        examples=[True],
     )
 
 
