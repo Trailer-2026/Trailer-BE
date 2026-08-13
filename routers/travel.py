@@ -268,12 +268,9 @@ def add_travel_images(
 ):
     result = travel_service.add_images(
         db, current_user, travel_idx, schedule_idx,
-        # 대표 사진과 같은 이유로 상한+1바이트까지만 읽는다(초과분을 메모리에 안 올린다).
-        # 장수도 상한+1장까지만 읽는다 — 100장을 보내도 다 읽기 전에 서비스가 400으로 막는다.
-        [
-            (f.file.read(MAX_IMAGE_BYTES + 1), f.content_type, f.filename)
-            for f in images[:travel_service.MAX_TRAVEL_IMAGES + 1]
-        ],
+        # 본문은 서비스가 한 장씩 읽어 쓰고 버린다 — 여기서 다 읽으면 20장 × 10MB를
+        # 동시에 들게 된다. 장수 검증(400)도 서비스가 읽기 전에 먼저 한다.
+        [(f.file, f.content_type, f.filename) for f in images],
     )
     return CommonResponse.success_response("여행 사진 추가 성공", data=result)
 

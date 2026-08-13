@@ -7,6 +7,7 @@ station 테이블에서 채운다. 추천 관광지/숙소 대표 이미지는 s
 """
 import logging
 from datetime import date, datetime, time, timedelta
+from typing import BinaryIO
 
 from sqlalchemy.orm import Session
 
@@ -253,7 +254,7 @@ def delete_cover_image(db: Session, user, travel_idx: int) -> TravelCoverImageRe
 
 def add_images(
     db: Session, user, travel_idx: int, schedule_idx: int | None,
-    files: list[tuple[bytes, str | None, str | None]],
+    files: list[tuple[BinaryIO, str | None, str | None]],
 ) -> TravelImagesResponse:
     """여행 중 찍은 사진들을 여행에 붙인다 — GCS 업로드 후 travel_image 행으로 남긴다.
 
@@ -261,6 +262,9 @@ def add_images(
     GPS로 가장 가까운 일정을 찾아 자동 매핑한다** — 앱은 '여행 + 사진'만 보내면 되고,
     영상에서 사진이 찍힌 자리에 뜬다. 좌표를 못 구한 사진은 일정 없이(NULL) 저장돼
     영상 마지막 지점에 몰려 나온다. 그래서 일정이 하나도 없는 여행에도 사진은 올라간다.
+
+    본문(bytes)이 아니라 **파일 스트림**을 받는다 — 20장을 한꺼번에 메모리에 올리지 않으려고
+    아래 루프에서 한 장씩 읽고 버린다. 장수 검증도 읽기 전에 끝낸다.
     """
     if len(files) > MAX_TRAVEL_IMAGES:
         raise BadRequestException(f"사진은 한 번에 {MAX_TRAVEL_IMAGES}장까지 올릴 수 있습니다.")
@@ -272,7 +276,10 @@ def add_images(
     candidates = [] if schedule_idx is not None else schedule_dao.list_by_travel(db, travel_idx)
 
     images = []
-    for data, content_type, filename in files:
+    for stream, content_type, filename in files:
+        # 대표 사진과 같은 이유로 상한+1바이트까지만 읽는다(초과분을 메모리에 안 올린다).
+        # 다음 회차에서 data가 새로 묶이며 직전 장은 바로 풀린다 — 동시에 드는 건 1장뿐.
+        data = stream.read(gcs.MAX_IMAGE_BYTES + 1)
         # 업로드(형식·크기 검증 포함)를 먼저 통과시킨 뒤에 좌표를 본다 — 어차피 거절될
         # 파일의 EXIF를 파싱하지 않으려는 것.
         url = gcs.upload_image(f"travel/{travel_idx}/photos", data, content_type, filename)
