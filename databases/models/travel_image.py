@@ -1,9 +1,9 @@
 from sqlalchemy import Column, Integer, String, ForeignKey
 
-from databases.models.base import Base
+from databases.models.base import BaseModel
 
 
-class TravelImage(Base):
+class TravelImage(BaseModel):
     """사용자가 여행 중 찍어 올린 사진 1장.
 
     소유는 여행(travel_idx, 필수)이고, 일정(schedule_idx)은 **선택**이다 — 사용자가 일정을
@@ -13,8 +13,9 @@ class TravelImage(Base):
     schedule.image_url(관광지 대표 이미지)·travel.cover_image_url(카드 썸네일)과는 다른
     것이다 — 영상에 들어가는 건 이 테이블뿐이다.
 
-    created_at 등 감사 컬럼 없이 최소 구조로 유지(BaseModel이 아닌 Base 직접 상속 —
-    소프트 삭제 불변식의 의도적 예외). 삭제는 하드 삭제다.
+    사용자가 만든 데이터라 다른 테이블과 같이 BaseModel을 상속해 소프트 삭제한다
+    (삭제 = deleted_at 기록, 읽기는 deleted_at IS NULL 필터). station·train_stop 같은
+    참조 데이터 스냅샷만이 하드 삭제의 예외이고 이 테이블은 거기 해당하지 않는다.
     """
 
     __tablename__ = "travel_image"

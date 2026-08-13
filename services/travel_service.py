@@ -312,9 +312,10 @@ def _snap_to_schedule(data: bytes, schedules) -> int | None:
 
 
 def delete_image(db: Session, user, travel_idx: int, image_idx: int) -> None:
-    """붙인 사진 1장 삭제 — 행을 지우고 저장소 객체도 지운다. 남의 사진·다른 여행이면 404.
+    """붙인 사진 1장 삭제 — 행은 소프트 삭제하고 저장소 객체는 지운다. 남의 사진·다른 여행이면 404.
 
-    travel_image엔 deleted_at이 없어 하드 삭제다(모델 주석 참고).
+    행에 deleted_at만 찍히므로 조회에서는 사라지지만, GCS 객체는 실제로 지워 보관 비용을
+    남기지 않는다 — 되살리기용이 아니라 감사 흔적이다.
     """
     _owned_travel(db, user, travel_idx)
     image = travel_image_dao.get_by_idx(db, image_idx)

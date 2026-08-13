@@ -68,6 +68,11 @@ _ADDED_COLUMNS = (
     # 사용자가 올린 여행 사진의 소유 여행. 일정(schedule_idx)을 고르지 않고 올릴 수 있게
     # 되면서 필요해졌다 — 여기서는 NULL 허용으로 붙이고, 아래 _FIXUPS가 채운 뒤 NOT NULL로 조인다.
     ("travel_image", "travel_idx", "INTEGER REFERENCES travel(travel_idx)"),
+    # travel_image가 BaseModel을 상속하면서 생긴 감사 컬럼. 테이블이 이미 운영 DB에 있어
+    # create_all(checkfirst=True)로는 안 붙는다. deleted_at이 없으면 삭제 API가 깨진다.
+    ("travel_image", "created_at", "TIMESTAMPTZ DEFAULT now()"),
+    ("travel_image", "updated_at", "TIMESTAMPTZ"),
+    ("travel_image", "deleted_at", "TIMESTAMPTZ"),
 )
 
 # ADD COLUMN 으로 안 되는 뒷정리 — 기존 행 백필·제약 변경. _alter_columns 다음에 돈다.

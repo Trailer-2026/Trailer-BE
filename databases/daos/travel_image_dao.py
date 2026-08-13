@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 
 from databases.models.travel_image import TravelImage
 
@@ -8,12 +9,13 @@ def by_travel(db: Session, travel_idx: int) -> list[TravelImage]:
 
     여행 상세·영상 렌더 둘 다 여행 1건의 사진을 통째로 쓰므로 조회는 이 하나뿐이고,
     일정별로 나누는 건 호출부가 schedule_idx로 묶는다(쿼리 1회, N+1 없음).
-
-    travel_image 는 감사 컬럼 없는 최소 구조(Base 직접 상속)라 soft-delete 필터가 없다.
     """
     return (
         db.query(TravelImage)
-        .filter(TravelImage.travel_idx == travel_idx)
+        .filter(
+            TravelImage.travel_idx == travel_idx,
+            TravelImage.deleted_at.is_(None),
+        )
         .order_by(TravelImage.image_idx)
         .all()
     )
@@ -36,18 +38,28 @@ def detach_schedule(db: Session, schedule_idx: int) -> None:
     """
     (
         db.query(TravelImage)
-        .filter(TravelImage.schedule_idx == schedule_idx)
+        .filter(
+            TravelImage.schedule_idx == schedule_idx,
+            TravelImage.deleted_at.is_(None),
+        )
         .update({TravelImage.schedule_idx: None}, synchronize_session=False)
     )
     db.flush()
 
 
 def get_by_idx(db: Session, image_idx: int) -> TravelImage | None:
-    """image_idx로 단건 조회. 삭제용."""
-    return db.query(TravelImage).filter(TravelImage.image_idx == image_idx).first()
+    """image_idx로 단건 조회. 삭제용 — 이미 지운 사진은 안 잡힌다(두 번째 삭제는 404)."""
+    return (
+        db.query(TravelImage)
+        .filter(
+            TravelImage.image_idx == image_idx,
+            TravelImage.deleted_at.is_(None),
+        )
+        .first()
+    )
 
 
 def delete(db: Session, image: TravelImage) -> None:
-    """사진 1행 하드 삭제 — deleted_at 컬럼이 없는 최소 구조라 소프트 삭제할 수 없다."""
-    db.delete(image)
+    """사진 1행 소프트 삭제 — deleted_at을 찍는다. flush만 하고 commit은 서비스가 한다."""
+    image.deleted_at = func.now()
     db.flush()
