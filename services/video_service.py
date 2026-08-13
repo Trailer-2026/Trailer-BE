@@ -1277,34 +1277,58 @@ def start_render_travel(
     if not schedules:
         raise BadRequestException("여행에 일정이 없습니다.")
 
-    images_by_schedule = travel_image_dao.urls_by_schedule(
-        db, [s.schedule_idx for s in schedules]
-    )
+    # 사진은 여행 단위로 한 번에 읽는다. 일정에 매핑된 사진은 그 일정 좌표에서, 매핑이
+    # 안 된 사진(schedule_idx=None)은 아래에서 마지막 지점에 몰아 붙인다.
+    images = travel_image_dao.by_travel(db, travel_idx)
+    by_schedule: dict[int, list] = {}
+    unassigned: list = []
+    for image in images:
+        if image.schedule_idx is None:
+            unassigned.append(image)
+        else:
+            by_schedule.setdefault(image.schedule_idx, []).append(image)
 
-    # 이미지 다운로드는 서로 독립이라 병렬로 받는다 (결과 순서는 스케줄 순서 그대로).
-    urls = [url for s in schedules for url in images_by_schedule.get(s.schedule_idx, [])]
+    # 이미지 다운로드는 서로 독립이라 병렬로 받는다. 결과를 image_idx로 찾아 쓰므로
+    # 다운로드 순서와 아래 소비 순서가 달라져도 사진이 엉뚱한 지점에 붙지 않는다.
     with ThreadPoolExecutor(max_workers=8) as pool:
-        contents = iter(list(pool.map(_fetch_travel_image, urls)))
+        downloaded = dict(
+            zip(
+                [img.image_idx for img in images],
+                pool.map(_fetch_travel_image, [img.url for img in images]),
+            )
+        )
 
     job_dir = _new_job_dir()
     track_points: list[dict[str, object]] = []
     media_points: list[dict[str, object]] = []
     saved_count = 0
-    for schedule in schedules:
-        photos: list[str] = []
-        for url in images_by_schedule.get(schedule.schedule_idx, []):
-            content = next(contents)
+
+    def _save(images_) -> list[str]:
+        """다운로드한 바이트를 job 디렉터리에 떨궈 렌더가 읽을 경로 목록으로. 실패분은 건너뛴다."""
+        nonlocal saved_count
+        saved: list[str] = []
+        for img in images_:
+            content = downloaded.get(img.image_idx)
             if content is None:
                 continue
-            photos.append(_save_render_image(job_dir, f"img_{saved_count}", url, content))
+            saved.append(_save_render_image(job_dir, f"img_{saved_count}", img.url, content))
             saved_count += 1
+        return saved
+
+    for schedule in schedules:
         _append_stop(
             track_points, media_points,
-            schedule.latitude, schedule.longitude, photos, name=schedule.title,
+            schedule.latitude, schedule.longitude,
+            _save(by_schedule.get(schedule.schedule_idx, [])), name=schedule.title,
         )
 
     if len(track_points) < 2:
         raise BadRequestException("일정 지점이 2개 이상이어야 이동 경로를 만들 수 있습니다.")
+
+    # 일정에 매핑되지 않은 사진(업로드 때 EXIF GPS가 없어 붙일 일정을 못 정했거나, 붙어
+    # 있던 일정이 삭제된 사진)은 마지막 지점 뒤에 이어 붙인다 — 지도 위 어디에 둘지 알
+    # 방법이 없어서다. ponytail: 좌표를 아는 사진만 제 위치에 뜨고 나머지는 끝에 몰린다.
+    media_points[-1]["photos"].extend(_save(unassigned))
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
     # 제목을 안 주면 여행 이름을 그대로 쓴다 — 이미 조회한 값이라 공짜다.

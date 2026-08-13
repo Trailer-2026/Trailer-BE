@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.orm import Session
 
 from core.response import CommonResponse
@@ -13,6 +13,7 @@ from schemas.travel_schema import (
     TravelCoverImageResponse,
     TravelCreateRequest,
     TravelDetailResponse,
+    TravelImagesResponse,
     TravelLikeResponse,
     TravelListResponse,
     TravelManualCreateRequest,
@@ -234,6 +235,66 @@ def delete_travel_cover_image(
 ):
     result = travel_service.delete_cover_image(db, current_user, travel_idx)
     return CommonResponse.success_response("대표 사진 삭제 성공", data=result)
+
+
+@router.post(
+    "/{travel_idx}/images",
+    summary="여행 사진 추가 (여행 중 찍은 사진)",
+    description="여행 중 찍은 사진들을 그 여행에 붙입니다(multipart/form-data, 한 번에 최대 "
+                "20장). **`POST /api/videos/render/travel`이 이 사진들로 여행 영상을 만듭니다** "
+                "— 사진을 하나도 안 붙인 여행은 지도 이동만 있는 영상이 됩니다.\n\n"
+                "`schedule_idx`는 **선택**이고, 보통 안 보내면 됩니다.\n"
+                "- **안 주면**: 서버가 **사진 EXIF의 GPS 좌표를 읽어 가장 가까운 일정에 자동으로 "
+                "매핑**합니다. 앱은 여행과 사진만 보내면 되고, 영상에서 사진이 찍힌 자리에 뜹니다.\n"
+                "- **주면**: 자동 매핑 없이 그 일정에 그대로 붙습니다(사용자가 일정을 직접 고른 화면).\n"
+                "- **좌표를 못 구하면**: 일정 없이(`schedule_idx: null`) 저장됩니다 — 여행에 일정이 "
+                "아직 없거나, 사진에 GPS가 없는 경우(메신저로 받은 사진은 GPS가 지워져 있습니다). "
+                "이 사진들은 영상에서 **마지막 지점 뒤에 몰아서** 나옵니다.\n\n"
+                "응답의 `schedule_idx`로 어디에 매핑됐는지 확인할 수 있습니다. 여행 상세에서는 "
+                "매핑된 사진이 `days[].items[].images`, 매핑 안 된 사진이 최상단 `images`로 "
+                "내려갑니다.\n\n"
+                "- 400: 이미지 파일이 아니거나 빈 파일, 10MB 초과, 21장 이상\n"
+                "- 404: 존재하지 않거나 본인 여행이 아님 / `schedule_idx`가 그 여행의 일정이 아님\n"
+                "- 401: 인증 필요\n"
+                "- 502: 이미지 저장소(GCS) 업로드 실패",
+    response_model=CommonResponse[TravelImagesResponse],
+)
+def add_travel_images(
+    travel_idx: int,
+    images: list[UploadFile] = File(..., description="여행 사진 파일들 (jpg/png/webp 등, 장당 10MB 이하, 최대 20장)"),
+    schedule_idx: int | None = Form(None, description="사진을 붙일 일정 항목 PK (비우면 사진 GPS로 가장 가까운 일정에 자동 매핑)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = travel_service.add_images(
+        db, current_user, travel_idx, schedule_idx,
+        # 대표 사진과 같은 이유로 상한+1바이트까지만 읽는다(초과분을 메모리에 안 올린다).
+        # 장수도 상한+1장까지만 읽는다 — 100장을 보내도 다 읽기 전에 서비스가 400으로 막는다.
+        [
+            (f.file.read(MAX_IMAGE_BYTES + 1), f.content_type, f.filename)
+            for f in images[:travel_service.MAX_TRAVEL_IMAGES + 1]
+        ],
+    )
+    return CommonResponse.success_response("여행 사진 추가 성공", data=result)
+
+
+@router.delete(
+    "/{travel_idx}/images/{image_idx}",
+    summary="여행 사진 삭제",
+    description="여행에 붙인 사진 1장을 지웁니다(저장소 객체까지 삭제, 복구 불가). "
+                "`image_idx`는 사진 추가 응답이나 여행 상세의 `images`에 담겨 옵니다.\n\n"
+                "- 404: 사진이 없거나 본인 여행의 사진이 아님\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[None],
+)
+def delete_travel_image(
+    travel_idx: int,
+    image_idx: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    travel_service.delete_image(db, current_user, travel_idx, image_idx)
+    return CommonResponse.success_response("여행 사진 삭제 성공")
 
 
 @router.delete(

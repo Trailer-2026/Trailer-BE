@@ -12,7 +12,10 @@ from sqlalchemy.orm import Session
 
 from core.enums import TravelSource
 from core.exceptions.custom import BadRequestException, NotFoundException
-from databases.daos import schedule_dao, station_dao, travel_dao, travel_like_dao, user_dao
+from databases.daos import (
+    schedule_dao, station_dao, travel_dao, travel_image_dao, travel_like_dao, user_dao,
+)
+from recommend.routing import haversine  # 거리 계산 단일 기준(km) — 사진→일정 자동 매핑에 쓴다
 from services import push_service
 from schemas.travel_schema import (
     HomeTravelCard,
@@ -24,6 +27,8 @@ from schemas.travel_schema import (
     TravelCoverImageResponse,
     TravelDayGroup,
     TravelDetailResponse,
+    TravelImageItem,
+    TravelImagesResponse,
     TravelCard,
     TravelListResponse,
     TravelManualCreateRequest,
@@ -70,6 +75,9 @@ _DEFAULT_COVER_BY_REGION = {
 # 목록에 없는 지역·지역 미입력용. 기차 여행이라 역 사진으로 둔다(정동진역).
 _DEFAULT_COVER = "https://tong.visitkorea.or.kr/cms/resource/12/4093712_image2_1.jpg"
 _TITLE_MAX = 100                 # travel.title 컬럼 길이 — 자동 생성 제목이 넘으면 INSERT가 깨진다
+# 여행 사진 한 요청당 장수 상한. 라우터가 이 값+1장까지만 읽어 초과 요청의 바이트를
+# 통째로 메모리에 올리지 않는다(장당 10MB × 무제한을 막는 게 목적).
+MAX_TRAVEL_IMAGES = 20
 # 편집 시 null로 지우면 안 되는 NOT NULL 컬럼(schedule) — 명시적 null 요청을 400으로 막는다.
 _NON_NULL_EDIT_FIELDS = ("title", "start_time", "end_time", "latitude", "longitude")
 
@@ -181,8 +189,13 @@ def update_schedule(
 
 
 def delete_schedule(db: Session, user, travel_idx: int, schedule_idx: int) -> None:
-    """일정 항목 소프트 삭제. 본인 여행의 항목이 아니면 404."""
+    """일정 항목 소프트 삭제. 본인 여행의 항목이 아니면 404.
+
+    거기 붙어 있던 사진은 지우지 않고 여행 소속으로 떼어 둔다 — 사진의 소유는 여행이고,
+    일정을 지웠다고 찍은 사진까지 사라지면 안 된다(영상에선 마지막 지점 뒤로 간다).
+    """
     schedule = _owned_schedule(db, user, travel_idx, schedule_idx)
+    travel_image_dao.detach_schedule(db, schedule_idx)
     schedule_dao.soft_delete(db, schedule)
     db.commit()
 
@@ -238,6 +251,82 @@ def delete_cover_image(db: Session, user, travel_idx: int) -> TravelCoverImageRe
     )
 
 
+def add_images(
+    db: Session, user, travel_idx: int, schedule_idx: int | None,
+    files: list[tuple[bytes, str | None, str | None]],
+) -> TravelImagesResponse:
+    """여행 중 찍은 사진들을 여행에 붙인다 — GCS 업로드 후 travel_image 행으로 남긴다.
+
+    사진의 소유는 여행이고 일정(schedule_idx)은 선택이다. **안 주면 서버가 사진 EXIF의
+    GPS로 가장 가까운 일정을 찾아 자동 매핑한다** — 앱은 '여행 + 사진'만 보내면 되고,
+    영상에서 사진이 찍힌 자리에 뜬다. 좌표를 못 구한 사진은 일정 없이(NULL) 저장돼
+    영상 마지막 지점에 몰려 나온다. 그래서 일정이 하나도 없는 여행에도 사진은 올라간다.
+    """
+    if len(files) > MAX_TRAVEL_IMAGES:
+        raise BadRequestException(f"사진은 한 번에 {MAX_TRAVEL_IMAGES}장까지 올릴 수 있습니다.")
+
+    _owned_travel(db, user, travel_idx)
+    if schedule_idx is not None:
+        _owned_schedule(db, user, travel_idx, schedule_idx)  # 그 여행 소속인지 검증(아니면 404)
+    # 자동 매핑용 후보. 사용자가 일정을 직접 골랐으면 좌표를 볼 필요가 없어 조회도 안 한다.
+    candidates = [] if schedule_idx is not None else schedule_dao.list_by_travel(db, travel_idx)
+
+    images = []
+    for data, content_type, filename in files:
+        # 업로드(형식·크기 검증 포함)를 먼저 통과시킨 뒤에 좌표를 본다 — 어차피 거절될
+        # 파일의 EXIF를 파싱하지 않으려는 것.
+        url = gcs.upload_image(f"travel/{travel_idx}/photos", data, content_type, filename)
+        target = schedule_idx if schedule_idx is not None else _snap_to_schedule(data, candidates)
+        images.append(travel_image_dao.create(db, travel_idx, target, url))
+    db.commit()
+    return TravelImagesResponse(
+        travel_idx=travel_idx,
+        images=[TravelImageItem.model_validate(image) for image in images],
+    )
+
+
+def _snap_to_schedule(data: bytes, schedules) -> int | None:
+    """사진 EXIF의 GPS 좌표에서 가장 가까운 일정의 schedule_idx. 못 정하면 None.
+
+    앱은 '여행 + 사진'만 보내므로 어느 일정에 붙일지는 서버가 정한다. 사진이 찍힌 위치와
+    일정 좌표(방문지는 자기 좌표, 기차는 출발역)를 직선거리로 재 제일 가까운 것을 고른다.
+
+    거리 상한은 두지 않는다 — 아무리 멀어도 '가장 가까운 일정'이 대안(None → 영상 마지막
+    지점에 몰아 붙이기)보다 나쁠 수 없어서다.
+
+    None이 되는 경우: 일정이 없는 여행, GPS 없는 사진(메신저 전송본은 GPS가 지워진다),
+    깨진 EXIF. 저장은 되고 영상에서 마지막 지점 뒤에 나온다.
+    """
+    if not schedules:
+        return None
+    # 렌더러(무거운 의존)를 모듈 로드 시점에 끌어오지 않으려고 여기서 import 한다.
+    # photos-only 렌더가 쓰는 파서를 그대로 재사용 — EXIF 해석 규칙을 두 벌로 만들지 않는다.
+    from services.video_service import _extract_photo_meta
+
+    meta = _extract_photo_meta(data)
+    if meta is None:
+        return None
+    lat, lng = float(meta["latitude"]), float(meta["longitude"])
+    nearest = min(schedules, key=lambda s: haversine(lat, lng, s.latitude, s.longitude))
+    return nearest.schedule_idx
+
+
+def delete_image(db: Session, user, travel_idx: int, image_idx: int) -> None:
+    """붙인 사진 1장 삭제 — 행을 지우고 저장소 객체도 지운다. 남의 사진·다른 여행이면 404.
+
+    travel_image엔 deleted_at이 없어 하드 삭제다(모델 주석 참고).
+    """
+    _owned_travel(db, user, travel_idx)
+    image = travel_image_dao.get_by_idx(db, image_idx)
+    if image is None or image.travel_idx != travel_idx:
+        raise NotFoundException("사진을 찾을 수 없습니다.")
+
+    url = image.url
+    travel_image_dao.delete(db, image)
+    db.commit()
+    _drop_uploaded_image(url)  # 커밋 뒤 뒷정리 — 실패해도 삼킨다
+
+
 def _default_cover(region: str | None) -> str:
     """지역별 기본 커버 사진. region은 '부산역'(추천 저장)·'부산'(직접 입력) 두 형태라 접미사를 뗀다."""
     return _DEFAULT_COVER_BY_REGION.get((region or "").strip().removesuffix("역"), _DEFAULT_COVER)
@@ -256,7 +345,7 @@ def _drop_uploaded_image(url: str | None) -> None:
         if path:
             gcs.delete_object(path)
     except Exception:  # noqa: BLE001  뒷정리 실패는 삼킨다
-        logger.warning("대표 사진 객체 정리 실패(무시): %s", url)
+        logger.warning("업로드 이미지 객체 정리 실패(무시): %s", url)
 
 
 def delete_travel(db: Session, user, travel_idx: int) -> None:
@@ -357,6 +446,15 @@ def travel_detail(db: Session, user, travel_idx: int) -> TravelDetailResponse:
         raise NotFoundException("여행을 찾을 수 없습니다.")
 
     schedules = schedule_dao.list_by_travel(db, travel_idx)
+    # 사진은 여행 단위로 한 번에 읽고 일정별로 묶는다(쿼리 1회). 일정에 안 붙은 사진은
+    # 어느 일정에도 안 들어가고 응답 최상단 images로 따로 나간다.
+    photos = travel_image_dao.by_travel(db, travel_idx)
+    by_schedule: dict[int, list[TravelImageItem]] = {}
+    for photo in photos:
+        if photo.schedule_idx is not None:
+            by_schedule.setdefault(photo.schedule_idx, []).append(
+                TravelImageItem.model_validate(photo)
+            )
     groups: dict[int, TravelDayGroup] = {}
     for s in schedules:  # list_by_travel이 (day_no, sequence) 순 정렬을 보장
         group = groups.get(s.day_no)
@@ -367,7 +465,9 @@ def travel_detail(db: Session, user, travel_idx: int) -> TravelDetailResponse:
                 items=[],
             )
             groups[s.day_no] = group
-        group.items.append(TravelScheduleItem.model_validate(s))
+        item = TravelScheduleItem.model_validate(s)
+        item.images = by_schedule.get(s.schedule_idx, [])
+        group.items.append(item)
 
     today = now_kst().date()
     return TravelDetailResponse(
@@ -379,6 +479,9 @@ def travel_detail(db: Session, user, travel_idx: int) -> TravelDetailResponse:
         or next((s.image_url for s in schedules if s.image_url), None)
         or _default_cover(travel.region),
         days=[groups[k] for k in sorted(groups)],
+        images=[
+            TravelImageItem.model_validate(p) for p in photos if p.schedule_idx is None
+        ],
     )
 
 
@@ -588,3 +691,50 @@ def _station_coords(db: Session, name: str, fallback) -> tuple[float, float] | N
         if coord is not None:
             return coord
     return fallback  # 유효 좌표거나 None(미상)
+
+
+def _selfcheck() -> None:
+    """_snap_to_schedule 자가 검증 — `python -m services.travel_service` 로 실행."""
+    import io as _io
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    def photo(lat: float | None = None, lng: float | None = None) -> bytes:
+        """GPS EXIF를 심은(또는 안 심은) 최소 JPEG 바이트."""
+        buf = _io.BytesIO()
+        image = Image.new("RGB", (8, 8))
+        if lat is None:
+            image.save(buf, "JPEG")
+        else:
+            exif = Image.Exif()
+            def dms(v):  # 도/분/초 3쌍 — _extract_photo_meta 의 to_decimal 이 읽는 형식
+                d = int(abs(v)); m = int((abs(v) - d) * 60); s = (abs(v) - d - m / 60) * 3600
+                return (float(d), float(m), round(s, 2))
+            exif.get_ifd(0x8825).update({
+                1: "N" if lat >= 0 else "S", 2: dms(lat),
+                3: "E" if lng >= 0 else "W", 4: dms(lng),
+            })
+            image.save(buf, "JPEG", exif=exif)
+        return buf.getvalue()
+
+    seoul = SimpleNamespace(schedule_idx=1, latitude=37.5665, longitude=126.9780)   # 서울역
+    busan = SimpleNamespace(schedule_idx=2, latitude=35.1152, longitude=129.0423)   # 부산역
+    plan = [seoul, busan]
+
+    # 부산에서 찍은 사진은 서울이 아니라 부산 일정에 붙는다(반대도 마찬가지).
+    assert _snap_to_schedule(photo(35.1595, 129.0600), plan) == 2   # 부산 시내
+    assert _snap_to_schedule(photo(37.5512, 126.9882), plan) == 1   # 남산
+
+    # 후보가 없거나 GPS가 없으면 매핑하지 않는다(NULL → 영상 마지막 지점).
+    assert _snap_to_schedule(photo(35.1595, 129.0600), []) is None
+    assert _snap_to_schedule(photo(), plan) is None
+    assert _snap_to_schedule(b"not an image", plan) is None
+
+    # 아무리 멀어도 가장 가까운 쪽을 고른다(거리 상한을 두지 않는다는 결정의 검증).
+    assert _snap_to_schedule(photo(48.8584, 2.2945), plan) == 1     # 파리 → 그나마 서울
+    print("travel_service selfcheck OK")
+
+
+if __name__ == "__main__":
+    _selfcheck()
