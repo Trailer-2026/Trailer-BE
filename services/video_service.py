@@ -33,6 +33,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import BinaryIO
 
 import requests
 from PIL import Image
@@ -253,11 +254,12 @@ def recommend_reels(
             raise BadRequestException("exclude는 쉼표로 구분한 reels_idx 목록이어야 합니다.")
         exclude_idxs.append(int(token))
 
+    # 차단 목록은 두 군데에 쓰이는데 범위가 다르다. **나 자신은 차단이 아니다** —
+    # 릴스 노출에서만 빼고(아래 hidden_users), 댓글 수에서 빼면 내가 쓴 댓글이 안 세어진다.
+    blocked = ban_dao.blocked_user_idxs(db, user.user_idx) if user else []
     # 차단한 사용자 + 나 자신 — 내 릴스는 마이페이지에서 보면 되고, 남의 여행을
     # 구경하는 피드에 내가 올린 게 섞이면 그만큼 볼 게 줄어든다.
-    hidden_users = (
-        [*ban_dao.blocked_user_idxs(db, user.user_idx), user.user_idx] if user else []
-    )
+    hidden_users = [*blocked, user.user_idx] if user else []
     rows = reels_dao.get_random_reels(db, count, exclude_idxs, hidden_users)
     if not rows and exclude_idxs:
         # 전부 이미 추천된 상태 → 한 바퀴 돌았으니 처음부터 다시
@@ -265,7 +267,8 @@ def recommend_reels(
     # 좋아요·댓글 수는 행마다 세면 N+1 이라 뽑힌 릴스만 묶어 두 번에 읽는다.
     idxs = [reels.reels_idx for reels, _, _ in rows]
     like_counts = like_dao.counts_by_reels(db, idxs)
-    comment_counts = comment_dao.counts_by_reels(db, idxs)
+    # 댓글 수는 '내가 볼 수 있는 수' — 차단한 사람의 댓글은 목록에서 빠지므로 숫자에서도 뺀다.
+    comment_counts = comment_dao.counts_by_reels(db, idxs, blocked)
     liked = like_dao.liked_reels_idxs(db, user.user_idx, idxs) if user else set()
     return [
         ReelsRecommendResponse(
@@ -294,12 +297,15 @@ def list_my_reels(
     """마이페이지 "내가 올린 릴스" — 최신순, 커서 페이징.
 
     작성자가 호출자뿐이라 닉네임·프로필은 조인 없이 current_user 에서 채운다.
+    내 릴스만 나오니 차단으로 걸러질 릴스는 없지만, **댓글 수는 차단을 타므로**
+    (내 릴스에 차단한 사람이 단 댓글은 목록에서 빠진다) 차단 목록은 조회한다.
     """
     rows = reels_dao.list_by_user(db, user.user_idx, limit + 1, cursor)
     has_more = len(rows) > limit
     rows = rows[:limit]
     items = _to_reels_cards(
-        db, user, [(reels, user.nickname, user.profile_image) for reels in rows]
+        db, user, [(reels, user.nickname, user.profile_image) for reels in rows],
+        ban_dao.blocked_user_idxs(db, user.user_idx),
     )
     return MyReelsListResponse(
         items=items,
@@ -324,7 +330,9 @@ def list_liked_reels(
     has_more = len(rows) > limit
     rows = rows[:limit]
     items = _to_reels_cards(
-        db, user, [(reels, nickname, profile_image) for _, reels, nickname, profile_image in rows]
+        db, user,
+        [(reels, nickname, profile_image) for _, reels, nickname, profile_image in rows],
+        blocked,  # 위에서 이미 조회했다 — 카드 댓글 수에도 같은 목록을 쓴다
     )
     return MyReelsListResponse(
         items=items,
@@ -332,15 +340,17 @@ def list_liked_reels(
     )
 
 
-def _to_reels_cards(db: Session, user, rows) -> list[MyReelsItem]:
+def _to_reels_cards(db: Session, user, rows, blocked: list[int]) -> list[MyReelsItem]:
     """(릴스, 닉네임, 프로필) 목록에 좋아요·댓글 수와 내 좋아요 여부를 붙인다.
 
     recommend_reels 와 같은 이유로 카운트는 행마다 세지 않고 뽑힌 릴스만 묶어
     일괄 조회한다(N+1 회피).
+    blocked(내가 차단한 사용자)는 댓글 수에서 뺀다 — 댓글 목록에서도 빠지므로
+    숫자와 목록이 어긋나지 않게 한다(comment_dao.counts_by_reels 참조).
     """
     idxs = [reels.reels_idx for reels, _, _ in rows]
     like_counts = like_dao.counts_by_reels(db, idxs)
-    comment_counts = comment_dao.counts_by_reels(db, idxs)
+    comment_counts = comment_dao.counts_by_reels(db, idxs, blocked)
     liked = like_dao.liked_reels_idxs(db, user.user_idx, idxs)
     return [
         MyReelsItem(
@@ -920,6 +930,12 @@ def upload_reels(
 _jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()
 
+# 레지스트리에 남길 job 수 상한. 등록만 하고 지우지 않으면 재시작 전까지 계속 쌓인다
+# (항목당 log_tail 이 최대 2KB). 끝난 job 을 바로 버리지 않는 이유는 **실패 사유**다 —
+# 렌더가 실패하면 자리표 릴스 행이 삭제되므로, 여기서 지우면 폴링하던 클라이언트가
+# error 대신 404 를 받는다. 그래서 '오래된 끝난 job 부터' 덜어낸다.
+_MAX_JOBS = 200
+
 # 렌더가 끝나기 전 릴스 행의 url 자리표. url 은 NOT NULL 이라 NULL 을 못 쓴다.
 # 이 값인 행은 "렌더 중"이라 추천 피드에서 빠지고(reels_dao.get_random_reels)
 # 다운로드·편집도 거부한다(_require_ready).
@@ -1043,6 +1059,15 @@ def _spawn_render_job(
 # 이 거리 이상 떨어진 사진이 나와야 다음 지점으로 이동한다.
 PHOTO_CLUSTER_KM = 1.0
 
+# 렌더 한 번에 받을 사진 장수 상한. 장수만큼 지점이 늘어 렌더 시간도 같이 길어지므로
+# 30분 하드 캡(RENDER_TIMEOUT_SECONDS) 안에 끝날 만큼으로 둔다. 여행 사진 첨부의
+# MAX_TRAVEL_IMAGES(20)보다 넉넉한 건 이쪽이 '여행 전체'를 한 번에 올리는 입구라서다.
+MAX_RENDER_PHOTOS = 30
+# 사진 1장 크기 상한. 프로필·대표 사진과 같은 값을 쓴다(gcs.MAX_IMAGE_BYTES, 10MB).
+# ponytail: 바이트 총량의 실제 천장은 nginx client_max_body_size(100M)다 — 여기 둘은
+# 초과 요청을 413 대신 사유가 담긴 400 으로 끊고, 장수를 유한하게 묶는 몫이다.
+MAX_RENDER_PHOTO_BYTES = gcs.MAX_IMAGE_BYTES
+
 
 def _extract_photo_meta(content: bytes) -> dict[str, object] | None:
     """사진 EXIF 에서 GPS 좌표·촬영 시각을 뽑는다. GPS 가 없으면 None.
@@ -1165,7 +1190,7 @@ def _write_travel_data(
 
 def start_render_photos_only(
     db: Session,
-    photos: list[tuple[str, bytes]],
+    photos: list[tuple[str, BinaryIO]],
     *,
     user_idx: int,
     bgm: str = "",
@@ -1191,6 +1216,9 @@ def start_render_photos_only(
 
     start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 삼아
     첫 사진 지점으로 이동하며 시작한다 (출발지에서는 사진 없이 라벨만 표시).
+
+    사진은 바이트가 아니라 **스트림**으로 받아 한 장씩 읽고 job 디렉터리로 흘려보낸다 —
+    전량을 메모리에 올리지 않으려는 것이다(travel_service.add_images 와 같은 처리).
     """
     theme = _validate_render_options(theme)
 
@@ -1201,59 +1229,80 @@ def start_render_photos_only(
         -90 <= start_latitude <= 90 and -180 <= start_longitude <= 180
     ):
         raise BadRequestException("시작 위치 좌표가 올바르지 않습니다.")
+    # 장수 검증은 **읽기 전에** 끝낸다 — 초과분의 바이트를 아예 만지지 않으려고.
+    if len(photos) > MAX_RENDER_PHOTOS:
+        raise BadRequestException(
+            f"사진은 한 번에 {MAX_RENDER_PHOTOS}장까지 올릴 수 있습니다."
+        )
     if len(photos) < 2:
         raise BadRequestException("사진이 2장 이상 필요합니다.")
 
-    tagged: list[tuple[str, bytes, dict]] = []
-    for filename, content in photos:
-        meta = _extract_photo_meta(content)
-        if meta is not None:
-            tagged.append((filename, content, meta))
-    if len(tagged) < 2:
-        raise BadRequestException(
-            "GPS 정보가 있는 사진이 2장 이상 필요합니다. "
-            "(메신저로 전송된 사진은 GPS가 제거되니 원본을 사용하세요)"
-        )
-
-    # 촬영 시각 순 정렬 — 시각 없는 사진은 업로드 순서를 유지한 채 뒤로 보낸다.
-    # (순서 지정 모드에서는 업로드 순서가 곧 사용자 지정 순서라 정렬하지 않는다.)
-    if sort_by_time:
-        tagged.sort(key=lambda item: (item[2]["taken"] is None, item[2]["taken"] or datetime.min))
-
     job_dir = _new_job_dir()
-    track_points: list[dict[str, object]] = []
-    media_points: list[dict[str, object]] = []
-    for order, (filename, content, meta) in enumerate(tagged):
-        rel = _save_render_image(job_dir, f"photo_{order}", filename, content)
-        # 순서 지정 모드에서는 촬영 시각이 이동 순서와 어긋날 수 있어 넣지 않는다.
-        timestamp = (
-            meta["taken"].isoformat() if sort_by_time and meta["taken"] is not None else None
-        )
-        _append_stop(
-            track_points, media_points,
-            meta["latitude"], meta["longitude"], [rel], timestamp=timestamp,
-        )
+    try:
+        # 한 장씩 읽어 바로 디스크로 넘긴다. 다음 회차에서 content 가 새로 묶이며 직전 장은
+        # 풀리므로 동시에 드는 건 1장뿐이다. 파일명의 순번은 업로드 순서(고유 이름을 만드는
+        # 용도)일 뿐, 영상의 이동 순서는 아래 tagged 정렬이 정한다.
+        tagged: list[tuple[str, dict]] = []
+        for order, (filename, stream) in enumerate(photos):
+            # 상한+1바이트까지만 읽어 초과분을 메모리에 올리지 않는다(대표 사진과 같은 방식).
+            content = stream.read(MAX_RENDER_PHOTO_BYTES + 1)
+            if len(content) > MAX_RENDER_PHOTO_BYTES:
+                raise BadRequestException(
+                    f"사진 한 장은 {MAX_RENDER_PHOTO_BYTES // (1024 * 1024)}MB 이하만 가능합니다."
+                )
+            meta = _extract_photo_meta(content)
+            if meta is None:
+                continue  # GPS 없는 사진은 지점을 만들 수 없다 — 저장도 하지 않는다
+            tagged.append((_save_render_image(job_dir, f"photo_{order}", filename, content), meta))
+        if len(tagged) < 2:
+            raise BadRequestException(
+                "GPS 정보가 있는 사진이 2장 이상 필요합니다. "
+                "(메신저로 전송된 사진은 GPS가 제거되니 원본을 사용하세요)"
+            )
 
-    # 지정된 출발지를 맨 앞에 끼워 넣는다 (첫 사진과 사실상 같은 장소면 생략).
-    if start_latitude is not None and _haversine_km(
-        start_latitude, start_longitude,
-        float(track_points[0]["latitude"]), float(track_points[0]["longitude"]),
-    ) >= PHOTO_CLUSTER_KM:
-        for media in media_points:
-            media["trackIndex"] = int(media["trackIndex"]) + 1
-        track_points.insert(0, {"latitude": start_latitude, "longitude": start_longitude})
-        media_points.insert(
-            0, {"trackIndex": 0, "name": (start_name or "출발").strip() or "출발", "photos": []}
+        # 촬영 시각 순 정렬 — 시각 없는 사진은 업로드 순서를 유지한 채 뒤로 보낸다.
+        # (순서 지정 모드에서는 업로드 순서가 곧 사용자 지정 순서라 정렬하지 않는다.)
+        if sort_by_time:
+            tagged.sort(key=lambda item: (item[1]["taken"] is None, item[1]["taken"] or datetime.min))
+
+        track_points: list[dict[str, object]] = []
+        media_points: list[dict[str, object]] = []
+        for rel, meta in tagged:
+            # 순서 지정 모드에서는 촬영 시각이 이동 순서와 어긋날 수 있어 넣지 않는다.
+            timestamp = (
+                meta["taken"].isoformat() if sort_by_time and meta["taken"] is not None else None
+            )
+            _append_stop(
+                track_points, media_points,
+                meta["latitude"], meta["longitude"], [rel], timestamp=timestamp,
+            )
+
+        # 지정된 출발지를 맨 앞에 끼워 넣는다 (첫 사진과 사실상 같은 장소면 생략).
+        if start_latitude is not None and _haversine_km(
+            start_latitude, start_longitude,
+            float(track_points[0]["latitude"]), float(track_points[0]["longitude"]),
+        ) >= PHOTO_CLUSTER_KM:
+            for media in media_points:
+                media["trackIndex"] = int(media["trackIndex"]) + 1
+            track_points.insert(0, {"latitude": start_latitude, "longitude": start_longitude})
+            media_points.insert(
+                0, {"trackIndex": 0, "name": (start_name or "출발").strip() or "출발", "photos": []}
+            )
+
+        if len(track_points) < 2:
+            raise BadRequestException("사진들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
+
+        travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
+        return _spawn_render_job(
+            db, travel_data_path, bgm_path, theme, user_idx, title,
+            region=_region_of_trip(track_points),
         )
-
-    if len(track_points) < 2:
-        raise BadRequestException("사진들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
-
-    travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
-    return _spawn_render_job(
-        db, travel_data_path, bgm_path, theme, user_idx, title,
-        region=_region_of_trip(track_points),
-    )
+    except Exception:
+        # 여기까지 못 오면 렌더 job 이 없어 아무도 이 디렉터리를 치우지 않는다
+        # (_run_render_job 의 정리는 job 이 떠야 돈다). 사진이 uploads/ 에 영영 쌓이므로
+        # 실패 경로에서 직접 지운다 — 성공하면 렌더 스레드가 끝낼 때 지운다.
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
 
 
 # --------------------------------------------------------------------------- #
@@ -1441,6 +1490,26 @@ def _run_render_job(job: dict, command: list[str]) -> None:
             shutil.rmtree(job_dir, ignore_errors=True)
         if job.get("status") != "done":
             _discard_pending_reels(job["reels_idx"])
+        with _jobs_lock:
+            _trim_jobs_locked()
+
+
+def _trim_jobs_locked() -> None:
+    """레지스트리를 _MAX_JOBS 이하로 줄인다 — 끝난 job 을 오래된 순으로만 덜어낸다.
+
+    돌고 있는 job 은 절대 안 지운다(폴링 중인 클라이언트가 상태를 잃는다). 그래서 동시
+    진행 job 이 상한을 넘으면 그만큼은 그대로 남는다 — 상한은 목표지 강제가 아니다.
+    호출자가 _jobs_lock 을 쥔 상태여야 한다.
+    """
+    excess = len(_jobs) - _MAX_JOBS
+    if excess <= 0:
+        return
+    finished = sorted(
+        (key for key, job in _jobs.items() if job["status"] != "running"),
+        key=lambda key: _jobs[key]["started_at"],
+    )
+    for key in finished[:excess]:
+        del _jobs[key]
 
 
 def _render_job(job: dict, command: list[str]) -> None:

@@ -33,8 +33,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     errors = exc.errors()
     if errors:
         first_error = errors[0]
-        field = first_error.get("loc", ["", ""])[-1]
-        message = f"{field}: {first_error.get('msg', '유효하지 않은 값입니다.')}"
+        # loc 이 빈 튜플로 오는 경우가 있다(모델 전체에 걸린 검증 오류 등) — [-1] 로 바로
+        # 집으면 IndexError 가 나 422 대신 500 이 나간다. 그 땐 필드명 없이 사유만 싣는다.
+        loc = first_error.get("loc") or ("",)
+        message = f"{loc[-1]}: {first_error.get('msg', '유효하지 않은 값입니다.')}"
     else:
         message = "잘못된 요청입니다."
 

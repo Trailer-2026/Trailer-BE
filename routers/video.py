@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
+from typing import BinaryIO
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -53,8 +54,14 @@ def _title_form(extra: str = ""):
     )
 
 
-def _photo_payloads(photos: list[UploadFile]) -> list[tuple[str, bytes]]:
-    return [(upload.filename or "", upload.file.read()) for upload in photos]
+def _photo_streams(photos: list[UploadFile]) -> list[tuple[str, BinaryIO]]:
+    """업로드 사진을 (파일명, 스트림)으로 넘긴다 — **여기서 read() 하지 않는다**.
+
+    전량을 읽어 넘기면 20~30장이 통째로 메모리에 올라간다(장당 10MB면 수백 MB).
+    서비스가 한 장씩 읽어 job 디렉터리로 흘려보내므로 동시에 드는 건 1장뿐이다
+    (travel_service.add_images 가 이미 쓰는 방식).
+    """
+    return [(upload.filename or "", upload.file) for upload in photos]
 
 
 @router.get("/assets/map_themes.js", include_in_schema=False)
@@ -120,6 +127,7 @@ def download_reels_video(
                 "피드에 뜨지 않음), 렌더가 끝나면 그 행의 url 에 GCS 영상 주소가 채워집니다. "
                 "렌더에 실패하면 그 릴스 행은 삭제됩니다. title 을 주면 그 값이 릴스 "
                 "제목이 되고, 비우면 제목 없는(null) 릴스가 됩니다. "
+                "사진은 한 번에 30장까지, 한 장당 10MB까지 올릴 수 있습니다(초과 시 400). "
                 "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
                 "GPS 없는 사진은 자동 제외됩니다. 지점 기준 1km 미만인 연속 사진들은 카메라 "
                 "이동 없이 첫 사진 위치에 고정해 순서대로 보여주고, 1km 이상 떨어진 사진이 "
@@ -136,13 +144,13 @@ def render_video_photos_only(
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
     title: str = _title_form(),
-    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장)"),
+    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장·최대 30장, 장당 10MB 이하)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     job = video_service.start_render_photos_only(
         db,
-        photos=_photo_payloads(photos),
+        photos=_photo_streams(photos),
         user_idx=current_user.user_idx,
         bgm=bgm,
         theme=theme,
@@ -161,6 +169,7 @@ def render_video_photos_only(
                 "순서 그대로(사용자가 지정한 순서) 지점을 이동하며 각 지점에서 해당 사진을 "
                 "보여주는 영상 렌더링을 시작하고 reels_idx 를 즉시 반환합니다(진행률은 "
                 "GET /api/videos/render/{reels_idx} 로 폴링). EXIF 에서는 GPS 좌표만 사용합니다. "
+                "사진은 한 번에 30장까지, 한 장당 10MB까지 올릴 수 있습니다(초과 시 400). "
                 "GPS 정보가 있는 사진이 2장 이상 필요하며(메신저 전송본은 GPS가 제거됨), "
                 "GPS 없는 사진은 자동 제외되어 순서에서 빠집니다. 직전 지점 기준 1km 미만인 "
                 "연속 사진들은 카메라 이동 없이 그 지점에 고정해 순서대로 보여주고, 1km 이상 "
@@ -182,13 +191,13 @@ def render_video_photos_ordered(
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
     title: str = _title_form(),
-    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장) — 보낸 순서가 곧 영상 순서"),
+    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장·최대 30장, 장당 10MB 이하) — 보낸 순서가 곧 영상 순서"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     job = video_service.start_render_photos_only(
         db,
-        photos=_photo_payloads(photos),
+        photos=_photo_streams(photos),
         user_idx=current_user.user_idx,
         bgm=bgm,
         theme=theme,
@@ -248,7 +257,9 @@ def render_video_from_travel(
                 "미만이면 있는 만큼만 반환합니다. 제외하고 남은 릴스가 하나도 없으면(전부 "
                 "한 번씩 추천됨) exclude를 무시하고 처음부터 다시 추천합니다. 각 릴스에는 "
                 "제목(title)과 좋아요 수(like_count)·댓글 수(comment_count, 답글 포함)가 함께 "
-                "내려갑니다. 로그인 상태로 호출하면 내가 좋아요한 릴스는 is_liked 가 true 로 "
+                "내려갑니다. 댓글 수는 **내가 볼 수 있는 개수**라 차단한 사용자의 댓글과 "
+                "그 댓글에 달린 답글은 빠집니다(댓글 목록 API 와 개수가 일치합니다). "
+                "로그인 상태로 호출하면 내가 좋아요한 릴스는 is_liked 가 true 로 "
                 "내려가고(비로그인은 항상 false), 또 "
                 "작성자의 닉네임(nickname)·프로필 사진(profile_image)이 함께 내려가며, "
                 "작성자 없는 옛 릴스는 둘 다 null 입니다. exclude 형식이 잘못되면 400을 "

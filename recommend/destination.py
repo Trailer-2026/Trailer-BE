@@ -65,7 +65,7 @@ class AreaProfile:
     centroid: tuple[float, float]
     theme_counts: dict[Theme, int]
     total: int
-    station: object | None = None      # 매핑된 도착역(서비스가 nearest_major로 채움)
+    station: object | None = None      # 매핑된 도착역(서비스가 station_dao.nearest_of로 채움)
     province: str | None = None        # 다양성 키(관리 본부 등)
     score: float = 0.0                 # rank_and_diversify가 채움(theme/age/access는 그 안 지역변수)
 

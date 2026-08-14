@@ -22,6 +22,7 @@ from databases.daos import schedule_dao, travel_dao
 from databases.models.base import Base
 from databases.models.schedule import Schedule
 from databases.models.travel import Travel
+from databases.models.travel_image import TravelImage
 from databases.models.travel_like import TravelLike
 from databases.models.user import User
 from services import travel_service
@@ -39,8 +40,10 @@ def _image(fmt: str = "JPEG", size: tuple[int, int] = (1, 1)) -> bytes:
 
 def _session():
     engine = create_engine("sqlite:///:memory:")
+    # travel_image 는 이 테스트가 직접 쓰지 않지만 travel_detail 이 사진을 함께 읽으므로 필요하다.
     Base.metadata.create_all(
-        engine, tables=[t.__table__ for t in (User, Travel, Schedule, TravelLike)]
+        engine,
+        tables=[t.__table__ for t in (User, Travel, Schedule, TravelLike, TravelImage)],
     )
     db = sessionmaker(bind=engine)()
     for idx, nick in ((1, "owner"), (2, "other")):

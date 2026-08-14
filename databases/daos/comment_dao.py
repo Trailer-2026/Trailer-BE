@@ -1,5 +1,5 @@
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session, aliased
 
 from databases.models.comment import Comment
 from databases.models.user import User
@@ -44,21 +44,56 @@ def list_by_reels(
     return q.order_by(Comment.comment_idx.asc()).all()
 
 
-def counts_by_reels(db: Session, reels_idxs: list[int]) -> dict[int, int]:
+def counts_by_reels(
+    db: Session, reels_idxs: list[int], exclude_user_idxs: list[int] | None = None
+) -> dict[int, int]:
     """릴스 여러 건의 댓글 수를 {reels_idx: count}로 일괄 조회 (피드 N+1 회피).
 
     답글(parent_idx 있는 행)도 함께 센다 — 화면의 댓글 수는 "이 릴스에 달린 말"의
     총량이라 목록에 보이는 건수와 일치해야 한다.
+
+    exclude_user_idxs(내가 차단한 사용자)를 주면 **list_by_reels 가 화면에서 지우는 것과
+    똑같이** 뺀다. 두 가지를 뺀다:
+      1) 차단한 사람이 쓴 댓글·답글
+      2) 차단한 사람의 댓글에 달린 **남의 답글** — 부모가 사라지면 그 답글도 트리에서
+         함께 숨겨진다(services/comment_service.list_comments). 그래서 작성자만 걸러선
+         모자라고, 부모 작성자까지 봐야 목록과 숫자가 같아진다.
+      3) **부모가 지워진 답글** — 같은 이유로 목록에서 숨겨진다. 부모를 지우면 답글도
+         함께 지워지지만(soft_delete), 삭제와 답글 작성이 겹치면 살아남을 수 있다.
+    안 맞추면 "댓글 3"인데 열어보면 1개만 있는 화면이 된다.
     """
     if not reels_idxs:
         return {}
-    rows = (
-        db.query(Comment.reels_idx, func.count(Comment.comment_idx))
-        .filter(Comment.reels_idx.in_(reels_idxs), Comment.deleted_at.is_(None))
-        .group_by(Comment.reels_idx)
-        .all()
+    query = db.query(Comment.reels_idx, func.count(Comment.comment_idx)).filter(
+        Comment.reels_idx.in_(reels_idxs),
+        Comment.deleted_at.is_(None),
     )
-    return {reels_idx: count for reels_idx, count in rows}
+    if exclude_user_idxs:
+        # 부모 댓글을 self-join 으로 함께 본다. 최상위 댓글은 부모가 없으므로 outer join 이고,
+        # parent_idx IS NULL 일 때는 부모 조건을 아예 묻지 않는다(NULL 비교로 통째로 빠지는 것 방지).
+        #
+        # **삭제 필터를 WHERE 가 아니라 ON 에 건다**(stamp_dao.visited_station_names 와 같은 이유).
+        # 살아 있는 부모에만 붙이므로, 부모가 지워진 답글은 매칭이 없어 아래 OR 에서 걸러진다 —
+        # 그 답글은 목록에서도 부모를 잃어 숨겨지기 때문이다. 보통은 부모를 지우면 답글도 같이
+        # 지워져(soft_delete 의 1단계 cascade) 이런 행이 안 생기지만, '부모 삭제'와 '답글 작성'이
+        # 겹치면 cascade 의 UPDATE 가 아직 커밋 안 된 답글을 못 봐서 살아남을 수 있다.
+        parent = aliased(Comment)
+        query = query.outerjoin(
+            parent,
+            and_(
+                parent.comment_idx == Comment.parent_idx,
+                parent.deleted_at.is_(None),
+            ),
+        ).filter(
+            Comment.user_idx.notin_(exclude_user_idxs),
+            or_(
+                Comment.parent_idx.is_(None),
+                parent.user_idx.notin_(exclude_user_idxs),
+            ),
+        )
+    return {
+        reels_idx: count for reels_idx, count in query.group_by(Comment.reels_idx).all()
+    }
 
 
 def update_content(db: Session, comment: Comment, content: str) -> Comment:

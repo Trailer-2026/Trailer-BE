@@ -150,9 +150,12 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
     origin_coords = (origin.latitude, origin.longitude)
 
     # Phase A: 시도 스캔 → 역 매핑 → 철도필터(제주 등 제외) → 거친 순위 상위 N
+    # 역 후보는 좌표와 무관하게 같은 목록이라 루프 밖에서 한 번만 읽는다 — 시도·부분권마다
+    # 다시 읽으면 같은 조회가 17~50번 반복된다(최근접 판정은 파이썬이 하므로 쿼리가 아니다).
+    majors = station_dao.major_candidates(db)
     coarse = []
     for s in tour_place.scan_area_profiles(criteria.themes):
-        st = station_dao.nearest_major(db, s.centroid[0], s.centroid[1])
+        st = station_dao.nearest_of(majors, s.centroid[0], s.centroid[1])
         if st is None or st.latitude is None or st.longitude is None:
             continue
         # 도착역이 지역 중심에서 너무 멀면 철도로 닿기 어려운 곳(바다 건너 제주 등) → 제외
