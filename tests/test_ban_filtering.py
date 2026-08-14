@@ -117,6 +117,19 @@ def main():
     )
     assert my_card.comment_count == 0, my_card.comment_count
 
+    # 부모만 지워지고 답글은 살아남은 행도 안 센다. 보통은 soft_delete 가 답글까지 함께
+    # 지우지만, '부모 삭제'와 '답글 작성'이 겹치면 cascade 의 UPDATE 가 아직 커밋 안 된
+    # 답글을 못 봐 이 상태가 만들어진다 — 그 답글은 목록에서 부모를 잃어 안 보인다.
+    orphan_parent = comment(theirs, other)
+    comment(theirs, other, orphan_parent)      # 답글은 살려 둔다
+    orphan_parent.deleted_at = datetime.now(timezone.utc)   # 부모만 지운다(캐스케이드 없이)
+    db.flush()
+
+    tree = comment_service.list_comments(db, me, theirs.reels_idx)
+    visible = sum(1 + len(top.replies) for top in tree)
+    counted = comment_dao.counts_by_reels(db, [theirs.reels_idx], [blocked.user_idx])
+    assert counted[theirs.reels_idx] == visible == 2, (counted, visible)
+
     # 차단 목록에 뜬다 → 상대가 탈퇴하면 빠진다
     assert ban_dao.list_blocked(db, me.user_idx) == [(blocked.user_idx, "blocked")]
     blocked.deleted_at = datetime.now(timezone.utc)
