@@ -295,10 +295,17 @@ def add_images(
         for url in uploaded:
             _drop_uploaded_image(url)  # 정리 실패는 안에서 삼킨다 — 원래 예외를 가리지 않는다
         raise
-    return TravelImagesResponse(
+    response = TravelImagesResponse(
         travel_idx=travel_idx,
         images=[TravelImageItem.model_validate(image) for image in images],
     )
+    # '풍경 사진 10장' 스탬프는 여기서만 켜진다 — 날짜가 아니라 이 행동이 조건이라 자정
+    # 배치가 못 잡는다. 커밋 뒤에, 그리고 응답을 다 만든 뒤에 부른다(재판정이 커밋하면서
+    # 위 image 객체들이 만료된다). 예외는 안에서 삼킨다.
+    from services import stamp_service
+
+    stamp_service.award_after_photos(db, user.user_idx)
+    return response
 
 
 def _snap_to_schedule(data: bytes, schedules) -> int | None:

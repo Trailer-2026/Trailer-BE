@@ -3,17 +3,19 @@
 프레임워크 없음(레포에 테스트 설정이 없다) — 깨지면 assert 로 죽는다.
 인메모리 SQLite 라 네트워크·운영 DB 없이 돈다. FCM 발송은 스텁으로 갈음한다.
 
-지키려는 규칙: 아직 안 끝난 여행은 세지 않는다, 표기가 다른 역·도시를 하나로 묶는다,
+지키려는 규칙: 아직 안 끝난 여행은 세지 않는다(단 사진·릴스는 행동이라 날짜를 안 본다),
+표기가 다른 역·도시를 하나로 묶는다,
 승차권과 추천 코스 일정을 합쳐 센다, 계절은 여행 기간이 걸친 달을 모두 본다,
 **획득 알림은 스탬프당 평생 1회**, 한 번 딴 스탬프는 조건이 어긋나도 유지된다.
 """
+import io
 import sys
 from datetime import date, time, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import sessionmaker
 
 from core.enums import NotificationType, StampType, TravelSource
@@ -25,9 +27,11 @@ from databases.models.reels import Reels
 from databases.models.schedule import Schedule
 from databases.models.ticket import Ticket
 from databases.models.travel import Travel
+from databases.models.travel_image import TravelImage
 from databases.models.user import User
 from databases.models.user_stamp import UserStamp
-from services import fcm_service, stamp_service
+from services import fcm_service, stamp_service, travel_service
+from utils import gcs
 
 # station 모델은 Postgres 전용 타입(ENUM 배열)을 써서 SQLite 가 만들지 못한다. 승차권 조인이
 # 읽는 건 station_idx·station_name·deleted_at 셋뿐이라 그만큼만 손으로 만든다.
@@ -49,7 +53,8 @@ FUTURE = TODAY + timedelta(days=30)    # 아직 안 간 여행
 def _session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[t.__table__ for t in (
-        User, Travel, Schedule, Ticket, Reels, Notification, NotificationLog, UserStamp,
+        User, Travel, Schedule, Ticket, Reels, TravelImage, Notification, NotificationLog,
+        UserStamp,
     )])
     db = sessionmaker(bind=engine)()
     db.execute(text(_STATION_DDL))
@@ -72,6 +77,21 @@ def _stub_fcm() -> list[dict]:
 
     fcm_service.send_push = fake
     return sent
+
+
+def _stub_gcs() -> list[str]:
+    """버킷 대신 URL만 돌려준다 — 업로드 경로를 네트워크 없이 태우려는 것.
+
+    형식·크기 검증도 이 스텁이 대신 삼키므로 사진 본문은 아무 바이트나 된다.
+    """
+    uploaded: list[str] = []
+
+    def fake(path_prefix, data, content_type, filename):
+        uploaded.append(path_prefix)
+        return f"https://x/{path_prefix}/{len(uploaded)}.jpg"
+
+    gcs.upload_image = fake
+    return uploaded
 
 
 def _travel(db, *, start: date, end: date, region=None, source=None) -> Travel:
@@ -102,8 +122,10 @@ def _check(label, got, want):
 
 def main():
     original_send = fcm_service.send_push
+    original_upload = gcs.upload_image
     db = _session()
     pushes = _stub_fcm()
+    _stub_gcs()
     try:
         # ── 아무것도 없으면 전부 잠금 ──────────────────────────────────────
         result = stamp_service.list_stamps(db, USER)
@@ -179,8 +201,39 @@ def main():
         stamps = _by_type(stamp_service.list_stamps(db, USER))
         _check("영상 5개", stamps[StampType.FIVE_REELS].achieved, True)
 
-        # ── 풍경 사진은 촬영 기록을 받는 곳이 없어 항상 잠금 ────────────────
-        _check("풍경 사진 잠금", stamps[StampType.SCENERY_PHOTOS].achieved, False)
+        # ── 여행 사진: 여행이 안 끝났어도 센다(사진은 여행 중에 올린다) ──────
+        #    upcoming 은 아직 안 간 여행이다 — 여기 올린 사진도 세야 한다.
+        for i in range(9):
+            db.add(TravelImage(travel_idx=upcoming.travel_idx, url=f"https://x/p{i}.jpg"))
+        # 지운 사진은 앱과 같은 방식으로 만든다 — travel_image_dao.delete 가 DB 시각을 찍는다.
+        db.add(TravelImage(travel_idx=upcoming.travel_idx, url="https://x/gone.jpg",
+                           deleted_at=func.now()))
+        db.commit()
+        stamps = _by_type(stamp_service.list_stamps(db, USER))
+        _check("지운 사진은 빼고 9장", stamps[StampType.SCENERY_PHOTOS].progress, 9)
+        _check("9장이면 아직 잠금", stamps[StampType.SCENERY_PHOTOS].achieved, False)
+
+        # ── 열 장째는 업로드 API 로 올린다 — 훅이 그 자리에서 찍어야 한다 ────
+        #    자정 배치는 '그 사이 여행이 끝난 사용자'만 훑어 이 칸을 못 잡는다. 훅이
+        #    없으면 탭을 열기 전까지 알림이 안 나가므로, **list_stamps 를 부르기 전에**
+        #    검사한다(탭 조회가 대신 찍어 주면 훅이 죽은 걸 놓친다).
+        #    일정이 없는 여행에 올린다 — 자동 매핑(_snap_to_schedule)이 EXIF 파서를
+        #    부르며 렌더러를 통째로 import 하는 걸 피하려는 것. 사진 수는 여행을
+        #    가리지 않고 사용자 단위로 세므로 다른 여행이어도 10장째가 맞다.
+        photo_only = _travel(db, start=FUTURE, end=FUTURE)
+        db.commit()
+        before = len(pushes)
+        travel_service.add_images(
+            db, db.get(User, USER), photo_only.travel_idx, None,
+            [(io.BytesIO(b"photo-bytes"), "image/jpeg", "p10.jpg")],
+        )
+        _check("업로드가 그 자리에서 스탬프를 찍는다",
+               db.query(UserStamp).filter(
+                   UserStamp.type == StampType.SCENERY_PHOTOS.value).count(), 1)
+        _check("업로드가 획득 푸시를 보낸다", len(pushes), before + 1)
+        stamps = _by_type(stamp_service.list_stamps(db, USER))
+        _check("사진 10장", stamps[StampType.SCENERY_PHOTOS].achieved, True)
+        _check("조회가 푸시를 또 보내지 않는다", len(pushes), before + 1)
 
         # ── progress 는 goal 을 넘지 않는다 ───────────────────────────────
         for item in stamp_service.list_stamps(db, USER).stamps:
@@ -268,11 +321,14 @@ def main():
         ticket_only = _by_type(stamp_service.list_stamps(db, OTHER))
         _check("첫 기차여행이 켜진다", ticket_only[StampType.FIRST_TRAIN_TRIP].achieved, True)
         _check("역 2곳도 센다", ticket_only[StampType.TWENTY_STATIONS].progress, 2)
+        # 사진의 주인은 travel 을 조인해 가린다 — 남의 사진이 새면 여기서 잡힌다.
+        _check("남의 여행 사진은 안 센다", ticket_only[StampType.SCENERY_PHOTOS].progress, 0)
 
         print("OK: 마이페이지 스탬프 자체 점검 통과")
     finally:
         db.close()
         fcm_service.send_push = original_send
+        gcs.upload_image = original_upload
 
 
 if __name__ == "__main__":

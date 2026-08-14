@@ -4,11 +4,15 @@
 ('10곳 중 3곳')는 원본을 세야 나오고, '획득 순간'은 기록해 두지 않으면 붙잡을 수 없다.
 한 번 딴 스탬프는 조건이 나중에 어긋나도(여행을 지우는 등) 유지된다.
 
-재판정이 도는 곳은 셋이다. 어느 쪽이 먼저 집어도 user_stamp의 유니크 제약이 '한 번만'을
+재판정이 도는 곳은 넷이다. 어느 쪽이 먼저 집어도 user_stamp의 유니크 제약이 '한 번만'을
 지키므로 알림은 정확히 한 번 나간다.
   1) 스탬프 탭 조회(list_stamps) — 배치가 놓쳤어도 여기서 메워진다
   2) 자정 배치(award_for_finished_travels) — 앱을 안 열어도 알림이 가야 하니까
-  3) 릴스 렌더 완료(video_service) — '여행 영상 5개'만은 날짜가 아니라 행동으로 켜진다
+  3) 릴스 렌더 완료(video_service) — '여행 영상 5개'는 날짜가 아니라 행동으로 켜진다
+  4) 여행 사진 업로드(travel_service.add_images) — '풍경 사진 10장'도 마찬가지다
+
+3·4가 따로 필요한 이유는 자정 배치가 '그 사이 여행이 끝난 사용자'만 훑기 때문이다. 지난달
+여행에 오늘 사진을 올린 사용자는 배치에 안 잡혀, 훅이 없으면 탭을 열기 전까지 알림이 없다.
 
 조건 판정의 기준 시각은 KST 오늘이다. '다녀온 여행'은 종료일이 오늘보다 이전인 여행을
 말한다 — travel.status 컬럼은 항상 PLANNED이라 쓰지 않는다(databases/daos/stamp_dao 참조).
@@ -28,7 +32,10 @@ from utils.timezone import now_kst
 logger = logging.getLogger(__name__)
 
 # 아이콘은 GCS에 올려 두고 URL을 서버가 소유한다(문구와 마찬가지로 앱 배포 없이 바꾸려고).
-_ICON_BASE = "https://storage.googleapis.com/trailer-bucket/stamp"
+# **아이콘을 갈아끼울 땐 덮어쓰지 말고 경로를 올린다**(v2 → v3 …). 같은 URL에 덮으면
+# GCS·앱의 이미지 캐시가 한동안 옛 그림을 계속 내주고, 되돌릴 옛 파일도 남지 않는다.
+# 여기 한 줄이 곧 롤백 스위치다 — 옛 경로의 파일은 지우지 않고 그대로 둔다.
+_ICON_BASE = "https://storage.googleapis.com/trailer-bucket/stamp/v2"
 
 # 스탬프 정의 — (종류, 라벨, 조건 안내, 아이콘 슬러그, 목표치).
 # **이 순서가 곧 화면 그리드 순서**라 앱이 정렬하지 않는다.
@@ -45,8 +52,13 @@ _STAMPS: tuple[tuple[StampType, str, str, str, int], ...] = (
      "서로 다른 기차역 스무 곳을 거쳐 가면 찍혀요", "twenty_stations", 20),
     (StampType.MUGUNGHWA, "무궁화호 1회 이용",
      "무궁화호를 한 번 타고 다녀오면 찍혀요", "mugunghwa", 1),
+    # 문구가 '창밖 풍경'이 아니라 '여행 사진'인 이유: 세는 대상이 travel_image(여행에 올린
+    # 사진 전부)라 음식·숙소 사진도 함께 잡힌다. 창밖만 골라내려면 기차 일정에 매핑된
+    # 사진만 세야 하는데, 자동 매핑(_snap_to_schedule)이 기차 일정의 좌표를 출발역으로
+    # 잡는 탓에 달리는 중에 찍은 사진은 대개 근처 방문지로 스냅된다 — 조건을 제대로
+    # 만족해도 안 찍히는 칸이 된다.
     (StampType.SCENERY_PHOTOS, "풍경 사진 10장 촬영",
-     "창밖 풍경 사진을 열 장 찍으면 찍혀요", "scenery_photos", 10),
+     "여행 사진을 열 장 올리면 찍혀요", "scenery_photos", 10),
     (StampType.FIVE_REELS, "여행 영상 5개 제작",
      "여행 영상을 다섯 개 만들면 찍혀요", "five_reels", 5),
     (StampType.FOUR_SEASONS, "봄·여름·가을·겨울 여행 완료",
@@ -114,9 +126,8 @@ def _progress(db: Session, user_idx: int, today: date) -> dict[StampType, int]:
         StampType.TEN_ATTRACTIONS: stamp_dao.count_visited_attractions(db, user_idx, today),
         StampType.TWENTY_STATIONS: len(stations),
         StampType.MUGUNGHWA: stamp_dao.count_mugunghwa_rides(db, user_idx, today),
-        # 촬영 기록을 남기는 곳이 아직 없다 — 사진은 앱에서 찍고 서버로는 오지 않는다.
-        # 저장 경로가 생기면 여기만 실제 카운트로 바꾸면 된다(칸·아이콘은 이미 있다).
-        StampType.SCENERY_PHOTOS: 0,
+        # 여행에 올린 사진(travel_image) 전부를 센다 — 릴스와 같이 today를 안 넘긴다.
+        StampType.SCENERY_PHOTOS: stamp_dao.count_travel_photos(db, user_idx),
         StampType.FIVE_REELS: stamp_dao.count_my_reels(db, user_idx),
         StampType.FOUR_SEASONS: len(_seasons(stamp_dao.finished_travel_periods(db, user_idx, today))),
     }
@@ -250,6 +261,23 @@ def award_for_finished_travels(lookback_days: int = 1) -> int:
         return total
     finally:
         db.close()
+
+
+def award_after_photos(db: Session, user_idx: int) -> None:
+    """여행 사진을 올린 직후 재판정 — '풍경 사진 10장'은 날짜가 아니라 행동으로 켜진다.
+
+    **사진을 커밋한 뒤에, 그리고 응답을 다 만든 뒤에 부른다.** evaluate가 커밋하면서 방금
+    만든 travel_image 객체들이 만료돼(expire_on_commit) 다시 읽는 쿼리가 붙기 때문이다.
+
+    렌더 스레드에서 부르는 award_after_reels와 달리 요청 세션을 그대로 쓴다 — 이미 커밋이
+    끝난 지점이라 남의 트랜잭션을 훔쳐 확정할 위험이 없다. 어떤 예외도 밖으로 내보내지
+    않는다(push_service.notify와 같은 이유) — 사진 업로드가 스탬프 때문에 실패하면 안 된다.
+    """
+    try:
+        evaluate(db, user_idx)
+    except Exception as e:
+        logger.warning("사진 업로드 후 스탬프 재판정 실패 user=%s: %s", user_idx, e)
+        db.rollback()
 
 
 def award_after_reels(user_idx: int) -> None:

@@ -18,6 +18,7 @@ from databases.models.schedule import Schedule
 from databases.models.station import Station
 from databases.models.ticket import Ticket
 from databases.models.travel import Travel
+from databases.models.travel_image import TravelImage
 
 
 def _finished_travels(db: Session, user_idx: int, today: date):
@@ -153,6 +154,29 @@ def count_my_reels(db: Session, user_idx: int) -> int:
         Reels.deleted_at.is_(None),
         Reels.url != "",
     ).count()
+
+
+def count_travel_photos(db: Session, user_idx: int) -> int:
+    """내가 여행에 올린 사진 수(POST /api/travels/{idx}/images 로 들어온 것).
+
+    **'다녀온 여행' 조건을 걸지 않는다** — 사진은 여행 중에 올리는 것이라, 끝난 여행만 세면
+    방금 열 장을 올린 사용자가 0/10으로 보인다. 릴스(count_my_reels)와 같이 날짜가 아니라
+    행동으로 켜지는 칸이다.
+
+    travel_image에는 user_idx가 없다(사진의 소유가 여행이다) — travel을 조인해 주인을 가린다.
+    지운 사진은 빼고 센다. 진행도가 줄 수는 있지만 이미 딴 칸은 list_stamps가 목표치로
+    채워 보여주므로 화면이 이상해지지는 않는다.
+    """
+    return (
+        db.query(TravelImage)
+        .join(Travel, TravelImage.travel_idx == Travel.travel_idx)
+        .filter(
+            Travel.user_idx == user_idx,
+            Travel.deleted_at.is_(None),
+            TravelImage.deleted_at.is_(None),
+        )
+        .count()
+    )
 
 
 def user_idxs_with_trip_ending_between(db: Session, start: date, end: date) -> list[int]:
