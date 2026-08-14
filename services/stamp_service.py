@@ -4,11 +4,15 @@
 ('10곳 중 3곳')는 원본을 세야 나오고, '획득 순간'은 기록해 두지 않으면 붙잡을 수 없다.
 한 번 딴 스탬프는 조건이 나중에 어긋나도(여행을 지우는 등) 유지된다.
 
-재판정이 도는 곳은 셋이다. 어느 쪽이 먼저 집어도 user_stamp의 유니크 제약이 '한 번만'을
+재판정이 도는 곳은 넷이다. 어느 쪽이 먼저 집어도 user_stamp의 유니크 제약이 '한 번만'을
 지키므로 알림은 정확히 한 번 나간다.
   1) 스탬프 탭 조회(list_stamps) — 배치가 놓쳤어도 여기서 메워진다
   2) 자정 배치(award_for_finished_travels) — 앱을 안 열어도 알림이 가야 하니까
-  3) 릴스 렌더 완료(video_service) — '여행 영상 5개'만은 날짜가 아니라 행동으로 켜진다
+  3) 릴스 렌더 완료(video_service) — '여행 영상 5개'는 날짜가 아니라 행동으로 켜진다
+  4) 여행 사진 업로드(travel_service.add_images) — '풍경 사진 10장'도 마찬가지다
+
+3·4가 따로 필요한 이유는 자정 배치가 '그 사이 여행이 끝난 사용자'만 훑기 때문이다. 지난달
+여행에 오늘 사진을 올린 사용자는 배치에 안 잡혀, 훅이 없으면 탭을 열기 전까지 알림이 없다.
 
 조건 판정의 기준 시각은 KST 오늘이다. '다녀온 여행'은 종료일이 오늘보다 이전인 여행을
 말한다 — travel.status 컬럼은 항상 PLANNED이라 쓰지 않는다(databases/daos/stamp_dao 참조).
@@ -254,6 +258,23 @@ def award_for_finished_travels(lookback_days: int = 1) -> int:
         return total
     finally:
         db.close()
+
+
+def award_after_photos(db: Session, user_idx: int) -> None:
+    """여행 사진을 올린 직후 재판정 — '풍경 사진 10장'은 날짜가 아니라 행동으로 켜진다.
+
+    **사진을 커밋한 뒤에, 그리고 응답을 다 만든 뒤에 부른다.** evaluate가 커밋하면서 방금
+    만든 travel_image 객체들이 만료돼(expire_on_commit) 다시 읽는 쿼리가 붙기 때문이다.
+
+    렌더 스레드에서 부르는 award_after_reels와 달리 요청 세션을 그대로 쓴다 — 이미 커밋이
+    끝난 지점이라 남의 트랜잭션을 훔쳐 확정할 위험이 없다. 어떤 예외도 밖으로 내보내지
+    않는다(push_service.notify와 같은 이유) — 사진 업로드가 스탬프 때문에 실패하면 안 된다.
+    """
+    try:
+        evaluate(db, user_idx)
+    except Exception as e:
+        logger.warning("사진 업로드 후 스탬프 재판정 실패 user=%s: %s", user_idx, e)
+        db.rollback()
 
 
 def award_after_reels(user_idx: int) -> None:
