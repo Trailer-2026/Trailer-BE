@@ -32,7 +32,10 @@ from utils.timezone import now_kst
 logger = logging.getLogger(__name__)
 
 # 아이콘은 GCS에 올려 두고 URL을 서버가 소유한다(문구와 마찬가지로 앱 배포 없이 바꾸려고).
-_ICON_BASE = "https://storage.googleapis.com/trailer-bucket/stamp"
+# **아이콘을 갈아끼울 땐 덮어쓰지 말고 경로를 올린다**(v2 → v3 …). 같은 URL에 덮으면
+# GCS·앱의 이미지 캐시가 한동안 옛 그림을 계속 내주고, 되돌릴 옛 파일도 남지 않는다.
+# 여기 한 줄이 곧 롤백 스위치다 — 옛 경로의 파일은 지우지 않고 그대로 둔다.
+_ICON_BASE = "https://storage.googleapis.com/trailer-bucket/stamp/v2"
 
 # 스탬프 정의 — (종류, 라벨, 조건 안내, 아이콘 슬러그, 목표치).
 # **이 순서가 곧 화면 그리드 순서**라 앱이 정렬하지 않는다.
