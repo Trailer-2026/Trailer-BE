@@ -10,6 +10,7 @@ GPS 없는 사진은 디스크에도 안 남김, 실패하면 job 디렉터리�
 """
 import io
 import json
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -121,31 +122,34 @@ def main() -> None:
         _jpeg(),  # GPS 없음 → 제외
         _jpeg(*seoul, taken="2026:08:01 09:00:00"),
     )
-    before = _job_dirs()
-    captured = _run(photos)
-    data = captured["data"]
-    lat0 = data["trackPoints"][0]["latitude"]
-    assert len(data["trackPoints"]) == 2, data["trackPoints"]
-    assert abs(lat0 - seoul[0]) < 0.01, f"촬영 시각 순(서울 먼저)이어야: {lat0}"
-    saved = sorted(p.name for p in captured["job_dir"].iterdir())
-    assert saved == ["photo_0.jpg", "photo_2.jpg", "travel_data.json"], saved
-    assert all(s.read_sizes for _, s in photos), "스트림을 안 읽었다"
-
-    # 6) 순서 지정 모드는 촬영 시각을 무시하고 업로드 순서(부산 먼저)를 그대로 쓴다.
-    ordered = _run(
-        _photos(
-            _jpeg(*busan, taken="2026:08:01 18:00:00"),
-            _jpeg(*seoul, taken="2026:08:01 09:00:00"),
-        ),
-        sort_by_time=False,
-    )
-    lat0 = ordered["data"]["trackPoints"][0]["latitude"]
-    assert abs(lat0 - busan[0]) < 0.01, f"업로드 순서(부산 먼저)여야: {lat0}"
-
     # 성공 경로의 job 디렉터리는 렌더 스레드 몫이라 여기서 치운다(스텁이라 스레드가 없다).
-    import shutil
-    for path in _job_dirs() - before:
-        shutil.rmtree(path, ignore_errors=True)
+    # 만든 디렉터리만 지운다 — UPLOADS_DIR 은 앱과 공유라 diff 로 쓸면 남의 것도 날아간다.
+    jobs = []
+    try:
+        captured = _run(photos)
+        jobs.append(captured["job_dir"])
+        data = captured["data"]
+        lat0 = data["trackPoints"][0]["latitude"]
+        assert len(data["trackPoints"]) == 2, data["trackPoints"]
+        assert abs(lat0 - seoul[0]) < 0.01, f"촬영 시각 순(서울 먼저)이어야: {lat0}"
+        saved = sorted(p.name for p in captured["job_dir"].iterdir())
+        assert saved == ["photo_0.jpg", "photo_2.jpg", "travel_data.json"], saved
+        assert all(s.read_sizes for _, s in photos), "스트림을 안 읽었다"
+
+        # 6) 순서 지정 모드는 촬영 시각을 무시하고 업로드 순서(부산 먼저)를 그대로 쓴다.
+        ordered = _run(
+            _photos(
+                _jpeg(*busan, taken="2026:08:01 18:00:00"),
+                _jpeg(*seoul, taken="2026:08:01 09:00:00"),
+            ),
+            sort_by_time=False,
+        )
+        jobs.append(ordered["job_dir"])
+        lat0 = ordered["data"]["trackPoints"][0]["latitude"]
+        assert abs(lat0 - busan[0]) < 0.01, f"업로드 순서(부산 먼저)여야: {lat0}"
+    finally:
+        for path in jobs:
+            shutil.rmtree(path, ignore_errors=True)
     print("OK: 사진 렌더 입력 상한 자체 점검 통과")
 
 
