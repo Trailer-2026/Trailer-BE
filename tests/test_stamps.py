@@ -10,12 +10,12 @@
 """
 import io
 import sys
-from datetime import date, datetime, time, timedelta
+from datetime import date, time, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import sessionmaker
 
 from core.enums import NotificationType, StampType, TravelSource
@@ -205,8 +205,9 @@ def main():
         #    upcoming 은 아직 안 간 여행이다 — 여기 올린 사진도 세야 한다.
         for i in range(9):
             db.add(TravelImage(travel_idx=upcoming.travel_idx, url=f"https://x/p{i}.jpg"))
+        # 지운 사진은 앱과 같은 방식으로 만든다 — travel_image_dao.delete 가 DB 시각을 찍는다.
         db.add(TravelImage(travel_idx=upcoming.travel_idx, url="https://x/gone.jpg",
-                           deleted_at=datetime.now()))
+                           deleted_at=func.now()))
         db.commit()
         stamps = _by_type(stamp_service.list_stamps(db, USER))
         _check("지운 사진은 빼고 9장", stamps[StampType.SCENERY_PHOTOS].progress, 9)
