@@ -27,7 +27,11 @@ class ReelsRecommendResponse(BaseModel):
                     "그 땐 url 영상의 첫 프레임으로 대체하면 됨",
     )
     like_count: int = Field(0, description="릴스 좋아요 수")
-    comment_count: int = Field(0, description="릴스 댓글 수 (답글 포함)")
+    comment_count: int = Field(
+        0,
+        description="릴스 댓글 수 (답글 포함). 내가 차단한 사용자의 댓글과 그 댓글에 달린 "
+                    "답글은 빠지므로, 댓글 목록에 실제로 보이는 개수와 일치한다",
+    )
     is_liked: bool = Field(False, description="내가 좋아요한 릴스인지 (비로그인은 항상 false)")
     user_idx: int | None = Field(
         None,
@@ -60,7 +64,11 @@ class MyReelsItem(BaseModel):
                     "그 땐 url 영상의 첫 프레임으로 대체하면 됨",
     )
     like_count: int = Field(0, description="릴스 좋아요 수")
-    comment_count: int = Field(0, description="릴스 댓글 수 (답글 포함)")
+    comment_count: int = Field(
+        0,
+        description="릴스 댓글 수 (답글 포함). 내가 차단한 사용자의 댓글과 그 댓글에 달린 "
+                    "답글은 빠지므로, 댓글 목록에 실제로 보이는 개수와 일치한다",
+    )
     is_liked: bool = Field(
         False,
         description="내가 좋아요한 릴스인지 — 좋아요한 릴스 목록에서는 항상 true입니다. "

@@ -33,6 +33,7 @@ from databases.models.base import Base
 
 # FK 대상까지 같은 MetaData에 올라와 있어야 DDL이 컴파일된다(NoReferencedTableError 방지).
 # create_all이 이 등록 정보로 의존 순서를 정하므로 import 순서 자체는 의미가 없다.
+from databases.models.ban import Ban
 from databases.models.notification import Notification
 from databases.models.notification_log import NotificationLog
 from databases.models.schedule import Schedule  # noqa: F401  notification_log의 FK 대상
@@ -40,12 +41,15 @@ from databases.models.station import Station  # noqa: F401  ticket의 FK 대상
 from databases.models.ticket import Ticket
 from databases.models.travel import Travel  # noqa: F401  notification_log의 FK 대상
 from databases.models.travel_image import TravelImage
-from databases.models.user import User  # noqa: F401  네 테이블 모두의 FK 대상
+from databases.models.travel_like import TravelLike
+from databases.models.user import User  # noqa: F401  모든 테이블의 FK 대상
 from databases.models.user_stamp import UserStamp
 
 # 없으면 만들 테이블. **순서는 신경 쓰지 않는다** — create_all이 FK 의존 그래프를
 # 위상정렬해 부모부터 만든다(ticket·travel·schedule → notification_log).
-_TABLES = (Ticket, Notification, NotificationLog, UserStamp, TravelImage)
+# 모델을 새로 추가했으면 반드시 여기 넣어라 — 운영 DB엔 손으로 만들어 뒀더라도, 빠져 있으면
+# 새 환경(로컬·재구축)에서 그 기능이 통째로 500이 된다(ban·travel_like가 그랬다).
+_TABLES = (Ticket, Notification, NotificationLog, UserStamp, TravelImage, Ban, TravelLike)
 
 # 이미 있는 테이블에 덧붙일 컬럼 — (테이블, 컬럼명, 타입·제약).
 # 모델 정의와 같은 내용이어야 한다. 새 컬럼을 모델에 넣었다면 여기에도 넣어라.
