@@ -1,7 +1,11 @@
 """차단 필터링 자체 점검 — `python tests/test_ban_filtering.py`.
 
-인메모리 SQLite에 user/reels/ban 3개 테이블만 세우고 DAO 두 개를 직접 돌린다.
+인메모리 SQLite에 user/reels/ban/like/comment 테이블을 세우고 DAO·서비스를 직접 돌린다.
 프레임워크 없음(레포에 테스트 설정이 없다) — 깨지면 assert 로 죽는다.
+
+지키려는 규칙: 차단한 사람의 릴스는 피드에서 빠지고 익명 릴스는 살아남는다,
+내가 올린 릴스는 추천에서 빠진다, 그리고 **카드의 댓글 수 = 댓글 목록에 실제로
+보이는 개수**(차단한 사람의 댓글과 그 댓글에 달린 답글까지 양쪽에서 똑같이 빠진다).
 """
 import sys
 from datetime import datetime, timezone
@@ -12,14 +16,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-from databases.daos import ban_dao, reels_dao
+from databases.daos import ban_dao, comment_dao, reels_dao
 from databases.models.ban import Ban
 from databases.models.base import Base
 from databases.models.comment import Comment
 from databases.models.like import Like
 from databases.models.reels import Reels
 from databases.models.user import User
-from services import video_service
+from services import comment_service, video_service
 
 
 def _session():
@@ -75,6 +79,56 @@ def main():
     assert urls == {"https://x/other.mp4", "https://x/anon.mp4"}, urls
     # 비로그인은 '내 것'이 없으니 전부 보인다
     assert len(video_service.recommend_reels(db, "", None)) == 4
+
+    # ── 카드의 댓글 수 = 내가 목록에서 실제로 보는 댓글 수 ────────────────────────
+    theirs = db.query(Reels).filter(Reels.url == "https://x/other.mp4").one()
+    mine = db.query(Reels).filter(Reels.url == "https://x/mine.mp4").one()
+
+    def comment(reels, author, parent=None):
+        c = Comment(reels_idx=reels.reels_idx, user_idx=author.user_idx,
+                    content="c", parent_idx=parent.comment_idx if parent else None)
+        db.add(c)
+        db.flush()
+        return c
+
+    hidden_top = comment(theirs, blocked)          # 차단한 사람의 댓글 → 안 보임
+    comment(theirs, other, hidden_top)             # 그 댓글의 답글 → 부모가 없어 같이 숨는다
+    visible_top = comment(theirs, other)           # 보인다
+    comment(theirs, blocked, visible_top)          # 차단한 사람의 답글 → 안 보임
+    comment(theirs, me, visible_top)               # 내 답글 → 보인다(자기 자신은 차단이 아니다)
+    comment(mine, blocked)                         # 내 릴스에 달린 차단한 사람의 댓글
+
+    # DAO: 필터 없으면 전량, 차단 목록을 주면 부모까지 따져 뺀다
+    assert comment_dao.counts_by_reels(db, [theirs.reels_idx]) == {theirs.reels_idx: 5}
+    assert comment_dao.counts_by_reels(db, [theirs.reels_idx], [blocked.user_idx]) == {
+        theirs.reels_idx: 2
+    }
+
+    # 불변식: 카드 숫자 == 댓글 목록에 실제로 담긴 개수(답글 포함)
+    tree = comment_service.list_comments(db, me, theirs.reels_idx)
+    visible = sum(1 + len(top.replies) for top in tree)
+    card = next(r for r in video_service.recommend_reels(db, "", me) if r.reels_idx == theirs.reels_idx)
+    assert card.comment_count == visible == 2, (card.comment_count, visible)
+
+    # 마이페이지("내가 올린 릴스")도 같은 규칙 — 내 릴스에 달린 차단한 사람의 댓글은 안 센다
+    my_card = next(
+        i for i in video_service.list_my_reels(db, me, 10, None).items
+        if i.reels_idx == mine.reels_idx
+    )
+    assert my_card.comment_count == 0, my_card.comment_count
+
+    # 부모만 지워지고 답글은 살아남은 행도 안 센다. 보통은 soft_delete 가 답글까지 함께
+    # 지우지만, '부모 삭제'와 '답글 작성'이 겹치면 cascade 의 UPDATE 가 아직 커밋 안 된
+    # 답글을 못 봐 이 상태가 만들어진다 — 그 답글은 목록에서 부모를 잃어 안 보인다.
+    orphan_parent = comment(theirs, other)
+    comment(theirs, other, orphan_parent)      # 답글은 살려 둔다
+    orphan_parent.deleted_at = datetime.now(timezone.utc)   # 부모만 지운다(캐스케이드 없이)
+    db.flush()
+
+    tree = comment_service.list_comments(db, me, theirs.reels_idx)
+    visible = sum(1 + len(top.replies) for top in tree)
+    counted = comment_dao.counts_by_reels(db, [theirs.reels_idx], [blocked.user_idx])
+    assert counted[theirs.reels_idx] == visible == 2, (counted, visible)
 
     # 차단 목록에 뜬다 → 상대가 탈퇴하면 빠진다
     assert ban_dao.list_blocked(db, me.user_idx) == [(blocked.user_idx, "blocked")]

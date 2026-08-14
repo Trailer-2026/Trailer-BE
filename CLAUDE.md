@@ -127,6 +127,7 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 - **응답은 홈 피드 카드와 같은 필드 구성**(`MyReelsItem` ≈ `ReelsRecommendResponse`)이라 같은 카드 컴포넌트로 그린다. 좋아요 목록의 `is_liked`는 항상 true다(목록에서 바로 해제하라고 같이 내려준다).
 - **제외 규칙**: 소프트 삭제된 릴스, `url`이 빈 문자열인 렌더 미완료 자리표(피드와 동일), 그리고 좋아요 목록에선 **내가 차단한 사용자의 릴스**(`recommend_reels`와 같은 규칙 — 차단 전에 누른 하트가 남아 그 사람 릴스가 계속 보이면 안 된다).
 - `Like.deleted_at`은 안 거른다 — 좋아요 취소가 행 삭제라 소프트 삭제된 좋아요가 없고, `like_dao`의 다른 읽기도 안 건다. 여기서만 거르면 목록엔 없는데 `like_count`엔 잡히는 릴스가 생긴다.
+- **`comment_count`는 '내가 볼 수 있는 수'다** — 차단한 사용자의 댓글뿐 아니라 **그 댓글에 달린 남의 답글까지** 뺀다. 댓글 목록은 부모가 차단으로 사라지면 답글도 함께 숨기므로(`comment_service.list_comments`), 작성자만 걸러선 숫자가 목록보다 커진다("댓글 3인데 열면 1개"). 그래서 `comment_dao.counts_by_reels`가 부모 댓글을 self-join해 둘 다 뺀다 — 홈 피드(`recommend_reels`)와 마이페이지 두 목록이 같은 규칙이다. **단 나 자신은 빼지 않는다**: 차단 목록과 달리 '나'는 릴스 노출에서만 제외하는 값이라(`hidden_users`), 그대로 넘기면 내가 쓴 댓글이 안 세어진다.
 
 ## 열차 정차역 자동 갱신 (`train_stop`)
 
