@@ -45,8 +45,13 @@ _STAMPS: tuple[tuple[StampType, str, str, str, int], ...] = (
      "서로 다른 기차역 스무 곳을 거쳐 가면 찍혀요", "twenty_stations", 20),
     (StampType.MUGUNGHWA, "무궁화호 1회 이용",
      "무궁화호를 한 번 타고 다녀오면 찍혀요", "mugunghwa", 1),
+    # 문구가 '창밖 풍경'이 아니라 '여행 사진'인 이유: 세는 대상이 travel_image(여행에 올린
+    # 사진 전부)라 음식·숙소 사진도 함께 잡힌다. 창밖만 골라내려면 기차 일정에 매핑된
+    # 사진만 세야 하는데, 자동 매핑(_snap_to_schedule)이 기차 일정의 좌표를 출발역으로
+    # 잡는 탓에 달리는 중에 찍은 사진은 대개 근처 방문지로 스냅된다 — 조건을 제대로
+    # 만족해도 안 찍히는 칸이 된다.
     (StampType.SCENERY_PHOTOS, "풍경 사진 10장 촬영",
-     "창밖 풍경 사진을 열 장 찍으면 찍혀요", "scenery_photos", 10),
+     "여행 사진을 열 장 올리면 찍혀요", "scenery_photos", 10),
     (StampType.FIVE_REELS, "여행 영상 5개 제작",
      "여행 영상을 다섯 개 만들면 찍혀요", "five_reels", 5),
     (StampType.FOUR_SEASONS, "봄·여름·가을·겨울 여행 완료",
@@ -114,9 +119,8 @@ def _progress(db: Session, user_idx: int, today: date) -> dict[StampType, int]:
         StampType.TEN_ATTRACTIONS: stamp_dao.count_visited_attractions(db, user_idx, today),
         StampType.TWENTY_STATIONS: len(stations),
         StampType.MUGUNGHWA: stamp_dao.count_mugunghwa_rides(db, user_idx, today),
-        # 촬영 기록을 남기는 곳이 아직 없다 — 사진은 앱에서 찍고 서버로는 오지 않는다.
-        # 저장 경로가 생기면 여기만 실제 카운트로 바꾸면 된다(칸·아이콘은 이미 있다).
-        StampType.SCENERY_PHOTOS: 0,
+        # 여행에 올린 사진(travel_image) 전부를 센다 — 릴스와 같이 today를 안 넘긴다.
+        StampType.SCENERY_PHOTOS: stamp_dao.count_travel_photos(db, user_idx),
         StampType.FIVE_REELS: stamp_dao.count_my_reels(db, user_idx),
         StampType.FOUR_SEASONS: len(_seasons(stamp_dao.finished_travel_periods(db, user_idx, today))),
     }

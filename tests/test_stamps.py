@@ -3,12 +3,13 @@
 프레임워크 없음(레포에 테스트 설정이 없다) — 깨지면 assert 로 죽는다.
 인메모리 SQLite 라 네트워크·운영 DB 없이 돈다. FCM 발송은 스텁으로 갈음한다.
 
-지키려는 규칙: 아직 안 끝난 여행은 세지 않는다, 표기가 다른 역·도시를 하나로 묶는다,
+지키려는 규칙: 아직 안 끝난 여행은 세지 않는다(단 사진·릴스는 행동이라 날짜를 안 본다),
+표기가 다른 역·도시를 하나로 묶는다,
 승차권과 추천 코스 일정을 합쳐 센다, 계절은 여행 기간이 걸친 달을 모두 본다,
 **획득 알림은 스탬프당 평생 1회**, 한 번 딴 스탬프는 조건이 어긋나도 유지된다.
 """
 import sys
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -25,6 +26,7 @@ from databases.models.reels import Reels
 from databases.models.schedule import Schedule
 from databases.models.ticket import Ticket
 from databases.models.travel import Travel
+from databases.models.travel_image import TravelImage
 from databases.models.user import User
 from databases.models.user_stamp import UserStamp
 from services import fcm_service, stamp_service
@@ -49,7 +51,8 @@ FUTURE = TODAY + timedelta(days=30)    # 아직 안 간 여행
 def _session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[t.__table__ for t in (
-        User, Travel, Schedule, Ticket, Reels, Notification, NotificationLog, UserStamp,
+        User, Travel, Schedule, Ticket, Reels, TravelImage, Notification, NotificationLog,
+        UserStamp,
     )])
     db = sessionmaker(bind=engine)()
     db.execute(text(_STATION_DDL))
@@ -179,8 +182,21 @@ def main():
         stamps = _by_type(stamp_service.list_stamps(db, USER))
         _check("영상 5개", stamps[StampType.FIVE_REELS].achieved, True)
 
-        # ── 풍경 사진은 촬영 기록을 받는 곳이 없어 항상 잠금 ────────────────
-        _check("풍경 사진 잠금", stamps[StampType.SCENERY_PHOTOS].achieved, False)
+        # ── 여행 사진: 여행이 안 끝났어도 센다(사진은 여행 중에 올린다) ──────
+        #    upcoming 은 아직 안 간 여행이다 — 여기 올린 사진도 세야 한다.
+        for i in range(9):
+            db.add(TravelImage(travel_idx=upcoming.travel_idx, url=f"https://x/p{i}.jpg"))
+        db.add(TravelImage(travel_idx=upcoming.travel_idx, url="https://x/gone.jpg",
+                           deleted_at=datetime.now()))
+        db.commit()
+        stamps = _by_type(stamp_service.list_stamps(db, USER))
+        _check("지운 사진은 빼고 9장", stamps[StampType.SCENERY_PHOTOS].progress, 9)
+        _check("9장이면 아직 잠금", stamps[StampType.SCENERY_PHOTOS].achieved, False)
+
+        db.add(TravelImage(travel_idx=upcoming.travel_idx, url="https://x/p9.jpg"))
+        db.commit()
+        stamps = _by_type(stamp_service.list_stamps(db, USER))
+        _check("사진 10장", stamps[StampType.SCENERY_PHOTOS].achieved, True)
 
         # ── progress 는 goal 을 넘지 않는다 ───────────────────────────────
         for item in stamp_service.list_stamps(db, USER).stamps:
@@ -268,6 +284,8 @@ def main():
         ticket_only = _by_type(stamp_service.list_stamps(db, OTHER))
         _check("첫 기차여행이 켜진다", ticket_only[StampType.FIRST_TRAIN_TRIP].achieved, True)
         _check("역 2곳도 센다", ticket_only[StampType.TWENTY_STATIONS].progress, 2)
+        # 사진의 주인은 travel 을 조인해 가린다 — 남의 사진이 새면 여기서 잡힌다.
+        _check("남의 여행 사진은 안 센다", ticket_only[StampType.SCENERY_PHOTOS].progress, 0)
 
         print("OK: 마이페이지 스탬프 자체 점검 통과")
     finally:
