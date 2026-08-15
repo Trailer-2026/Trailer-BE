@@ -23,7 +23,7 @@ from databases.models.comment import Comment
 from databases.models.like import Like
 from databases.models.reels import Reels
 from databases.models.user import User
-from services import comment_service, video_service
+from services import ban_service, comment_service, video_service
 
 
 def _session():
@@ -130,8 +130,16 @@ def main():
     counted = comment_dao.counts_by_reels(db, [theirs.reels_idx], [blocked.user_idx])
     assert counted[theirs.reels_idx] == visible == 2, (counted, visible)
 
-    # 차단 목록에 뜬다 → 상대가 탈퇴하면 빠진다
-    assert ban_dao.list_blocked(db, me.user_idx) == [(blocked.user_idx, "blocked")]
+    # 차단 목록에 뜬다(닉네임 + 프로필 사진) → 상대가 탈퇴하면 빠진다
+    blocked.profile_image = "https://x/blocked.jpg"
+    db.flush()
+    assert ban_dao.list_blocked(db, me.user_idx) == [
+        (blocked.user_idx, "blocked", "https://x/blocked.jpg")
+    ]
+    # 서비스가 튜플을 스키마에 옮길 때 닉네임·사진이 뒤바뀌지 않는지(순서 의존)
+    [item] = ban_service.list_blocked(db, me)
+    assert (item.nickname, item.profile_image) == ("blocked", "https://x/blocked.jpg"), item
+
     blocked.deleted_at = datetime.now(timezone.utc)
     db.flush()
     assert ban_dao.list_blocked(db, me.user_idx) == []

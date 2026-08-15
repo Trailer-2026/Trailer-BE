@@ -33,10 +33,10 @@ def blocked_user_idxs(db: Session, user_idx: int) -> list[int]:
     return [idx for (idx,) in rows]
 
 
-def list_blocked(db: Session, user_idx: int) -> list[tuple[int, str | None]]:
-    """내가 차단한 사용자 (user_idx, 닉네임) 목록 — 차단 목록 화면용."""
+def list_blocked(db: Session, user_idx: int) -> list[tuple[int, str | None, str | None]]:
+    """내가 차단한 사용자 (user_idx, 닉네임, 프로필 사진 URL) 목록 — 차단 목록 화면용."""
     return (
-        db.query(User.user_idx, User.nickname)
+        db.query(User.user_idx, User.nickname, User.profile_image)
         .join(Ban, Ban.blocked_user_idx == User.user_idx)
         .filter(Ban.user_idx == user_idx, User.deleted_at.is_(None))
         .order_by(Ban.ban_idx.desc())

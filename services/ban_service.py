@@ -39,6 +39,6 @@ def unblock_user(db: Session, user, target_user_idx: int) -> None:
 def list_blocked(db: Session, user) -> list[BlockedUser]:
     """내가 차단한 사용자 목록 (최근 차단순)."""
     return [
-        BlockedUser(user_idx=idx, nickname=nickname)
-        for idx, nickname in ban_dao.list_blocked(db, user.user_idx)
+        BlockedUser(user_idx=idx, nickname=nickname, profile_image=profile_image)
+        for idx, nickname, profile_image in ban_dao.list_blocked(db, user.user_idx)
     ]
