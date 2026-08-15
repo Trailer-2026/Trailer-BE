@@ -33,7 +33,7 @@ _LODGING_RANK = {
     "펜션": 1, "게스트하우스": 1, "유스호스텔": 1, "서비스드레지던스": 1,
     "홈스테이": 2, "민박": 3, "모텔": 3,
 }
-_RADIUS_M = 20000                # locationBasedList2 최대 반경(20km)
+_RADIUS_M = 20000                # 기본 조회 반경(20km). 더 넓은 값도 API가 받는다 → _PLACE_FALLBACK_STEPS
 _AREA_CODES = [1, 2, 3, 4, 5, 6, 7, 8, 31, 32, 33, 34, 35, 36, 37, 38, 39]  # 시도
 
 # 한 시도가 이 정도(대각 퍼짐, km) 이상이면 부분권으로 분리한다.
@@ -164,6 +164,68 @@ def live_places(lat: float, lng: float, themes: list[Theme], radius_m: int = _RA
                 continue
             out[lp.content_id] = lp
     return list(out.values())
+
+
+# 추천지가 모자랄 때 조건을 푸는 순서 (반경, 테마완화). 첫 단계가 평소 조회라 결과가 충분하면
+# 추가 호출이 0이다(도심은 여기서 끝난다).
+# - **반경을 먼저, 테마는 마지막에** 푼다 — 테마는 사용자가 명시적으로 고른 조건이라 가장 늦게 건드린다.
+# - 테마 완화 첫 단계를 기본 반경으로 되돌리는 이유: 조건을 다 풀 바에는 '멀리 있는 딱 맞는 곳'보다
+#   '가까운 다른 테마'가 낫다(기차로 도착역에 내려서 실제로 갈 수 있어야 하므로).
+# - 50km에서 끊는다: locationBasedList2는 더 넓은 반경도 받아주지만(실측 확인), 도착역에서 너무 먼
+#   곳까지 코스에 넣으면 "역은 고래불인데 일정은 안동"이 되어 도착역과 코스가 어긋난다.
+_PLACE_FALLBACK_STEPS = (
+    (_RADIUS_M, False),   # 선택 테마 · 기본 반경 (= live_places 기본 동작)
+    (35000, False),       # 선택 테마 · 반경 확대
+    (50000, False),       # 선택 테마 · 최대 반경
+    (_RADIUS_M, True),    # 테마 완화 · 기본 반경
+    (50000, True),        # 테마 완화 · 최대 반경 (최후)
+)
+
+
+@dataclass
+class PlaceScan:
+    """`live_places_relaxed` 결과 — 장소와 '어떤 조건까지 풀어서 얻었는지'.
+
+    안내 문구는 여기서 만들지 않는다(이 모듈은 TourAPI 클라이언트라 사용자용 한국어를 갖지 않음).
+    호출측(`recommend_service._scan_note`)이 이 플래그로 문구를 만들어 응답 note에 싣는다.
+    """
+
+    places: list[LivePlace]
+    radius_m: int
+    widened: bool          # 기본 반경보다 넓혀서 얻었나
+    themes_relaxed: bool   # 선택 테마를 풀어서 얻었나
+
+
+def live_places_relaxed(
+    lat: float,
+    lng: float,
+    themes: list[Theme],
+    min_count: int = 1,
+    per_type: int = 100,
+    seed: list[LivePlace] | None = None,
+) -> PlaceScan:
+    """추천지가 `min_count`에 못 미치면 반경을 넓히고, 그래도 모자라면 테마를 풀어 재조회한다.
+
+    시골 도착역(예: 고래불역)은 선택 테마의 TourAPI 등록 관광지가 0~2건이라 코스가 아예 만들어지지
+    않고 '기차만 있는 카드'가 나온다. 조건을 단계적으로 풀어 최소한의 볼거리를 확보하되, **무엇을
+    풀었는지는 숨기지 않고** `PlaceScan`으로 알려 호출측이 사용자에게 밝히게 한다.
+
+    `min_count`를 채우는 첫 단계에서 멈춘다(그 뒤 단계는 호출하지 않음). 끝까지 못 채우면 단계 중
+    가장 많이 나온 결과를 쓰고, 동수면 앞 단계(덜 푼 조건)를 유지한다.
+    `seed`(이미 기본 반경·선택 테마로 조회해 둔 결과)를 주면 첫 단계를 건너뛴다 — 도착지 자동추천
+    Phase B처럼 같은 조회를 이미 마친 경우의 중복 호출 방지.
+    """
+    steps = _PLACE_FALLBACK_STEPS[1:] if seed is not None else _PLACE_FALLBACK_STEPS
+    best = PlaceScan(list(seed or []), _PLACE_FALLBACK_STEPS[0][0], False, False)
+    for radius_m, relax in steps:
+        if len(best.places) >= min_count:
+            return best
+        if relax and not themes:
+            break  # 원래 테마 미선택이면 완화해도 같은 조회라 호출만 낭비된다
+        found = live_places(lat, lng, [] if relax else themes, radius_m=radius_m, per_type=per_type)
+        if len(found) > len(best.places):
+            best = PlaceScan(found, radius_m, radius_m > _PLACE_FALLBACK_STEPS[0][0], relax)
+    return best
 
 
 _THEME_MAX_PAGE = 15  # 랜덤 페이지 상한 — 제목순 전 구간(가~하)에 흩뿌려 매번 다른 관광지를 보여준다.

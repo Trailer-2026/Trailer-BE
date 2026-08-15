@@ -71,6 +71,11 @@ _DAY_END_HOUR = 21
 _ARRIVE_BUFFER_H = 0.5   # 도착역 → 첫 관광지
 _DEPART_BUFFER_H = 1.0   # 마지막 관광지 → 귀가역 + 탑승 여유
 
+# 코스용 추천지가 '하루 이 수'에 못 미치면 반경 확대·테마 완화로 다시 조회한다
+# (tour_place.live_places_relaxed). 플랜 3장이 각각 하루 1곳은 가져야 카드가 '이동만' 남거나
+# 서로 똑같아지지 않으므로, build_courses가 상위 후보를 쪼개는 버킷 수(3)와 같은 값으로 둔다.
+_MIN_PLACES_PER_DAY = 3
+
 
 def recommend_courses(db: Session, criteria: SearchCriteria) -> RecommendResponse:
     """검색 조건으로 AI 코스 + 왕복 기차 경로 + 날짜별 숙소를 생성한다.
@@ -123,9 +128,10 @@ def _recommend_fixed_dest(db, criteria, origin, k) -> RecommendResponse:
 
     # 경로별로 그 경로의 도착/출발 시각에 맞춘 코스를 엮어 여정을 만든다.
     routes, note = _fetch_routes(db, origin, dest, criteria, k)
-    itineraries = _itineraries_at(db, criteria, k, (dest.latitude, dest.longitude), routes)
+    itineraries, pnote = _itineraries_at(db, criteria, k, (dest.latitude, dest.longitude), routes)
+    note = _join_notes(note, pnote)
     if not _has_visits(itineraries):
-        note = note or "조건에 맞는 추천지를 찾지 못했습니다(TourAPI 실시간 조회 결과 없음)."
+        note = _join_notes(note, _NO_PLACE_NOTE)
     plan = DestinationPlan(
         destination_station_idx=dest.station_idx,
         destination_name=dest.station_name,
@@ -225,16 +231,20 @@ def _recommend_auto_dest(db, criteria, origin, k) -> RecommendResponse:
                 raise NotFoundException("역을 찾을 수 없습니다.")
             # 경로별로 그 경로의 도착/출발 시각에 맞춘 코스를 엮는다. Phase B 장소를 재사용(추가 조회 없음).
             routes, rnote = _fetch_routes(wdb, w_origin, st, criteria, k)
+            # Phase B 스캔을 씨앗으로 삼되, 코스를 채우기엔 모자라면 반경 확대·테마 완화로 보충한다.
+            # **순위 산정용 place_cache는 그대로 둔다** — 완화한 결과로 재점수하면 '볼 게 없어서
+            # 밀렸어야 할 후보'가 도로 올라와 도착지 선택 자체가 뒤틀린다(코스용으로만 넓힌다).
+            scan = _scan_places((st.latitude, st.longitude), criteria, k, seed=place_cache[st_idx])
             itineraries = _itineraries_from(
-                wdb, place_cache[st_idx], criteria, k, (st.latitude, st.longitude), routes,
-                target=1, label_start=di,
+                wdb, scan.places, criteria, k, (st.latitude, st.longitude), routes,
+                target=1, label_start=di, themes_relaxed=scan.themes_relaxed,
             )
             return DestinationPlan(
                 destination_station_idx=st_idx,
                 destination_name=st.station_name,
                 score=score,
                 itineraries=itineraries,
-                note=rnote,
+                note=_join_notes(rnote, _scan_note(scan)),
             )
         finally:
             wdb.close()
@@ -269,22 +279,75 @@ def _auto_fallback(db, criteria, origin, origin_coords, k) -> RecommendResponse:
             note="추천 가능한 도착지를 찾지 못했습니다.",
         )
     routes, rnote = _fetch_routes(db, origin, st, criteria, k)
-    itineraries = _itineraries_at(db, criteria, k, (st.latitude, st.longitude), routes)
+    itineraries, pnote = _itineraries_at(db, criteria, k, (st.latitude, st.longitude), routes)
     plan = DestinationPlan(
         destination_station_idx=st.station_idx,
         destination_name=st.station_name,
         score=None,
         itineraries=itineraries,
-        note=rnote or "테마 조건에 맞는 도착지 후보를 찾지 못해 인근 대도시를 추천했습니다.",
+        note=_join_notes(rnote, pnote) or "테마 조건에 맞는 도착지 후보를 찾지 못해 인근 대도시를 추천했습니다.",
     )
     return RecommendResponse(auto_selected=True, destinations=[plan], note=None)
 
 
 def _itineraries_at(db, criteria: SearchCriteria, k: int, anchor, routes: list,
-                    target: int = 3, label_start: int = 0) -> list:
-    """현지 기준점(anchor) 반경 추천지를 실시간 조회 후 여정 생성(지정/폴백용). 기본 플랜 3개."""
-    places = tour_place.live_places(anchor[0], anchor[1], criteria.themes)
-    return _itineraries_from(db, places, criteria, k, anchor, routes, target, label_start)
+                    target: int = 3, label_start: int = 0) -> tuple[list, str | None]:
+    """현지 기준점(anchor) 반경 추천지를 실시간 조회 후 여정 생성(지정/폴백용). 기본 플랜 3개.
+
+    추천지가 코스를 채우기에 모자라면 반경 확대·테마 완화로 다시 조회하고(`_scan_places`),
+    무엇을 풀었는지 안내 문구를 함께 돌려준다(호출측이 DestinationPlan.note에 싣는다).
+    """
+    scan = _scan_places(anchor, criteria, k)
+    its = _itineraries_from(db, scan.places, criteria, k, anchor, routes, target, label_start,
+                            themes_relaxed=scan.themes_relaxed)
+    return its, _scan_note(scan)
+
+
+def _scan_places(anchor, criteria: SearchCriteria, k: int, seed=None):
+    """코스용 추천지 조회 — 모자라면 반경 확대 → 테마 완화 순으로 조건을 푼다.
+
+    기준은 '하루 _MIN_PLACES_PER_DAY곳 × 일수'. 이보다 적으면 플랜 3장이 빈 카드가 되거나
+    서로 같아진다(build_courses가 상위 후보를 3버킷으로 쪼개므로).
+    seed를 주면 이미 기본 반경으로 조회해 둔 결과를 첫 단계로 재사용한다(중복 호출 방지).
+    """
+    return tour_place.live_places_relaxed(
+        anchor[0], anchor[1], criteria.themes,
+        min_count=_MIN_PLACES_PER_DAY * k, seed=seed,
+    )
+
+
+# 조건을 끝까지 풀어도 추천지가 하나도 없을 때의 안내(경유 관광만 붙은 '이동만' 카드 구분용).
+_NO_PLACE_NOTE = "조건에 맞는 추천지를 찾지 못했습니다(TourAPI 실시간 조회 결과 없음)."
+
+
+def _scan_note(scan) -> str | None:
+    """반경 확대·테마 완화가 **실제로 일어났을 때만** 그 사실을 알리는 안내 문구.
+
+    조건을 조용히 풀면 "바다 골랐는데 왜 서원이 뜨지"가 되므로 무엇을 풀었는지 밝힌다.
+    아무것도 못 찾았으면 완화 문구 대신 '추천지 없음'을 돌려준다 — 경유역 관광지가 붙어
+    `_has_visits`가 참이 되는 바람에 그 안내가 빠지던 경우를 여기서 잡는다.
+    """
+    if not scan.places:
+        return _NO_PLACE_NOTE
+    parts = []
+    if scan.widened:
+        parts.append(f"도착지 주변에 추천지가 적어 반경 {scan.radius_m // 1000}km까지 넓혀 찾았습니다.")
+    if scan.themes_relaxed:
+        parts.append("선택하신 테마의 추천지가 없어 테마 조건을 완화해 추천했습니다.")
+    return _join_notes(*parts)
+
+
+def _join_notes(*parts: str | None) -> str | None:
+    """비어 있지 않은 안내 문구를 ' / '로 잇는다(중복 제거, 전부 비면 None).
+
+    구분자가 ' / '인 건 route note와 같은 규칙이라서다 — `_clear_stale_via_miss`가 그 규칙으로
+    note에서 조각 하나만 떼어낸다.
+    """
+    out: list[str] = []
+    for p in parts:
+        if p and p not in out:
+            out.append(p)
+    return " / ".join(out) or None
 
 
 def _has_visits(itineraries: list) -> bool:
@@ -302,7 +365,7 @@ def _plan_places(course) -> frozenset:
 
 
 def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, routes: list,
-                      target: int = 3, label_start: int = 0) -> list:
+                      target: int = 3, label_start: int = 0, themes_relaxed: bool = False) -> list:
     """추천지(places)로 최대 target개의 '플랜' 여정을 만든다.
 
     플랜끼리 관광지가 겹치지 않도록, build_courses가 만드는 '장소 분리된 코스 버킷'(working[i::3])을
@@ -316,8 +379,11 @@ def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, rout
     나눈 _course_for_overnight로 코스 1개(변형 없음). 숙소 조회 memo는 경로 간 공유.
 
     코스가 하나도 안 나오는데 경로는 있으면(추천지 없음) 기차만 있는 여정을 남겨 경로 정보를 보존한다.
+
+    themes_relaxed=True는 places가 '테마 완화'로 받아온 것이라는 표시로, 점수화도 같이 완화해야
+    한다(_prepare_scored 참조). 잘못 넘기면 완화해 온 장소가 점수화에서 전부 탈락해 폴백이 무의미해진다.
     """
-    scored = _prepare_scored(places, criteria, k)
+    scored = _prepare_scored(places, criteria, k, themes=[] if themes_relaxed else None)
     memo: dict = {}       # 숙소 조회 캐시(경로 간 공유) — 종점 좌표가 같으면 재사용
     via_cache: dict = {}  # 경유역 scored 캐시 — 키는 (경유역, 그 도시 체류일수)
     route_list = routes or [None]
@@ -408,9 +474,16 @@ def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, rout
     return sliced
 
 
-def _prepare_scored(places, criteria: SearchCriteria, k: int) -> list:
-    """추천지 점수화 + 운영시간 채우기(목적지당 1회, 네트워크). 경로별 build_courses가 공유."""
-    scored = scoring.score_places(places, criteria.themes)
+def _prepare_scored(places, criteria: SearchCriteria, k: int, themes=None) -> list:
+    """추천지 점수화 + 운영시간 채우기(목적지당 1회, 네트워크). 경로별 build_courses가 공유.
+
+    themes를 주면 criteria.themes 대신 그 테마로 점수화한다. **테마 완화로 받아온 장소는 반드시
+    빈 목록([])을 넘겨야 한다** — `scoring.score_places`는 선택 테마와 하나도 안 겹치는 곳을 0점으로
+    버리므로, 완화해서 받아온 장소를 원래 테마로 점수화하면 전부 탈락해 폴백이 아무 효과가 없다.
+    (working_set·build_courses는 criteria.themes를 그대로 쓴다 — 테마 쿼터가 안 걸리면 점수 상위로
+    채워지므로 '같은 작업셋' 불변식은 유지된다.)
+    """
+    scored = scoring.score_places(places, criteria.themes if themes is None else themes)
     _attach_hours(scored, criteria, k)
     return scored
 
@@ -491,10 +564,19 @@ def _course_for_overnight(db, dest_scored, criteria, k, dest_anchor, route, memo
     # 아래 build_courses가 이 도시엔 seg_k(=via_days)짜리 작업셋만 쓴다. 전체 일수로 받으면
     # 2박3일 기준 27곳을 조회하고 9곳만 보게 되어, 일일 쿼터가 제일 빠듯한 detailIntro2를
     # 18건씩 헛되이 태운다.
+    #
+    # 경유 도시도 목적지와 같은 폴백을 탄다 — 경유역 주변에 그 테마 관광지가 0건이면 아래
+    # build_courses가 빈 목록을 내고 이 숙박경유 후보가 통째로 폐기되기 때문(카드가 사라진다).
     cache_key = (route.via_station_idx, via_days)
     if cache_key not in via_cache:
-        via_places = tour_place.live_places(via_anchor[0], via_anchor[1], criteria.themes)
-        via_cache[cache_key] = _prepare_scored(via_places, criteria, via_days)
+        via_scan = tour_place.live_places_relaxed(
+            via_anchor[0], via_anchor[1], criteria.themes,
+            min_count=_MIN_PLACES_PER_DAY * via_days,
+        )
+        via_cache[cache_key] = _prepare_scored(
+            via_scan.places, criteria, via_days,
+            themes=[] if via_scan.themes_relaxed else None,
+        )
     via_scored = via_cache[cache_key]
 
     days: list = []
