@@ -13,8 +13,21 @@ from schemas.ban_schema import BlockedUser
 
 def block_user(db: Session, user, target_user_idx: int) -> None:
     """사용자 차단. 이미 차단했으면 그대로 둔다."""
+    _ban(db, user, target_user_idx, noun="차단")
+
+
+def report_user(db: Session, user, target_user_idx: int) -> None:
+    """사용자 신고 — 차단과 동작이 같다(신고한 상대가 나에게만 안 보인다).
+
+    앱 심사 대응으로 URL(`/api/reports`)만 분리했고 로직은 차단과 공유한다.
+    문구만 '신고'로 바꾼다.
+    """
+    _ban(db, user, target_user_idx, noun="신고")
+
+
+def _ban(db: Session, user, target_user_idx: int, noun: str) -> None:
     if target_user_idx == user.user_idx:
-        raise BadRequestException("자기 자신은 차단할 수 없습니다.")
+        raise BadRequestException(f"자기 자신은 {noun}할 수 없습니다.")
     if user_dao.get_by_idx(db, target_user_idx) is None:
         raise NotFoundException("사용자를 찾을 수 없습니다.")
 
