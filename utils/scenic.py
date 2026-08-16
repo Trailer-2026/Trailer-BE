@@ -70,6 +70,35 @@ def angle_diff_deg(a: float, b: float) -> float:
     return d if d <= 180 else 360 - d
 
 
+def project_on_segment(
+    a_lat: float, a_lng: float, b_lat: float, b_lng: float, p_lat: float, p_lng: float,
+) -> tuple[float, float]:
+    """점 P를 구간 A→B에 투영해 (진행 비율 t, 구간에서 떨어진 거리 m)를 반환한다.
+
+    t는 [0, 1]로 자른다 — 구간 밖으로 나가는 투영은 양 끝점에 붙인다. 그래서 t가 0이나
+    1이면 '구간 바깥'이라는 뜻이기도 하다.
+
+    좌표 투영 대신 세 변의 길이(haversine)만으로 계산한다(제2코사인법칙):
+    구간 길이 c에 대해 A에서 투영점까지의 거리는 (|AP|² - |BP|² + c²) / 2c 이고,
+    떨어진 거리는 피타고라스로 얻는다. 위경도를 평면에 펴는 과정이 없어 고위도 왜곡이
+    없고, 역 간 수십 km 규모에서 오차는 무시할 만하다.
+
+    풍경 알림 시각표가 두 곳에 쓴다 — 스팟이 구간의 몇 %쯤에 있는지(통과 시각 보간),
+    그리고 사용자 GPS가 지금 구간의 몇 %쯤인지(지연 보정).
+    """
+    c = haversine_m(a_lat, a_lng, b_lat, b_lng)
+    if c == 0:
+        return 0.0, haversine_m(a_lat, a_lng, p_lat, p_lng)
+
+    ap = haversine_m(a_lat, a_lng, p_lat, p_lng)
+    bp = haversine_m(b_lat, b_lng, p_lat, p_lng)
+    along = (ap ** 2 - bp ** 2 + c ** 2) / (2 * c)
+    # 자르기 전의 along으로 수직거리를 구한다 — 구간 밖 점도 '선분에서 얼마나 벗어났나'가
+    # 아니라 '직선에서 얼마나 벗어났나'로 재야 대표 스팟 순위가 뒤집히지 않는다.
+    off = math.sqrt(max(0.0, ap ** 2 - along ** 2))
+    return min(1.0, max(0.0, along / c)), off
+
+
 if __name__ == "__main__":
     # 자가검증: 방위각/각도차 (서울 기준 정북/정동, wraparound)
     assert abs(bearing_deg(37.0, 127.0, 38.0, 127.0) - 0) < 0.5    # 정북
@@ -78,4 +107,14 @@ if __name__ == "__main__":
     assert angle_diff_deg(350, 10) == 20
     assert angle_diff_deg(10, 350) == 20
     assert angle_diff_deg(0, 180) == 180
+
+    # 자가검증: 구간 투영 (중점·양 끝·구간 밖·수직 이탈)
+    t, off = project_on_segment(37.0, 127.0, 37.0, 128.0, 37.0, 127.5)
+    assert abs(t - 0.5) < 0.01 and off < 1000          # 중점
+    t, off = project_on_segment(37.0, 127.0, 37.0, 128.0, 37.0, 127.0)
+    assert t == 0.0 and off < 1                        # 시작점
+    t, _ = project_on_segment(37.0, 127.0, 37.0, 128.0, 37.0, 129.0)
+    assert t == 1.0                                    # 구간 밖 → 끝점에 붙는다
+    t, off = project_on_segment(37.0, 127.0, 37.0, 128.0, 37.1, 127.5)
+    assert abs(t - 0.5) < 0.01 and 10000 < off < 12000  # 위도 0.1° ≈ 11km 벗어남
     print("scenic self-check OK")

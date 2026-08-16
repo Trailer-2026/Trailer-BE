@@ -114,7 +114,7 @@ def list_trains_by_travel(db: Session, travel_idx: int) -> list[Schedule]:
 
 
 def list_trains_covering(
-    db: Session, from_date: date, to_date: date
+    db: Session, from_date: date, to_date: date, user_idx: int | None = None,
 ) -> list[tuple[Schedule, Travel]]:
     """[from_date, to_date]에 걸치는 여행의 기차 일정을 (일정, 여행)으로 조회 (soft-delete 제외).
 
@@ -123,8 +123,10 @@ def list_trains_covering(
     포함할 수 있는 여행**까지만 넉넉히 좁히고, 정확한 출발 일시 판정은 호출측이
     파이썬에서 한다(train_departure_service). 진행 중 여행은 많아야 수십 건이라
     한 번 더 거르는 비용이 무시할 만하다.
+
+    user_idx를 주면 그 사용자 것만 — 배치(전체)와 요청(내 것)이 같은 질의를 나눠 쓴다.
     """
-    return (
+    query = (
         db.query(Schedule, Travel)
         .join(Travel, Travel.travel_idx == Schedule.travel_idx)
         .filter(
@@ -134,9 +136,10 @@ def list_trains_covering(
             Travel.start_date <= to_date,
             Travel.end_date >= from_date,
         )
-        .order_by(Schedule.day_no, Schedule.sequence)
-        .all()
     )
+    if user_idx is not None:
+        query = query.filter(Schedule.user_idx == user_idx)
+    return query.order_by(Schedule.day_no, Schedule.sequence).all()
 
 
 def cover_image(db: Session, travel_idx: int) -> str | None:

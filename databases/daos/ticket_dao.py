@@ -45,19 +45,23 @@ def list_by_user(db: Session, user_idx: int) -> list[tuple[Ticket, str, str]]:
     )
 
 
-def list_departing_on(db: Session, dates: list[date]) -> list[tuple[Ticket, str, str]]:
+def list_departing_on(
+    db: Session, dates: list[date], user_idx: int | None = None,
+) -> list[tuple[Ticket, str, str]]:
     """주어진 날짜(KST)에 출발하는 승차권을 (승차권, 출발역명, 도착역명)으로 조회.
 
-    출발 10분 전 알림 배치용이라 사용자를 가리지 않고 전체를 훑는다. 날짜까지만
+    출발 10분 전 알림 배치용이라 기본은 사용자를 가리지 않고 전체를 훑는다. 날짜까지만
     좁히고 시:분 판정은 호출측이 한다 — dep_date·dep_time이 나뉘어 있어 SQL에서
     합치면 방언을 타기 때문이다(schedule_dao.list_trains_covering과 같은 이유).
     역명은 list_by_user와 같은 방식으로 조인해 N+1을 피한다.
+
+    user_idx를 주면 그 사용자 것만 — 풍경 알림 계획 조회가 '내가 지금 탄 열차'를 찾을 때 쓴다.
     """
     if not dates:
         return []
     dep = aliased(Station)
     arr = aliased(Station)
-    return (
+    query = (
         db.query(Ticket, dep.station_name, arr.station_name)
         .join(dep, Ticket.dep_station_idx == dep.station_idx)
         .join(arr, Ticket.arr_station_idx == arr.station_idx)
@@ -65,9 +69,10 @@ def list_departing_on(db: Session, dates: list[date]) -> list[tuple[Ticket, str,
             Ticket.dep_date.in_(dates),
             Ticket.deleted_at.is_(None),
         )
-        .order_by(Ticket.dep_date, Ticket.dep_time, Ticket.ticket_idx)
-        .all()
     )
+    if user_idx is not None:
+        query = query.filter(Ticket.user_idx == user_idx)
+    return query.order_by(Ticket.dep_date, Ticket.dep_time, Ticket.ticket_idx).all()
 
 
 def get_owned(db: Session, user_idx: int, ticket_idx: int) -> Ticket | None:

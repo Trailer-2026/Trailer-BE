@@ -24,6 +24,8 @@ from databases.models.base import Base
 from databases.models.notification import Notification
 from databases.models.notification_log import NotificationLog
 from databases.models.reels import Reels
+from databases.models.scenic_spot import ScenicSpot
+from databases.models.scenic_spot_segment import ScenicSpotSegment  # noqa: F401  ScenicSpot의 relationship 대상
 from databases.models.schedule import Schedule
 from databases.models.ticket import Ticket
 from databases.models.travel import Travel
@@ -52,9 +54,11 @@ FUTURE = TODAY + timedelta(days=30)    # 아직 안 간 여행
 
 def _session():
     engine = create_engine("sqlite:///:memory:")
+    # scenic_spot은 스탬프와 무관하지만 notification_log가 풍경 알림 때문에 FK로 참조한다 —
+    # 메타데이터에 없으면 create_all이 의존 순서를 못 풀고 NoReferencedTableError로 죽는다.
     Base.metadata.create_all(engine, tables=[t.__table__ for t in (
         User, Travel, Schedule, Ticket, Reels, TravelImage, Notification, NotificationLog,
-        UserStamp,
+        UserStamp, ScenicSpot,
     )])
     db = sessionmaker(bind=engine)()
     db.execute(text(_STATION_DDL))

@@ -149,6 +149,33 @@ async def _train_departure_loop():
             await asyncio.sleep(train_departure_service.CHECK_INTERVAL_SEC)
 
 
+async def _scenic_push_loop():
+    """1분마다 '지금 OO역 스팟을 지나고 있어요' 풍경 알림을 보낸다.
+
+    전에는 앱이 좌표를 들고 폴링할 때만 나갔는데, 그 폴링이 알림 탭 화면 하나에만 걸려
+    있어서 탑승 중 사용자에게는 한 건도 가지 않았다. 발송 주체를 서버로 옮겨 앱이 어느
+    화면에 있든, 꺼져 있든 알림이 나가게 한다.
+
+    탑승 알림과 같은 주기다 — 통과 시각을 놓치지 않으려면 발송 창(10분)보다 촘촘히 돌아야
+    한다. 같은 구간이 창 안에서 여러 번 잡히지만 '탑승 1건에서 스팟 1개당 1회'는
+    notification_log가 보장한다. 실패해도 루프는 유지되고 다음 분에 다시 시도한다.
+    """
+    from services import scenic_plan_service
+
+    log = logging.getLogger(__name__)
+    while True:
+        try:
+            n = await asyncio.to_thread(scenic_plan_service.send_scenery_reminders)
+            if n:
+                log.info("풍경 알림 발송: %d건", n)
+            await asyncio.sleep(scenic_plan_service.CHECK_INTERVAL_SEC)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("풍경 알림 실패(다음 주기 재시도): %s", e)
+            await asyncio.sleep(scenic_plan_service.CHECK_INTERVAL_SEC)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_firebase()
@@ -167,6 +194,10 @@ async def lifespan(app: FastAPI):
             tasks.append(asyncio.create_task(_train_departure_loop()))
         if os.getenv("STAMP_AUTOSYNC", "1") == "1":
             tasks.append(asyncio.create_task(_stamp_daily_loop()))
+        # 다른 루프와 달리 이건 다중 워커에서 특히 조심해야 한다 — 중복 발송은
+        # notification_log가 막지만, GPS 보정값이 프로세스 메모리라 워커마다 따로 논다.
+        if os.getenv("SCENIC_PUSH_AUTOSYNC", "1") == "1":
+            tasks.append(asyncio.create_task(_scenic_push_loop()))
     try:
         yield
     finally:
