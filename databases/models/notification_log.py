@@ -1,4 +1,6 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, text
+from sqlalchemy import (
+    CheckConstraint, Column, DateTime, ForeignKey, Index, Integer, String, text,
+)
 
 from databases.models.base import BaseModel
 
@@ -72,6 +74,26 @@ class NotificationLog(BaseModel):
             unique=True,
             postgresql_where=text("type = 'SCENERY'"),
             sqlite_where=text("type = 'SCENERY'"),
+        ),
+        # 바로 위 두 인덱스가 풍경 중복 발송의 최종 방어인데, 인덱스에 들어가는 컬럼이 NULL이면
+        # 그 방어가 **조용히** 풀린다 — 유니크 제약에서 NULL은 서로 다른 값으로 취급돼 같은
+        # 스팟이 몇 번을 들어와도 안 걸린다. 시각표를 저장하지 않고 1분마다 재계산하는 구조라
+        # (scenic_plan_service) 그렇게 되면 같은 스팟 푸시가 발송 창(10분) 내내 반복된다.
+        # 그래서 '스팟이 있고, 탑승 출처가 정확히 하나'를 행 단위로 못 박는다. 출처가 둘 다
+        # 채워진 행도 막는다 — 한 탑승이 추천 코스와 직접 입력 양쪽일 수는 없고, 그런 행은
+        # 두 인덱스에 동시에 걸려 중복 판정 축이 무엇인지 모호해진다.
+        #
+        # 다른 종류(type <> 'SCENERY')는 건드리지 않는다. TRAIN_D10M도 출처가 하나뿐이지만
+        # 여기서 같이 조이면 이 제약의 적용 범위가 넓어져, 나중에 종류가 늘 때마다 재검토
+        # 대상이 된다. 지금 실제로 깨질 수 있는 것(=NULL이 섞이면 중복이 새는 것)만 막는다.
+        #
+        # num_nonnulls(Postgres 전용) 대신 IS NULL 비교를 쓰는 이유는 이 __table_args__가
+        # OPENAPI_EXPORT=1의 인메모리 SQLite에서도 그대로 CREATE TABLE에 실리기 때문이다.
+        CheckConstraint(
+            "type <> 'SCENERY' OR ("
+            "scenic_spot_idx IS NOT NULL"
+            " AND (schedule_idx IS NULL) <> (ticket_idx IS NULL))",
+            name='ck_notification_log_scenery_ref',
         ),
         {'comment': '발송된 알림 이력 (알림 화면 목록)'},
     )

@@ -88,6 +88,8 @@ _ADDED_COLUMNS = (
 
 # ADD COLUMN 으로 안 되는 뒷정리 — 기존 행 백필·제약 변경. _alter_columns 다음에 돈다.
 # 전부 멱등이라(WHERE ... IS NULL / 이미 적용된 제약은 no-op) 매 기동마다 돌아도 안전하다.
+# 단 ADD CONSTRAINT 만은 Postgres에 IF NOT EXISTS 가 없어 스스로 멱등해지지 않는다 —
+# DO 블록으로 duplicate_object 를 삼켜 두 번째 기동부터 no-op 이 되게 한다.
 _FIXUPS = (
     # 사진이 붙은 일정에서 여행을 끌어와 옛 행을 채운다. 이게 없으면 travel_idx가 NULL로
     # 남아 여행 단위 조회에서 그 사진들이 통째로 사라진다(FK가 있어 조인은 항상 성공한다).
@@ -97,6 +99,22 @@ _FIXUPS = (
     "ALTER TABLE travel_image ALTER COLUMN travel_idx SET NOT NULL",
     # 일정을 고르지 않고 여행에만 올린 사진을 담으려면 NOT NULL을 풀어야 한다.
     "ALTER TABLE travel_image ALTER COLUMN schedule_idx DROP NOT NULL",
+    # 풍경 이력의 참조 XOR — 모델 __table_args__의 ck_notification_log_scenery_ref와 같은 정의.
+    # 아래 uq_notification_log_scenery_* 두 인덱스가 중복 발송의 최종 방어인데, 인덱스 컬럼에
+    # NULL이 섞이면 유니크가 서로를 구별하지 못해 방어가 조용히 풀린다(모델 쪽 주석 참조).
+    #
+    # NOT VALID인 이유: 기존 행을 스캔하지 않는다. 이 제약의 목적은 앞으로 들어올 행을 막는
+    # 것이고 그건 NOT VALID로도 완전히 지켜진다(이후 모든 INSERT/UPDATE에 적용된다). 반면
+    # 검증까지 켜면 위반 행이 하나라도 있을 때 ALTER가 실패하고, 이 코드는 lifespan에서
+    # 도는 부팅 경로라 **서버가 아예 안 뜬다**. 방어용 제약이 기동을 막을 수 있게 두는 건
+    # 득보다 실이 크다. (풍경 이력은 record=False였던 TRA-50~77 동안 한 행도 쌓이지 않았고
+    # scenic_spot_idx 컬럼 자체가 TRA-78에 생겨서, 실제로 위반 행이 있을 가능성은 낮다.
+    # 확인 후 조이려면 ALTER TABLE notification_log VALIDATE CONSTRAINT ... 를 한 번 돌려라.)
+    "DO $$ BEGIN "
+    "ALTER TABLE notification_log ADD CONSTRAINT ck_notification_log_scenery_ref "
+    "CHECK (type <> 'SCENERY' OR (scenic_spot_idx IS NOT NULL "
+    "AND (schedule_idx IS NULL) <> (ticket_idx IS NULL))) NOT VALID; "
+    "EXCEPTION WHEN duplicate_object THEN NULL; END $$",
 )
 
 # 이미 있는 테이블에 덧붙일 인덱스. 모델 __table_args__의 같은 인덱스와 정의가 일치해야 한다.

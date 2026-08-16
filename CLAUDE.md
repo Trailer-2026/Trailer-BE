@@ -107,7 +107,7 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 | 발송 | `main.py:_scenic_push_loop`(1분) → `send_scenery_reminders` → `push_service.notify_scenery` |
 | 조회 | `GET /api/scenic-spots/plan` — 지금(또는 3h 내) 탑승의 시각표 전체 |
 | 보정 | `POST /api/scenic-spots/plan/calibrate` — 좌표를 보내면 지연만큼 남은 시각을 민다 |
-| 중복 방지 | `notification_log` (SCENERY 이력 + 부분 유니크 인덱스 2개) |
+| 중복 방지 | `notification_log` (SCENERY 이력 + 부분 유니크 인덱스 2개 + CHECK 1개) |
 | 끄기 | `SCENIC_PUSH_AUTOSYNC=0` (기본 `1`) |
 
 **유의할 점**
@@ -115,6 +115,7 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 - **시각은 어림짐작이다.** 중간역 통과 시각을 주는 데이터가 없어(`train_stop`엔 순서만 있고 시각 컬럼이 없다) 역 간 **직선거리에 비례해** 소요 시간을 나눈다. 정차 시간·가감속·선로 곡률이 전부 빠져 몇 분씩 틀린다. 그래서 문구가 스팟이 아니라 **구간 단위**다("지금 대전역 스팟을 지나고 있어요"). 가시 범위 1500m는 KTX 기준 18초면 지나가는데 그 창을 서버 추정만으로 맞추는 건 불가능하다 — 스팟을 콕 집는 문구로 바꾸려면 GPS 보정을 필수로 만들어야 한다.
 - **지연은 GPS로만 잡힌다.** 서버는 열차의 실제 위치를 모른다. 앱이 `calibrate`에 좌표를 보내면 그 좌표를 경로 구간들에 투영해(`utils.scenic.project_on_segment`) '예정대로면 지금 몇 시'를 구하고, 실제 시각과의 차를 그 탑승의 보정값으로 기억한다. **보정 기준은 항상 원래 예정 시각**이라 여러 번 보정해도 값이 누적·발산하지 않는다.
 - **보정값은 프로세스 메모리에만 있다**(`_OFFSETS`, TTL 6h). 재기동하면 예정 시각으로 돌아갈 뿐 알림이 끊기지는 않는다. **단일 프로세스 배포를 전제한다** — 다중 워커로 가면 중복 발송은 `notification_log`가 막지만 보정이 워커마다 따로 논다. 그 땐 `SCENIC_PUSH_AUTOSYNC=0`으로 끄고 별도 배치를 돌리거나, 계획을 테이블로 빼야 한다.
+- **중복 방지 인덱스는 CHECK 없이는 조용히 풀린다**(`ck_notification_log_scenery_ref`). 유니크 제약에서 NULL은 서로 다른 값이라 `scenic_spot_idx`나 탑승 출처가 비면 같은 스팟이 몇 번을 들어와도 안 걸리고, 1분마다 재계산하는 구조라 그대로 발송 창(10분) 내내 반복된다. 그래서 SCENERY 행에 한해 '스팟이 있고 `schedule_idx`/`ticket_idx` 중 정확히 하나'를 DB가 못 박는다 — 지금 코드로는 위반 행이 안 생기니 이건 리팩터링 대비 보험이다. 운영 DB엔 `provision._FIXUPS`가 `NOT VALID`로 붙인다(부팅 경로라 기존 행 검증 실패로 서버가 안 뜨는 일을 피한다). 탑승과 무관한 풍경 알림을 새로 만들 거라면 이 제약부터 손봐야 한다 — 안 그러면 `notify`가 예외를 삼켜 **경고 로그만 남고 푸시가 조용히 안 나간다**.
 - **'운행 중' 판정의 뒤쪽을 열어 둔다**(`_is_riding`). 예정 도착 시각으로 딱 자르면 **지연된 열차의 마지막 구간이 통째로 사라진다** — 20분 늦은 열차는 도착 직전 풍경의 통과 시각도 20분 밀리는데 그 시각엔 이미 '도착한 것'이 되기 때문이다. 그래서 뒤쪽만 보정값 + 발송 창만큼 더 연다.
 - **통과역도 시퀀스에 남긴다.** 정차 수를 세는 `recommend_service._stops_between`은 `통과`를 빼지만 여기는 목적이 다르다 — 정차역만 쓰면 KTX처럼 중간을 지나치는 열차는 역 사이가 수십 km라 거리 근사가 거칠어지고, 그 사이 풍경 구간을 앉힐 기준점도 사라진다.
 - **구간 매칭은 인접 쌍으로 좁히지 않는다**(`scenic_spot_dao.segments_on_route`). segment가 어느 granularity로 등록돼 있는지 보장이 없어서다 — 인접 쌍이 (서울역, 대전역)인데 segment는 (광명역, 천안아산역)로 등록돼 있으면 인접 매칭으로는 아무것도 못 찾는다. **양끝이 경로에 있기만 하면** 다 가져오고, 역별 진행률로 위치를 계산한다.
