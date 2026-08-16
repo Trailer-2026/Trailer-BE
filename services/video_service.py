@@ -60,6 +60,7 @@ from schemas.video_schema import (
     MyReelsListResponse,
     ReelsRecommendResponse,
     ReelsShareResponse,
+    ReelsUrlResponse,
     ReelsTitleUpdateResponse,
     ReelsUploadResponse,
 )
@@ -425,6 +426,29 @@ def get_shared_reels(db: Session, reels_idx: int):
     """
     reels = reels_dao.get_by_idx(db, reels_idx)
     return reels if reels is not None and reels.url else None
+
+
+def get_reels_url(db: Session, reels_idx: int, user_idx: int) -> ReelsUrlResponse:
+    """reels_idx 로 릴스 영상 주소를 되찾는다. 없거나 삭제됐거나 렌더 중이면 404.
+
+    앱 딥링크(특히 편집 화면)가 영상 URL 을 파라미터로 들고 다니면 외부에서 만든
+    링크로 남의(또는 우리 것이 아닌) 영상을 앱 화면에 띄울 수 있다. 그래서 딥링크는
+    reels_idx 만 싣고 실제 주소는 이 API 로 받아간다 — 서버가 준 PK 에 대응하는
+    주소만 나가므로 임의 URL 이 끼어들 자리가 없다.
+
+    소유자를 따지지 않는 건 릴스가 공개 피드라서다(공유 페이지·추천 API 와 같다).
+    대신 `is_mine` 을 함께 내려 편집 화면을 열지 말지 앱이 먼저 판단할 수 있게 한다
+    (편집 API 자체도 남의 릴스면 404 라 서버 쪽 방어는 그대로다).
+    """
+    reels = get_shared_reels(db, reels_idx)
+    if reels is None:
+        raise NotFoundException("릴스를 찾을 수 없습니다.")
+    return ReelsUrlResponse(
+        reels_idx=reels.reels_idx,
+        url=reels.url,
+        title=reels.title,
+        is_mine=reels.user_idx == user_idx,
+    )
 
 
 def get_share_link(db: Session, reels_idx: int, request_base_url: str) -> ReelsShareResponse:

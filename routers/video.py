@@ -17,6 +17,7 @@ from schemas.video_schema import (
     ReelsTitleUpdateRequest,
     ReelsTitleUpdateResponse,
     ReelsUploadResponse,
+    ReelsUrlResponse,
     VideoEditResponse,
     VideoRenderStatusResponse,
 )
@@ -364,6 +365,29 @@ def upload_reels_video(
         db, current_user.user_idx, video.filename or "", video.file, title
     )
     return CommonResponse.success_response("영상 업로드 성공", data=result)
+
+
+@router.get(
+    "/reels/{reels_idx}/url",
+    summary="릴스 영상 주소 조회 (reels_idx)",
+    description="릴스(reels_idx)의 영상 재생 주소를 반환합니다. **딥링크에 영상 URL 을 직접 "
+                "싣지 않기 위한 API 입니다** — 딥링크는 reels_idx 만 들고 오고, 앱은 그 값으로 "
+                "이 API 를 호출해 주소를 받아 재생·편집 화면을 엽니다. 외부에서 만든 링크로 "
+                "임의의 영상 주소를 앱 화면에 밀어 넣을 수 없게 됩니다.\n\n"
+                "is_mine 이 false 면 남의 릴스이므로 **편집 화면을 열지 마세요** — 편집 "
+                "API(구간 삭제·이미지 삽입)는 본인 릴스만 받고 그 외에는 404 입니다. "
+                "릴스는 공개 피드라 남의 릴스라도 재생 주소 자체는 내려갑니다.\n\n"
+                "- 404: 릴스 없음 / 삭제됨 / 아직 렌더가 끝나지 않음\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[ReelsUrlResponse],
+)
+def get_reels_url(
+    reels_idx: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    data = video_service.get_reels_url(db, reels_idx, current_user.user_idx)
+    return CommonResponse.success_response("릴스 영상 주소 조회 성공", data=data)
 
 
 @router.get(

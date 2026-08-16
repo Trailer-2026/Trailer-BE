@@ -134,6 +134,17 @@ class ReelsUploadResponse(BaseModel):
     duration_seconds: float = Field(..., description="업로드한 영상 길이(초)")
 
 
+class ReelsUrlResponse(BaseModel):
+    """reels_idx 로 되찾은 릴스 영상 주소 — 딥링크가 URL 을 들고 다니지 않게 하려는 용도."""
+
+    reels_idx: int = Field(..., description="조회한 릴스 PK", examples=[42])
+    url: str = Field(..., description="릴스 영상 재생 주소 (GCS 공개 URL)")
+    title: str | None = Field(None, description="릴스 제목 (없으면 null)", examples=["부산 2박 3일"])
+    is_mine: bool = Field(
+        ..., description="내가 올린 릴스인지 — false 면 편집 화면을 열면 안 된다(편집 API 가 404)",
+    )
+
+
 class ReelsShareResponse(BaseModel):
     """릴스 공유 링크."""
 
