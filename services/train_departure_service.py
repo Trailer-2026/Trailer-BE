@@ -38,8 +38,7 @@ def send_departure_reminders(now: datetime | None = None) -> int:
     이미 보낸 출발은 push_service.notify_train_departure가 걸러낸다(멱등). 개별 발송
     실패도 거기서 삼키므로 한 사람 때문에 나머지가 밀리지 않는다.
     """
-    # DB의 시각 컬럼이 전부 naive KST wall-clock이라 비교 기준도 tzinfo를 뗀 값으로 맞춘다
-    # (ticket_service.create_ticket과 같은 처리).
+    # DB의 시각 컬럼이 naive KST wall-clock이므로 현재 시각도 tzinfo를 떼고 비교한다.
     base = (now or now_kst()).replace(tzinfo=None)
     deadline = base + timedelta(minutes=LEAD_MINUTES)
 

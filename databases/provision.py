@@ -4,7 +4,7 @@
 서버가 뜰 때 스스로 만든다(main.py lifespan에서 `run()` 1회). 운영 DB에 수동 DDL을 넣지
 않아도 배포만으로 스키마가 맞춰진다.
 
-**왜 한 곳에 모았나**: 전에는 ticket_service·push_service·video_service가 각자 ensure_*
+**왜 한 곳에 모았나**: 전에는 여러 서비스가 각자 ensure_*
 함수를 들고 있었고 main.py가 그 셋을 "순서 주의" 주석과 함께 차례로 불렀다. notification_log가
 ticket을 FK로 참조하니 ticket이 먼저 있어야 하는데 그 제약이 코드가 아니라 주석에만 있어서,
 호출 순서를 바꾸면 조용히 깨졌다. 지금은 `_TABLES`에 모델만 넣어 두면 `create_all`이 FK

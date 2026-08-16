@@ -1,6 +1,6 @@
 from datetime import date, time
 
-from sqlalchemy import func
+from sqlalchemy import func, tuple_
 from sqlalchemy.orm import Session
 
 from databases.models.schedule import Schedule
@@ -111,6 +111,22 @@ def list_trains_by_travel(db: Session, travel_idx: int) -> list[Schedule]:
         .order_by(Schedule.day_no, Schedule.sequence)
         .all()
     )
+
+
+def last_end_times_on_days(db: Session, travel_days: dict[int, int]) -> dict[int, time]:
+    """여행별 특정 일자의 가장 늦은 종료 시각. 기차의 end_time은 도착 시각이다."""
+    if not travel_days:
+        return {}
+    rows = (
+        db.query(Schedule.travel_idx, func.max(Schedule.end_time))
+        .filter(
+            tuple_(Schedule.travel_idx, Schedule.day_no).in_(list(travel_days.items())),
+            Schedule.deleted_at.is_(None),
+        )
+        .group_by(Schedule.travel_idx)
+        .all()
+    )
+    return {travel_idx: end_time for travel_idx, end_time in rows}
 
 
 def list_trains_covering(
