@@ -63,7 +63,7 @@ def _schedule(db, travel, *, kind: str, day_no: int, end: time):
     db.commit()
 
 
-def main() -> None:
+def test_current_travel_end_time() -> None:
     original_now_kst = travel_service.now_kst
     db = _session()
     owner = db.get(User, 1)
@@ -129,4 +129,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_current_travel_end_time()

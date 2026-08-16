@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from main import app
 
 
-def main() -> None:
+def test_ticket_router_removed() -> None:
     ticket_paths = {
         route.path
         for route in app.routes
@@ -20,4 +20,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    test_ticket_router_removed()
