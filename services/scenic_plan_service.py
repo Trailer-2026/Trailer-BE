@@ -574,8 +574,17 @@ def _is_riding(ride: Ride, now: datetime) -> bool:
 
     앞쪽은 예정 출발 시각 그대로다. 열차가 늦게 떠나면 통과 시각도 함께 밀려 어차피
     발송되지 않으니, 여기서 좁힐 이유가 없다.
+
+    뒤쪽 꼬리는 **넓히기만 한다**(0으로 클램프). 보정값은 부호가 있어 예정보다 빨리 가는
+    열차면 음수이고, 그대로 더하면 꼬리가 음수가 돼 예정 도착 시각 **전에** 창이 닫힌다.
+    발송이 새지는 않는다 — 마지막 스팟의 통과 시각이 최대 `arr_at + 보정값`이라
+    발송 창 끝(`+ SEND_WINDOW_MINUTES`)과 클램프 전 꼬리가 정확히 같아서, 창이 닫힌
+    뒤에 보낼 것이 애초에 남지 않기 때문이다. 클램프가 막는 건 **재보정 잠금**이다:
+    GPS가 엉뚱한 구간에 매칭돼 큰 음수 보정값(MAX_OFFSET_MINUTES까지 허용)이 박히면
+    `calibrate`도 이 판정을 거치므로(`_current_ride_of_user`) 그 탑승을 못 찾게 되고,
+    좌표를 다시 보내도 고칠 수가 없어 잘못된 값이 TTL 내내 고착된다.
     """
-    tail = _offset_for(ride) + timedelta(minutes=SEND_WINDOW_MINUTES)
+    tail = max(_offset_for(ride) + timedelta(minutes=SEND_WINDOW_MINUTES), timedelta(0))
     return ride.dep_at <= now <= ride.arr_at + tail
 
 
