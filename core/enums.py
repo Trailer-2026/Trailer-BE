@@ -28,7 +28,7 @@ class NotificationType(str, enum.Enum):
     TRAVEL_D1 = "TRAVEL_D1"              # 일정이 하루 남았습니다
     TRAVEL_DELETED = "TRAVEL_DELETED"    # 일정에서 삭제되었습니다
     TRAIN_D10M = "TRAIN_D10M"            # 열차 출발 10분 전 (추천 코스·직접 입력 승차권 공통)
-    SCENERY = "SCENERY"                  # 실시간 창밖 풍경 (푸시만, 이력 미기록)
+    SCENERY = "SCENERY"                  # 창밖 풍경 (이력은 중복 판정용, 알림 화면 목록엔 안 뜬다)
     STAMP_EARNED = "STAMP_EARNED"        # 마이페이지 스탬프 획득
 
 

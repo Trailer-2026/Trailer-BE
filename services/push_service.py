@@ -1,7 +1,7 @@
 """푸시 알림 발송 서비스 — 수신 설정 확인 → 이력 저장 → FCM 발송을 한 곳에서 처리한다.
 
-알림은 어디까지나 부가 기능이라 실패해도 호출한 쪽(여행 저장, 배치 루프, 풍경 조회)의
-동작을 막지 않는다. 그래서 이 모듈의 함수는 예외를 밖으로 내보내지 않고 경고만 남긴다.
+알림은 어디까지나 부가 기능이라 실패해도 호출한 쪽(여행 저장, 배치 루프)의 동작을
+막지 않는다. 그래서 이 모듈의 함수는 예외를 밖으로 내보내지 않고 경고만 남긴다.
 
 읽기(알림 화면 목록·읽음 처리)는 notification_service가 맡는다 — 발송/조회 책임 분리.
 """
@@ -46,16 +46,13 @@ def notify(
     db: Session, user_idx: int, ntype: NotificationType, title: str, body: str,
     travel_idx: int | None = None, scenic_spot_idx: int | None = None,
     schedule_idx: int | None = None, ticket_idx: int | None = None,
-    stamp_type: str | None = None,
-    record: bool = True, image_url: str | None = None,
+    stamp_type: str | None = None, image_url: str | None = None,
 ) -> bool:
     """수신 설정을 확인하고 이력을 남긴 뒤 사용자의 모든 기기로 푸시한다. 발송했으면 True.
 
     - 설정이 OFF면 이력도 남기지 않고 False (알림 화면에도 안 뜨는 게 자연스럽다).
     - `image_url`은 푸시 배너에 함께 뜨는 사진(현재는 풍경 알림만 쓴다). 이력에는 남기지
-      않는다 — 알림 화면 목록은 텍스트 줄이고, 사진이 붙는 풍경은 애초에 이력이 없다.
-    - `record=False`면 푸시만 보내고 이력을 남기지 않는다 — 알림 화면 목록에 쌓지 않을
-      종류(풍경)를 위한 것이다.
+      않는다 — 알림 화면 목록은 텍스트 줄이고, 풍경은 애초에 그 목록에 뜨지 않는다.
     - 이력을 먼저 커밋해, FCM 호출이 실패해도 알림 화면에는 남게 한다. 즉 False라도
       이력은 남아 있을 수 있고(FCM 실패), 중복 발송 판정은 이 이력을 기준으로 한다 —
       Firebase 장애 시 같은 알림을 다음 주기에 다시 보내지 않는다(at-most-once).
@@ -66,13 +63,12 @@ def notify(
         if not _is_enabled(db, user_idx, ntype):
             return False
 
-        if record:
-            notification_log_dao.create(
-                db, user_idx=user_idx, notification_type=ntype.value, title=title, body=body,
-                travel_idx=travel_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx,
-                stamp_type=stamp_type,
-            )
-            db.commit()
+        notification_log_dao.create(
+            db, user_idx=user_idx, notification_type=ntype.value, title=title, body=body,
+            travel_idx=travel_idx, schedule_idx=schedule_idx, ticket_idx=ticket_idx,
+            stamp_type=stamp_type, scenic_spot_idx=scenic_spot_idx,
+        )
+        db.commit()
 
         # data는 앱이 알림을 탭했을 때 어느 화면을 열지 판단하는 딥링크 정보.
         # 해당 없는 키는 빼서 보낸다(FCM data 값은 모두 문자열이라 빈 값과 구분이 안 된다).
@@ -90,7 +86,7 @@ def notify(
             data["stamp_type"] = stamp_type
         result = fcm_service.send_push(db, user_idx, title, body, data=data, image_url=image_url)
 
-        # 발송 흔적을 남긴다 — 풍경은 이력도 안 남아서 이 로그가 유일한 확인 수단이다.
+        # 발송 흔적을 남긴다 — 풍경은 알림 화면에 안 떠서 이 로그가 확인 수단이다.
         # sent=0은 그 사용자의 기기 토큰이 하나도 등록돼 있지 않다는 뜻(에러 아님).
         logger.info(
             "알림 발송 user=%s type=%s sent=%d failed=%d | %s",
@@ -247,31 +243,37 @@ def notify_stamp_earned(db: Session, user_idx: int, stamp_type: str, stamp_title
     )
 
 
-def notify_scenery(db: Session, user, items: list[dict], to_station: str) -> bool:
-    """구간별 창밖 관광지 조회 결과로 풍경 알림을 보낸다. 보냈으면 True.
+def notify_scenery(
+    db: Session, user, *, to_station: str, scenic_spot_idx: int,
+    image_url: str | None = None, travel_idx: int | None = None,
+    schedule_idx: int | None = None, ticket_idx: int | None = None,
+) -> bool:
+    """'지금 OO역 스팟을 지나고 있어요' — 열차가 풍경 구간에 들어섰을 때 발송. 보냈으면 True.
 
-    관광지 판정은 호출 측(scenic_spot_service)이 이미 끝냈고, 여기서는 알림만 맡는다.
-    보이는 곳이 없으면 보내지 않는다(빈 알림 방지).
+    언제 어느 구간인지는 scenic_plan_service가 판정하고, 여기서는 알림만 맡는다.
 
-    중복 억제는 하지 않는다 — 조회할 때마다 보낸다. 호출 빈도 조절은 앱 몫이다.
-    그래서 **이력도 남기지 않는다**(record=False): 알림 화면에서 풍경은 목록이 아니라
-    상단 카드로 따로 뜨고, 그 카드는 조회 응답(based_at·items)으로 그리면 된다. 이력을
-    남기면 아무도 읽지 않는 행만 호출 횟수만큼 쌓인다.
+    **탑승 1건에서 스팟 1개당 1회**다. 시각표를 저장하지 않고 1분마다 다시 계산하는
+    구조라(scenic_plan_service) 같은 구간이 발송 창 안에서 여러 번 잡힌다. 호출측이 이미
+    보낸 스팟을 걸러내지만 그건 빠른 경로일 뿐이고, 최종 방어는 notification_log의 부분
+    유니크 인덱스가 맡는다 — 늦게 INSERT한 쪽이 거기서 걸려 notify 안에서 롤백되고 푸시도
+    나가지 않는다(D-1·탑승 알림과 같은 구조).
 
-    푸시 문구는 구간 기준("지금 OO역 스팟을 지나고 있어요")이지만, 딥링크와 사진은 가장
-    가까운 관광지(items[0]) 기준이다 — 카테고리별 일러스트를 골라 배너에 함께 띄운다.
-    image_url은 호출 측(scenic_spot_service)이 item에 이미 채워 둔 값을 그대로 쓴다.
-    조회 응답의 카드와 푸시 배너가 같은 그림이어야 해서, 고르는 곳을 한 군데로 둔다.
+    그래서 다른 알림과 달리 **이력을 남기는 목적이 중복 판정 하나**다. 알림 화면 목록에는
+    뜨지 않는다 — 화면에서 풍경은 목록의 한 줄이 아니라 상단 카드이고, 목록에서 빼는 건
+    notification_log_dao._HIDDEN_TYPES가 맡는다.
+
+    딥링크와 배너 사진은 그 구간의 대표 관광지 기준이다. 사진은 카테고리별 일러스트라
+    조회 응답의 카드와 같은 값을 쓴다(utils.scenic.scenery_image_url 한 군데서 고른다).
     """
-    if not items:
-        return False
     return notify(
         db, user.user_idx, NotificationType.SCENERY,
         title=_TITLE_SCENERY,
         body=_scenery_body(user.nickname, to_station),
-        scenic_spot_idx=items[0].get("scenic_spot_idx"),
-        record=False,
-        image_url=items[0].get("image_url"),
+        travel_idx=travel_idx,
+        schedule_idx=schedule_idx,
+        ticket_idx=ticket_idx,
+        scenic_spot_idx=scenic_spot_idx,
+        image_url=image_url,
     )
 
 

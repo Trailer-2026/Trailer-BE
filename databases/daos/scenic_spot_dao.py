@@ -12,7 +12,7 @@ from utils.scenic import (
 logger = logging.getLogger(__name__)
 
 
-def _resolve_side(seg: ScenicSpotSegment, from_station: str, to_station: str) -> str | None:
+def resolve_side(seg: ScenicSpotSegment, from_station: str, to_station: str) -> str | None:
     """진행 방향(출발역→도착역)에 맞춰 segment의 좌/우(left|right)를 하나로 확정한다.
 
     저장된 segment 기준 출발→도착 정방향이면 side_hint_forward, 역방향이면 side_hint_reverse.
@@ -20,6 +20,39 @@ def _resolve_side(seg: ScenicSpotSegment, from_station: str, to_station: str) ->
     if seg.from_station == from_station and seg.to_station == to_station:
         return seg.side_hint_forward
     return seg.side_hint_reverse  # 프론트에서 역쌍 매칭만 넘어온다 가정
+
+
+def segments_on_route(
+    db: Session, station_names: list[str],
+) -> list[tuple[ScenicSpotSegment, ScenicSpot]]:
+    """양끝이 모두 경로 위에 있는 segment를 관광지와 함께 한 번에 조회한다.
+
+    풍경 알림 시각표(scenic_plan_service)가 '이 열차가 지나는 구간에 뭐가 있나'를 물을 때
+    쓴다. search_on_segment가 역쌍 하나를 보는 것과 달리 여기는 **경로 전체**를 한 방에
+    받는다 — 정차역이 열 곳이면 구간이 아홉 개라 쌍마다 조회하면 그만큼 왕복한다.
+
+    인접 쌍으로 좁히지 않고 '양끝이 경로에 있으면' 다 가져오는 이유: segment가 어느
+    granularity로 등록돼 있는지 보장이 없다. KTX처럼 중간역을 통과하는 열차는 인접 쌍이
+    (서울역, 대전역)인데 segment는 (광명역, 천안아산역) 단위로 등록돼 있을 수 있고, 그러면
+    인접 쌍 매칭으로는 아무것도 못 찾는다. 호출측이 역별 진행률을 이미 알고 있어 양끝만
+    경로에 있으면 위치를 계산할 수 있다.
+
+    자연 카테고리·미삭제만 남기는 필터는 search_on_segment와 같다.
+    """
+    if len(station_names) < 2:
+        return []
+    return (
+        db.query(ScenicSpotSegment, ScenicSpot)
+        .join(ScenicSpot, ScenicSpot.scenic_spot_idx == ScenicSpotSegment.scenic_spot_idx)
+        .filter(
+            ScenicSpotSegment.deleted_at.is_(None),
+            ScenicSpot.deleted_at.is_(None),
+            ScenicSpot.category.in_(SCENIC_NATURAL_CATEGORIES),
+            ScenicSpotSegment.from_station.in_(station_names),
+            ScenicSpotSegment.to_station.in_(station_names),
+        )
+        .all()
+    )
 
 
 def search_on_segment(
@@ -97,6 +130,6 @@ def search_on_segment(
             "name": spot.name,
             "category": spot.category,
             "distance_m": round(distance_m, 1),
-            "side": _resolve_side(seg, from_station, to_station),
+            "side": resolve_side(seg, from_station, to_station),
         })
     return results
