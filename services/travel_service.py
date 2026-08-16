@@ -389,19 +389,28 @@ def current_travel(db: Session, user) -> HomeTravelCard | None:
     """홈 화면 여행 카드 1건 — 진행 중 우선, 없으면 가장 가까운 예정, 둘 다 없으면 None.
 
     status 컬럼은 저장 시 항상 PLANNED이고 자동 전환하는 배치가 없으므로, 진행 여부는
-    KST 오늘과 여행 기간으로 계산한다(스케줄러 불필요).
+    KST 현재 시각과 여행 기간으로 계산한다. 종료일에는 마지막 일정의
+    end_time(기차면 도착 시각)을 넘기면 종료되고, 일정이 없으면 자정을 기준으로 한다.
     """
     travels = travel_dao.list_by_user(db, user.user_idx)
-    today = now_kst().date()
-    ongoing = [t for t in travels if t.start_date <= today <= t.end_date]
-    upcoming = sorted((t for t in travels if t.start_date > today), key=lambda t: t.start_date)
+    now = now_kst()
+    end_times = _status_end_times(db, travels, now.date())
+    statuses = {
+        t.travel_idx: _effective_status_at(t, now, end_times.get(t.travel_idx))
+        for t in travels
+    }
+    ongoing = [t for t in travels if statuses[t.travel_idx] == "ONGOING"]
+    upcoming = sorted(
+        (t for t in travels if statuses[t.travel_idx] == "PLANNED"),
+        key=lambda t: t.start_date,
+    )
     chosen = ongoing[0] if ongoing else (upcoming[0] if upcoming else None)
     if chosen is None:
         return None
     return HomeTravelCard(
         travel_idx=chosen.travel_idx, title=chosen.title,
         start_date=chosen.start_date, end_date=chosen.end_date,
-        status=_effective_status(chosen.start_date, chosen.end_date, today),
+        status=statuses[chosen.travel_idx],
         # 지정 사진 → 첫 일정 이미지(AI 추천 여행) → 지역 기본 사진 순. 카드 사진은 절대 비지 않는다.
         cover_image_url=chosen.cover_image_url
         or schedule_dao.cover_image(db, chosen.travel_idx)
@@ -410,26 +419,38 @@ def current_travel(db: Session, user) -> HomeTravelCard | None:
 
 
 def all_travels(db: Session, user) -> TravelListResponse:
-    """전체 여행 목록 — 예정·진행 중·지난 여행을 한 번에. 각 카드의 status는 날짜로 계산한다.
+    """전체 여행 목록 — 예정·진행 중·지난 여행을 한 번에.
 
     정렬은 화면 순서 그대로다: 아직 안 끝난 여행(진행 중·예정)을 시작일 오름차순으로 위에 두고
     (진행 중이 start_date가 가장 이르므로 자연히 맨 위), 그 뒤에 지난 여행을 최근 종료순으로 붙인다.
-    썸네일·좋아요는 past_travels와 같이 각 1쿼리로 일괄 조회한다(N+1 회피).
+    종료일은 마지막 일정 종료 시각으로 판정하며, 종료 시각·썸네일·좋아요는 일괄 조회한다.
     """
-    today = now_kst().date()
+    now = now_kst()
     travels = travel_dao.list_by_user(db, user.user_idx)
     idxs = [t.travel_idx for t in travels]
     covers = schedule_dao.cover_images(db, idxs)
     liked = travel_like_dao.liked_travel_idxs(db, user.user_idx, idxs)
+    end_times = _status_end_times(db, travels, now.date())
+    statuses = {
+        t.travel_idx: _effective_status_at(t, now, end_times.get(t.travel_idx))
+        for t in travels
+    }
 
-    upcoming = sorted((t for t in travels if t.end_date >= today), key=lambda t: t.start_date)
-    past = sorted((t for t in travels if t.end_date < today), key=lambda t: t.end_date, reverse=True)
+    upcoming = sorted(
+        (t for t in travels if statuses[t.travel_idx] != "COMPLETED"),
+        key=lambda t: t.start_date,
+    )
+    past = sorted(
+        (t for t in travels if statuses[t.travel_idx] == "COMPLETED"),
+        key=lambda t: (t.end_date, t.travel_idx),
+        reverse=True,
+    )
 
     cards = [
         TravelCard(
             travel_idx=t.travel_idx, title=t.title,
             start_date=t.start_date, end_date=t.end_date,
-            status=_effective_status(t.start_date, t.end_date, today),
+            status=statuses[t.travel_idx],
             cover_image_url=t.cover_image_url or covers.get(t.travel_idx) or _default_cover(t.region),
             liked=t.travel_idx in liked,
         )
@@ -441,11 +462,16 @@ def all_travels(db: Session, user) -> TravelListResponse:
 def past_travels(db: Session, user) -> PastTravelListResponse:
     """여행기록 화면의 '지난 여행' 목록 — 이미 종료된 여행만 최신순으로.
 
-    종료 여부는 _effective_status의 COMPLETED 정의(오늘 > end_date)와 같이 날짜로 판정한다.
+    종료일은 마지막 일정의 종료 시각(기차면 도착 시각)을 넘겼는지로 판정한다.
     썸네일·좋아요 여부는 여행 수와 무관하게 각 1쿼리로 일괄 조회한다(N+1 회피).
     """
-    today = now_kst().date()
-    travels = travel_dao.list_completed_by_user(db, user.user_idx, today)
+    now = now_kst()
+    candidates = travel_dao.list_past_candidates_by_user(db, user.user_idx, now.date())
+    end_times = _status_end_times(db, candidates, now.date())
+    travels = [
+        t for t in candidates
+        if _effective_status_at(t, now, end_times.get(t.travel_idx)) == "COMPLETED"
+    ]
     idxs = [t.travel_idx for t in travels]
     covers = schedule_dao.cover_images(db, idxs)
     liked = travel_like_dao.liked_travel_idxs(db, user.user_idx, idxs)
@@ -493,11 +519,16 @@ def travel_detail(db: Session, user, travel_idx: int) -> TravelDetailResponse:
         item.images = by_schedule.get(s.schedule_idx, [])
         group.items.append(item)
 
-    today = now_kst().date()
+    now = now_kst()
+    final_day_no = (travel.end_date - travel.start_date).days + 1
+    end_time = max(
+        (s.end_time for s in schedules if s.day_no == final_day_no),
+        default=None,
+    )
     return TravelDetailResponse(
         travel_idx=travel.travel_idx, title=travel.title,
         start_date=travel.start_date, end_date=travel.end_date, region=travel.region,
-        status=_effective_status(travel.start_date, travel.end_date, today),
+        status=_effective_status_at(travel, now, end_time),
         # 일정 이미지 폴백은 이미 읽어 둔 schedules에서 고른다(정렬이 보장돼 별도 쿼리가 필요 없다).
         cover_image_url=travel.cover_image_url
         or next((s.image_url for s in schedules if s.image_url), None)
@@ -645,6 +676,26 @@ def _effective_status(start: date, end: date, today: date) -> str:
     if today > end:
         return "COMPLETED"
     return "ONGOING"
+
+
+def _effective_status_at(travel, now: datetime, end_time: time | None) -> str:
+    """여행 상태를 KST 현재 시각까지 반영해 계산한다."""
+    status = _effective_status(travel.start_date, travel.end_date, now.date())
+    if status != "ONGOING" or now.date() != travel.end_date:
+        return status
+    if end_time is not None and now.time() > end_time:
+        return "COMPLETED"
+    return "ONGOING"
+
+
+def _status_end_times(db: Session, travels, today: date) -> dict[int, time]:
+    """오늘 종료되는 여행들의 최종 시각을 한 번에 조회한다."""
+    travel_days = {
+        t.travel_idx: (t.end_date - t.start_date).days + 1
+        for t in travels
+        if t.end_date == today
+    }
+    return schedule_dao.last_end_times_on_days(db, travel_days)
 
 
 def _day_bounds(segments) -> tuple[dict, dict]:
