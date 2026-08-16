@@ -37,6 +37,8 @@ from databases.models.ban import Ban
 from databases.models.notification import Notification
 from databases.models.notification_log import NotificationLog
 from databases.models.schedule import Schedule  # noqa: F401  notification_log의 FK 대상
+from databases.models.scenic_spot import ScenicSpot  # noqa: F401  notification_log의 FK 대상
+from databases.models.scenic_spot_segment import ScenicSpotSegment  # noqa: F401  ScenicSpot의 relationship 대상
 from databases.models.station import Station  # noqa: F401  ticket의 FK 대상
 from databases.models.ticket import Ticket
 from databases.models.travel import Travel  # noqa: F401  notification_log의 FK 대상
@@ -66,6 +68,11 @@ _ADDED_COLUMNS = (
     ("travel", "source", "VARCHAR(20)"),
     # 스탬프 획득 알림이 어느 칸인지 — FK가 아니라 종류 문자열이다(notification_log 참조).
     ("notification_log", "stamp_type", "VARCHAR(30)"),
+    # 풍경 알림이 어느 스팟이었는지 — schedule_idx/ticket_idx와 묶여 중복 판정 키가 된다.
+    (
+        "notification_log", "scenic_spot_idx",
+        "INTEGER REFERENCES scenic_spot(scenic_spot_idx)",
+    ),
     # 이벤트·마케팅 활용 동의. 알림 두 컬럼과 달리 기본값이 false다 — 선택 동의라
     # 이미 설정 행이 있는 사용자를 동의한 것으로 채우면 안 된다.
     ("notification", "marketing_agree", "BOOLEAN NOT NULL DEFAULT false"),
@@ -101,6 +108,12 @@ _ADDED_INDEXES = (
     "ON notification_log (user_idx, schedule_idx) WHERE type = 'TRAIN_D10M'",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_log_train_ticket "
     "ON notification_log (user_idx, ticket_idx) WHERE type = 'TRAIN_D10M'",
+    # 풍경 알림 '탑승 1건에서 스팟 1개당 1회'의 최종 방어. 발송 시각표를 저장하지 않고
+    # 1분마다 재계산하는 구조라 같은 구간이 발송 창 안에서 여러 번 잡힌다.
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_log_scenery_schedule "
+    "ON notification_log (user_idx, schedule_idx, scenic_spot_idx) WHERE type = 'SCENERY'",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_log_scenery_ticket "
+    "ON notification_log (user_idx, ticket_idx, scenic_spot_idx) WHERE type = 'SCENERY'",
     # 여행 상세·영상 렌더가 여행 단위로 사진을 훑는다(travel_image.travel_idx index=True와 같은 이름).
     "CREATE INDEX IF NOT EXISTS ix_travel_image_travel_idx ON travel_image (travel_idx)",
     # 탑승 알림 배치가 1분마다 도는 조회(ticket_dao.list_departing_on: dep_date IN (...))용.

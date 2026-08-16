@@ -21,6 +21,32 @@ def coord_by_name(db: Session, station_name: str) -> tuple[float, float] | None:
         return None
     return (row.latitude, row.longitude)
 
+def coords_by_names(
+    db: Session, station_names: list[str],
+) -> dict[str, tuple[float, float]]:
+    """역명 여러 개의 좌표를 IN 한 방으로 조회해 {역명: (위도, 경도)}로 반환.
+
+    좌표가 없는 역은 결과에서 빠진다 — 호출측이 `dict.get`으로 걸러 쓰면 된다.
+
+    **역을 훑는 루프에서는 coord_by_name 대신 이걸 써라.** 풍경 알림 시각표는 경로의
+    정차역을 전부(통과역 포함) 좌표로 바꾸는데, KTX 노선은 그게 30~40개라 역마다 부르면
+    한 번의 계산에 쿼리가 그만큼 나간다.
+    """
+    if not station_names:
+        return {}
+    rows = (
+        db.query(Station.station_name, Station.latitude, Station.longitude)
+        .filter(
+            Station.deleted_at.is_(None),
+            Station.station_name.in_(station_names),
+            Station.latitude.isnot(None),
+            Station.longitude.isnot(None),
+        )
+        .all()
+    )
+    return {name: (lat, lng) for name, lat, lng in rows}
+
+
 def get_by_idx(db: Session, station_idx: int) -> Station | None:
     """station_idx로 역 단건 조회 (soft-delete 제외)."""
     return db.query(Station).filter(

@@ -32,10 +32,9 @@ def send_push(
 ) -> PushResultResponse:
     """사용자의 모든 기기로 푸시를 발송하고, 죽은 토큰은 정리한다.
 
-    커밋은 죽은 토큰을 실제로 지웠을 때만 한다. 이 함수는 조회 요청 안에서도 불린다 —
-    풍경 알림은 이력을 남기지 않아(push_service.notify record=False)
-    GET /api/scenic-spots/nearby의 요청 세션에서 그대로 도는데, 남길 변경이 없는데도
-    커밋하면 조회가 쓰기 트랜잭션을 여는 꼴이 된다.
+    커밋은 죽은 토큰을 실제로 지웠을 때만 한다. 호출측(push_service.notify)이 이력을
+    이미 커밋한 뒤라 여기서 남길 변경은 죽은 토큰 정리뿐인데, 그것마저 없을 때 커밋하면
+    빈 트랜잭션을 여닫는 꼴이 된다.
     """
     tokens = fcm_token_dao.get_tokens_by_user(db, user_idx)
     if not tokens:
