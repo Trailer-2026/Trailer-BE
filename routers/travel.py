@@ -71,7 +71,8 @@ def create_manual_travel(
     summary="전체 여행 목록 조회",
     description="로그인한 사용자의 여행을 예정·진행 중·지난 구분 없이 한 번에 반환합니다. "
                 "카드마다 status(PLANNED | ONGOING | COMPLETED)가 담겨 프론트가 섹션을 나눌 수 있습니다. "
-                "status는 여행 기간과 오늘(KST)로 계산됩니다 — 시작 전 PLANNED, 기간 내 ONGOING, 종료 후 COMPLETED. "
+                "status는 KST 현재 시각으로 계산되며, 종료일에는 마지막 일정의 "
+                "종료 시각(기차면 도착 시각) 이후 COMPLETED가 됩니다. "
                 "정렬은 아직 끝나지 않은 여행(진행 중·예정)이 임박한 순으로 먼저 오고, 그 뒤에 지난 여행이 "
                 "최근 종료순으로 붙습니다. 카드 썸네일은 여행의 첫 일정 대표 이미지이고, liked는 내가 하트를 "
                 "누른 여행인지 여부입니다. 여행이 없으면 빈 배열을 반환합니다.\n\n"
@@ -91,7 +92,8 @@ def get_travels(
     summary="홈 화면 여행 카드 조회",
     description="로그인한 사용자의 '지금/곧 떠나는 여행' 1건을 반환합니다(홈 화면 여행 카드용). "
                 "진행 중(ONGOING) 여행을 우선하고, 없으면 가장 가까운 예정(PLANNED) 여행을, 둘 다 없으면 null을 반환합니다. "
-                "status는 여행 기간과 오늘(KST)로 계산됩니다 — 시작 전 PLANNED, 기간 내 ONGOING, 종료 후 COMPLETED.\n\n"
+                "종료일에는 마지막 일정의 종료 시각(기차면 도착 시각)까지 ONGOING이며, "
+                "종료일 일정이 없으면 다음 날 00:00부터 종료된 것으로 봅니다.\n\n"
                 "- data=null: 진행 중·예정 여행이 없음(홈 기본 화면 표시)\n"
                 "- 401: 인증 필요",
     response_model=CommonResponse[HomeTravelCard | None],
@@ -110,7 +112,7 @@ def get_current_travel(
     summary="지난 여행 목록 조회",
     description="로그인한 사용자의 '지난 여행'(이미 종료된 여행)을 종료일 내림차순으로 반환합니다"
                 "(여행기록 화면 지난 여행 섹션용). "
-                "종료 여부는 여행 종료일과 오늘(KST)로 계산하며, 종료일이 오늘 이전인 여행만 담습니다 — "
+                "종료일의 마지막 일정 종료 시각(기차면 도착 시각)이 지난 여행도 담습니다 — "
                 "진행 중·예정 여행은 포함되지 않아 status는 항상 COMPLETED입니다. "
                 "카드 썸네일은 여행의 첫 일정 대표 이미지이고, liked는 내가 하트를 누른 여행인지 여부입니다. "
                 "지난 여행이 없으면 빈 배열을 반환합니다.\n\n"
@@ -132,7 +134,8 @@ def get_past_travels(
                 "추천 코스 저장의 응답으로 받은 `travel_idx`를 파라미터로 이용합니다."
                 "일정 항목을 day_no(DAY)로 묶고 각 일자의 항목은 sequence 오름차순으로 정렬합니다. "
                 "각 일자의 날짜는 여행 시작일 + (day_no-1)로 계산하며, 기차 항목의 title은 "
-                "'KTX 101 서울→부산' 형태입니다. status는 여행 기간과 오늘(KST)로 계산됩니다.\n\n"
+                "'KTX 101 서울→부산' 형태입니다. status는 종료일의 마지막 일정 종료 시각까지 "
+                "반영해 계산됩니다.\n\n"
                 "- 404: 존재하지 않거나 본인 여행이 아님\n"
                 "- 401: 인증 필요",
     response_model=CommonResponse[TravelDetailResponse],

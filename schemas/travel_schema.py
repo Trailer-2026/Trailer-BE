@@ -109,7 +109,7 @@ class HomeTravelCard(BaseModel):
     title: str = Field(..., description="여행 제목")
     start_date: date = Field(..., description="여행 시작일")
     end_date: date = Field(..., description="여행 종료일")
-    status: str = Field(..., description="PLANNED | ONGOING | COMPLETED (여행 기간·오늘 KST 기준 계산)")
+    status: str = Field(..., description="PLANNED | ONGOING (종료일은 마지막 일정 종료 시각, 없으면 자정까지)")
     cover_image_url: str | None = Field(None, description="카드 썸네일 — 지정한 대표 사진 → 여행 첫 일정 대표 이미지 → 지역 기본 사진 순. 항상 값이 있다")
 
 
@@ -150,7 +150,7 @@ class TravelCard(BaseModel):
     start_date: date = Field(..., description="여행 시작일", examples=["2026-08-01"])
     end_date: date = Field(..., description="여행 종료일", examples=["2026-08-03"])
     status: str = Field(
-        ..., description="PLANNED | ONGOING | COMPLETED (여행 기간·오늘 KST 기준 계산)",
+        ..., description="PLANNED | ONGOING | COMPLETED (종료일은 마지막 일정 종료 시각 기준)",
         examples=["PLANNED"],
     )
     cover_image_url: str | None = Field(
@@ -284,7 +284,7 @@ class TravelDetailResponse(BaseModel):
     start_date: date = Field(..., description="여행 시작일")
     end_date: date = Field(..., description="여행 종료일")
     region: str | None = Field(None, description="대표 지역. 없으면 null")
-    status: str = Field(..., description="PLANNED | ONGOING | COMPLETED (여행 기간·오늘 KST 기준 계산)")
+    status: str = Field(..., description="PLANNED | ONGOING | COMPLETED (종료일은 마지막 일정 종료 시각 기준)")
     cover_image_url: str | None = Field(
         None, description="대표 사진 — 지정한 사진 → 첫 일정 대표 이미지 → 지역 기본 사진 순. 항상 값이 있다",
     )
