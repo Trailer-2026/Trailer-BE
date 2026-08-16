@@ -73,8 +73,8 @@ class NotificationLogItem(BaseModel):
     ticket_idx: int | None = Field(
         None,
         description="이 알림이 가리키는 직접 입력 승차권 PK — TRAIN_D10M에서만 채워집니다. "
-                    "탭하면 승차권 목록(GET /api/tickets)으로 보내면 됩니다. 추천 코스에서 나온 "
-                    "TRAIN_D10M은 travel_idx가 대신 채워지므로 여기가 null입니다",
+                    "추천 코스에서 나온 TRAIN_D10M은 travel_idx가 대신 채워지므로 "
+                    "여기가 null입니다",
         examples=[7],
     )
     stamp_type: StampType | None = Field(
