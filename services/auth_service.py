@@ -80,21 +80,46 @@ def refresh_token(token: str, db: Session) -> TokenResponse:
 
 
 def logout(token: str, db: Session) -> None:
-    """전달한 refresh 토큰을 무효화한다. 이미 만료/무효인 토큰이면 조용히 성공 처리."""
+    """전달한 refresh 토큰을 무효화하고 그 사용자의 기기 토큰을 모두 해제한다.
+
+    이미 만료/무효인 토큰이면 조용히 성공 처리(멱등).
+
+    **왜 그 기기 하나가 아니라 전부인가**: 로그아웃한 기기로 푸시가 계속 가면 안 되는데
+    (본문에 여행 제목·닉네임·좌석번호가 실려, 기기를 넘기거나 공유하면 다음 사람이 이전
+    사용자의 알림을 읽는다), 서버는 **어느 기기가 로그아웃하는지 알 수 없다** — access
+    토큰에 세션 식별자가 없고(core.security._create_token) refresh 토큰의 jti는 기기가
+    아니라 발급 회차라 회전 때마다 바뀐다. 앱이 기기 토큰을 같이 보내주면 정확히 하나만
+    끊을 수 있지만 그건 요청 스키마를 바꾸는 일이라, 우선 안전한 쪽(과하게 지우기)으로 뒀다.
+
+    대가는 다중 기기 사용자가 한 기기에서 로그아웃하면 **다른 기기도 앱을 다시 열어
+    토큰을 재등록할 때까지 푸시가 멈춘다**는 것. 놓친 알림은 알림 화면 이력에 남으므로
+    사라지지는 않는다. 이게 거슬리면 로그아웃 요청에 fcm_token을 선택 항목으로 받고
+    fcm_token_dao 에 소유자까지 함께 거는 삭제를 붙이면 된다(소유를 안 보면 토큰
+    문자열만으로 남의 기기 푸시를 끊는 수단이 된다 — 이 엔드포인트엔 access 인증이 없다).
+    """
     try:
         payload = decode_token(token, expected_type="refresh")
     except UnauthorizedException:
         return  # 이미 못 쓰는 토큰 → 로그아웃은 성공으로 간주(멱등)
 
+    # 기기 토큰 해제는 **살아 있던 세션을 실제로 끊었을 때만** 한다(revoke_by_jti는 아직
+    # 무효화되지 않은 행만 세므로 0이면 이미 로그아웃된 토큰의 재사용이다). 서명·만료만
+    # 보고 지우면, 폐기됐지만 아직 만료 전인 refresh 토큰(로그·백업에 남은 것)을 주워
+    # 반복 호출하는 것만으로 그 사용자의 푸시를 계속 꺼 버릴 수 있다.
     jti = payload.get("jti")
-    if jti:
-        refresh_token_dao.revoke_by_jti(db, jti)
-        db.commit()
+    if jti and refresh_token_dao.revoke_by_jti(db, jti):
+        fcm_token_dao.soft_delete_by_user(db, int(payload["sub"]))
+    db.commit()
 
 
 def logout_all(user_idx: int, db: Session) -> None:
-    """해당 사용자의 모든 refresh 토큰을 무효화한다 (모든 기기 로그아웃)."""
+    """해당 사용자의 모든 refresh 토큰과 기기 토큰을 무효화한다 (모든 기기 로그아웃).
+
+    기기 토큰까지 지우는 이유: '모든 기기에서 로그아웃'은 기기를 잃어버렸을 때 쓰는
+    기능인데, 세션만 끊고 푸시를 그대로 두면 남의 손에 있는 그 기기로 알림이 계속 간다.
+    """
     refresh_token_dao.revoke_all_for_user(db, user_idx)
+    fcm_token_dao.soft_delete_by_user(db, user_idx)
     db.commit()
 
 
@@ -107,8 +132,6 @@ def withdraw(user_idx: int, db: Session) -> None:
     현재 정리 대상: refresh_token, fcm_token, user.
     """
     refresh_token_dao.revoke_all_for_user(db, user_idx)
-    tokens = fcm_token_dao.get_tokens_by_user(db, user_idx)
-    if tokens:
-        fcm_token_dao.soft_delete_by_tokens(db, tokens)
+    fcm_token_dao.soft_delete_by_user(db, user_idx)
     user_dao.soft_delete(db, user_idx)
     db.commit()

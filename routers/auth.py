@@ -55,7 +55,9 @@ async def refresh(request_data: RefreshRequest, db: Session = Depends(get_db)):
 @router.post(
     "/logout",
     summary="로그아웃",
-    description="전달한 refresh token을 무효화합니다. (이미 만료/무효인 토큰이어도 성공 처리)",
+    description="전달한 refresh token을 무효화하고, 해당 사용자에게 등록된 FCM 기기 토큰을 "
+                "모두 해제합니다. (이미 만료/무효인 토큰이어도 성공 처리) "
+                "다른 기기의 푸시는 그 기기가 앱을 다시 열어 토큰을 재등록하면 복구됩니다.",
     response_model=CommonResponse[None],
 )
 async def logout(request_data: RefreshRequest, db: Session = Depends(get_db)):
@@ -66,7 +68,8 @@ async def logout(request_data: RefreshRequest, db: Session = Depends(get_db)):
 @router.post(
     "/logout-all",
     summary="모든 기기 로그아웃",
-    description="현재 사용자에게 발급된 모든 refresh token을 무효화합니다. (access token 인증 필요)",
+    description="현재 사용자에게 발급된 모든 refresh token과 등록된 FCM 기기 토큰을 "
+                "무효화합니다. (access token 인증 필요)",
     response_model=CommonResponse[None],
 )
 async def logout_all(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):

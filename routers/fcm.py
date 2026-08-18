@@ -5,7 +5,7 @@ from databases.database import get_db
 from databases.models.user import User
 from core.response import CommonResponse
 from core.security import get_current_user
-from schemas.fcm_schema import FcmTokenRequest, TestPushRequest, PushResultResponse
+from schemas.fcm_schema import FcmTokenRequest
 from services import fcm_service
 
 router = APIRouter(prefix="/api/fcm", tags=["FCM"])
@@ -26,19 +26,7 @@ def register_fcm_token(
     fcm_service.register_token(db, current_user.user_idx, request_data.token)
     return CommonResponse.success_response("FCM 토큰 등록 성공")
 
-
-@router.post(
-    "/test-send",
-    summary="푸시 발송 테스트",
-    description="지정한 사용자의 모든 기기로 테스트 푸시를 발송합니다. 등록된 토큰이 "
-                "없으면 sent/failed 모두 0을 반환합니다. (개발용)",
-    response_model=CommonResponse[PushResultResponse],
-)
-def test_send_push(
-    request_data: TestPushRequest,
-    db: Session = Depends(get_db),
-):
-    result = fcm_service.send_push(
-        db, request_data.user_idx, request_data.title, request_data.body
-    )
-    return CommonResponse.success_response("푸시 발송 완료", data=result)
+# 푸시 발송 테스트(POST /api/fcm/test-send)는 삭제했다 — 인증 없이 요청 본문의 user_idx로
+# 임의 사용자에게 임의 문구를 쏠 수 있었다(응답의 sent 수로 계정 열거도 됐다). 개발용
+# 확인은 /token 등록 후 실제 트리거(여행 저장 등)로 한다. 되살릴 거면 get_current_user를
+# 걸고 대상은 current_user 고정 — 대상 user_idx를 본문으로 받는 형태로는 두지 마라.
