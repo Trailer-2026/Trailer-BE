@@ -29,6 +29,14 @@ def create(db: Session, user_idx: int, token: str) -> FcmToken:
     return row
 
 
+def soft_delete_by_user(db: Session, user_idx: int) -> int:
+    """사용자의 모든 기기 토큰을 soft delete. 영향받은 행 수 반환. (로그아웃·탈퇴)"""
+    return db.query(FcmToken).filter(
+        FcmToken.user_idx == user_idx,
+        FcmToken.deleted_at.is_(None),
+    ).update({"deleted_at": func.now()}, synchronize_session=False)
+
+
 def soft_delete_by_tokens(db: Session, tokens: list[str]) -> int:
     """주어진 토큰들을 soft delete(deleted_at 세팅). 영향받은 행 수 반환."""
     if not tokens:

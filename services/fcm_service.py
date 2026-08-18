@@ -14,11 +14,23 @@ def register_token(db: Session, user_idx: int, token: str) -> None:
 
     동일 토큰이 이미 있으면 소유 사용자만 갱신(기기 주인이 바뀐 경우),
     없으면 새로 생성한다.
+
+    **살아 있는 남의 토큰을 가져오는 건 경고로 남긴다.** 토큰 문자열만 알면 누구나 자기
+    계정에 붙일 수 있어(소유를 증명할 수단이 FCM엔 없다) 피해자는 자기 알림을 못 받고
+    그 기기엔 공격자 계정의 알림이 뜬다. 그렇다고 거절할 수는 없다 — 세션이 만료돼
+    로그아웃을 못 거친 기기에 다른 계정이 로그인하는 정상 경로가 여기로 오고, 막으면
+    그 기기는 아무 신호 없이 푸시를 영영 못 받는다. 막는 대신 흔적을 남겨 탐지한다.
     """
     existing = fcm_token_dao.get_by_token_including_deleted(db, token)
     if existing:
         # 같은 토큰이 이미 있으면 소유 사용자 갱신(기기 주인 변경). soft-delete된
         # 토큰이면 되살린다 — token UNIQUE 제약 때문에 새로 INSERT할 수 없다.
+        if existing.user_idx != user_idx and existing.deleted_at is None:
+            # 로그아웃을 거친 기기는 deleted_at이 차 있어 여기 안 걸린다 = 정상 인계는 조용하다.
+            logger.warning(
+                "FCM 토큰 소유자 교체(살아 있는 등록) user=%s→%s token=...%s",
+                existing.user_idx, user_idx, token[-8:],
+            )
         existing.user_idx = user_idx
         existing.deleted_at = None
     else:
