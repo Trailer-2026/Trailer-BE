@@ -18,6 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+# JWT 서명 키를 여기서 박는다 — config/properties_dev.ini 는 gitignore 라 CI 에 없고,
+# 그러면 SECRET_KEY 가 None 이라 jwt.encode 가 TypeError 로 죽는다. 이 점검이 보려는 건
+# 토큰 수명이지 서명 설정이 아니므로 로컬 설정 파일에 기대지 않는다.
+from core import security
+security.SECRET_KEY = "selfcheck-secret"
+
 from databases.models.base import Base
 from databases.models.fcm_token import FcmToken
 from databases.models.refresh_token import RefreshToken
