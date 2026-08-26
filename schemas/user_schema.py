@@ -16,7 +16,8 @@ class ProfileResponse(BaseModel):
         None, description="프로필 사진 URL (없으면 null → 프론트 기본 이미지)", examples=[None]
     )
     provider: str = Field(
-        ..., description="연동된 소셜 제공자 (google | kakao)", examples=["kakao"]
+        ..., description="연동된 소셜 제공자 (google | kakao | demo — demo는 스토어 심사용 계정)",
+        examples=["kakao"],
     )
 
 

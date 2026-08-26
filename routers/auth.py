@@ -7,6 +7,7 @@ from core.response import CommonResponse
 from core.security import get_current_user
 from schemas.auth_schema import (
     SocialLoginRequest,
+    DemoLoginRequest,
     GoogleIdTokenRequest,
     RefreshRequest,
     TokenResponse,
@@ -38,6 +39,21 @@ async def login_google(request_data: GoogleIdTokenRequest, db: Session = Depends
 )
 async def login_kakao(request_data: SocialLoginRequest, db: Session = Depends(get_db)):
     result = await auth_service.social_login("kakao", request_data.access_token, db)
+    return CommonResponse.success_response("로그인 성공", data=result)
+
+
+@router.post(
+    "/login/demo",
+    summary="데모 로그인 (스토어 심사용)",
+    description="Play 스토어 심사원이 소셜 제공자를 거치지 않고 로그인할 수 있도록 만든 "
+                "심사 전용 경로입니다. 정해진 데모 아이디/비밀번호가 맞으면 소셜 로그인과 "
+                "동일한 access/refresh token 을 발급하고, 틀리면 401을 반환합니다. "
+                "발급되는 계정은 권한 없는 일반 사용자입니다. "
+                "심사가 끝나면 이 엔드포인트를 삭제해 닫습니다.",
+    response_model=CommonResponse[TokenResponse],
+)
+async def login_demo(request_data: DemoLoginRequest, db: Session = Depends(get_db)):
+    result = auth_service.demo_login(request_data.username, request_data.password, db)
     return CommonResponse.success_response("로그인 성공", data=result)
 
 

@@ -37,6 +37,16 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 - JWT: short access token + refresh token with **rotation + DB whitelist** (`refresh_token` table, keyed by `jti`). Refresh revokes old `jti`, issues new; revoked-token reuse rejected; logout idempotent.
 - Protect an endpoint: add `current_user: User = Depends(get_current_user)`.
 
+**데모 로그인 (Play 스토어 심사용 — 심사 끝나면 지운다)**
+
+`POST /api/auth/login/demo` (`auth_service.demo_login`). 소셜 제공자를 거치지 않고 자체 JWT를 발급한다. 성공 응답은 소셜 로그인과 완전히 동일한 `CommonResponse[TokenResponse]`, 실패는 401.
+
+- **왜 만들었나**: 이 앱은 소셜 로그인뿐인데 **인증의 마지막 관문이 우리 서버가 아니라 구글/카카오 쪽에 있어 심사원 손에 들어가지 않는다**. 해외 IP로 접속하는 심사원은 구글이 위험 판정으로 막고, 카카오는 "카카오톡으로 로그인 확인"이 계정 주인 폰으로 가서 심사원이 누를 수가 없다. 우리가 끌 수 있는 관문이 아니라 우회로가 아니라 별도 경로를 만든 것이다. Play Console '앱 액세스'에 데모 자격증명을 넣는 것은 정식 허용 방식이다.
+- **자격증명이 코드 상수다**(`auth_service.DEMO_USERNAME`/`DEMO_PASSWORD`, 비교는 `secrets.compare_digest`). config 도 GitHub Secrets 도 안 쓴다 — 심사 한 번 하자고 배포 파이프라인에 손대지 않기로 한 선택이다. **대가**: 레포가 공개라 이 값은 공개 정보이고 아무나 데모 계정으로 로그인할 수 있다. 권한 없는 일반 사용자 하나지만 릴스·댓글은 홈 피드에 노출되므로 스팸이 들어올 수 있다.
+- **심사가 끝나면 반드시 지운다** — 라우터(`routers/auth.py` `login_demo`)·`auth_service.demo_login`·`DemoLoginRequest`·`provision._seed_demo_user`·`tests/test_demo_login.py`를 지우고 main 에 푸시하면 닫힌다. **설정을 지우는 것으로는 닫히지 않는다**(코드에 박혀 있다). 계정이 더럽혀졌으면 그 유저를 탈퇴 처리하면 다음 로그인 때 새로 만들어진다.
+- **계정은 기동 시 미리 만들어 둔다**(`provision._seed_demo_user` → `auth_service.ensure_demo_user`, 닉네임 "트레일러 데모"). 로그인이 get-or-create 라 없어도 생기지만, 미리 있어야 심사원이 볼 여행·릴스를 붙여 둘 수 있다. 시드가 실패해도 서버는 뜬다(심사용 편의가 부팅을 막으면 안 된다).
+- `provider="demo"` / `provider_id="store-review"` 라 `(provider, provider_id)` 유니크가 소셜 계정과 안 겹친다. 가입·토큰 발급은 `_login_with_social_user`를 그대로 타므로 **권한 없는 평범한 일반 사용자**다 — user 테이블에 password 컬럼도, 관리자 플래그도 없다. 해싱·rate limit 도 없다(뚫려도 얻는 게 이 계정 하나고, config 엔 이미 JWT 서명키가 평문이라 해싱에 실익이 없다).
+
 ## Config (`config/properties_dev.ini`, GITIGNORED — must exist locally)
 
 - `[app]` `db.url` (Postgres: `postgresql+psycopg2://...` — README's MySQL example is stale)

@@ -1,3 +1,6 @@
+import logging
+import secrets
+
 from sqlalchemy.orm import Session
 
 from databases.daos import user_dao, refresh_token_dao, fcm_token_dao
@@ -11,6 +14,21 @@ from core.security import (
 )
 from core.exceptions.custom import BadRequestException, UnauthorizedException
 from schemas.auth_schema import TokenResponse
+
+logger = logging.getLogger(__name__)
+
+# ── Play 스토어 심사용 데모 계정 ────────────────────────────────────────────
+# 심사가 끝나면 **이 블록과 demo_login·라우터를 지우고 배포**해야 닫힌다.
+# 자격증명을 코드에 둔 선택이라 설정 삭제만으로는 닫히지 않는다(레포가 공개라
+# 이 값은 공개 정보로 취급한다 — 아래 demo_login docstring 참고).
+DEMO_USERNAME = "trailer"
+DEMO_PASSWORD = "trailer2026!"
+
+# 계정의 (provider, provider_id). provider 가 'demo' 라 소셜 계정과 유니크 슬롯이
+# 겹치지 않는다 — 심사가 끝나도 이 행은 권한 없는 평범한 유저로 남을 뿐이다.
+DEMO_PROVIDER = "demo"
+DEMO_PROVIDER_ID = "store-review"
+DEMO_NICKNAME = "트레일러 데모"
 
 
 def _issue_tokens(user: User, db: Session) -> TokenResponse:
@@ -39,6 +57,56 @@ def _login_with_social_user(provider: str, social_user: dict, db: Session) -> To
     tokens = _issue_tokens(user, db)
     db.commit()
     return tokens
+
+
+def demo_login(username: str, password: str, db: Session) -> TokenResponse:
+    """Play 스토어 심사용 로그인 — 소셜 제공자를 거치지 않고 자체 JWT를 발급한다.
+
+    **왜 필요한가**: 이 앱은 소셜 로그인뿐인데, 인증의 마지막 관문이 우리 서버가 아니라
+    구글/카카오 쪽에 있어 심사원 손에 들어가지 않는다. 해외 IP에서 접속하는 심사원은
+    구글은 위험 판정으로 막히고, 카카오는 확인 메시지가 계정 주인 폰으로 가 누를 수가 없다.
+    Play Console '앱 액세스'에 데모 자격증명을 넣는 것은 정식 허용 방식이다.
+
+    **자격증명이 코드에 있다**(위 상수). 레포가 공개라 이 값은 공개 정보이고, 아무나 이
+    계정으로 로그인할 수 있다는 뜻이다 — 권한 없는 일반 사용자 하나지만 릴스·댓글은
+    홈 피드에 노출되므로 스팸이 들어올 수 있다. 그래서 **심사가 끝나면 반드시 지운다**:
+    이 함수와 라우터(`routers/auth.py` POST /api/auth/login/demo), 스키마
+    (`DemoLoginRequest`)를 지우고 main 에 푸시하면 닫힌다. 설정 파일을 지우는 것으로는
+    닫히지 않는다. 그 사이 계정이 더럽혀지면 그 유저를 탈퇴 처리하면 새로 만들어진다.
+
+    발급되는 계정은 권한 없는 평범한 일반 사용자다(가입 흐름을 소셜과 그대로 공유한다).
+    """
+    # compare_digest 는 str 이면 ASCII 만 받으므로(비ASCII 는 TypeError) bytes 로 비교한다.
+    # 둘 다 평가해 먼저 틀린 쪽으로 응답 시간이 갈리지 않게 한다.
+    ok_username = secrets.compare_digest(username.encode(), DEMO_USERNAME.encode())
+    ok_password = secrets.compare_digest(password.encode(), DEMO_PASSWORD.encode())
+    if not (ok_username and ok_password):
+        raise UnauthorizedException("아이디 또는 비밀번호가 올바르지 않습니다.")
+
+    logger.info("데모 로그인(심사용) 발급")
+    return _login_with_social_user(
+        DEMO_PROVIDER, {"provider_id": DEMO_PROVIDER_ID, "email": None}, db
+    )
+
+
+def ensure_demo_user(db: Session) -> User:
+    """데모 계정 행을 만들어 둔다(없을 때만). 서버 기동 시 1회 — databases/provision.py.
+
+    로그인이 get-or-create 라 미리 없어도 그 자리에서 만들어지지만, **심사원이 보기 전에
+    계정이 있어야 여행·릴스 같은 볼거리를 붙여 둘 수 있다**. 빈 계정으로 심사받으면
+    첫 화면이 텅 빈 채로 시작한다.
+
+    닉네임만 고정으로 준다 — 운영 DB에서 이 계정을 눈으로 찾을 때 랜덤 닉네임이면
+    매번 user_idx 를 뒤져야 한다. 그 외에는 권한 없는 평범한 일반 사용자다.
+    """
+    user = user_dao.get_by_provider(db, DEMO_PROVIDER, DEMO_PROVIDER_ID)
+    if user:
+        return user
+
+    user = user_dao.create(db, DEMO_PROVIDER, DEMO_PROVIDER_ID, None, nickname=DEMO_NICKNAME)
+    db.commit()
+    logger.info("데모 계정 생성 (user_idx=%s)", user.user_idx)
+    return user
 
 
 async def social_login(provider: str, access_token: str, db: Session) -> TokenResponse:

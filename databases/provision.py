@@ -26,6 +26,8 @@ ALTER/CREATE INDEX로 따로 챙기지 않으면 영영 생기지 않는다. 3�
 train_stop만 여기 없다 — standalone 스크립트(scripts/sync_train_stops.py)도 그 테이블을
 필요로 해서 lifespan이 아니라 train_stop_service 안에서 챙긴다.
 """
+import logging
+
 from sqlalchemy import text
 
 from databases.database import engine
@@ -46,6 +48,8 @@ from databases.models.travel_image import TravelImage
 from databases.models.travel_like import TravelLike
 from databases.models.user import User  # noqa: F401  모든 테이블의 FK 대상
 from databases.models.user_stamp import UserStamp
+
+logger = logging.getLogger(__name__)
 
 # 없으면 만들 테이블. **순서는 신경 쓰지 않는다** — create_all이 FK 의존 그래프를
 # 위상정렬해 부모부터 만든다(ticket·travel·schedule → notification_log).
@@ -150,11 +154,15 @@ def run() -> None:
     네 단계의 호출 순서가 곧 의존 관계다 — 컬럼을 붙이려면 테이블이 있어야 하고,
     백필·제약 변경은 컬럼이 있어야 하고, 인덱스를 걸려면 컬럼이 있어야 한다.
     각 단계는 자기 트랜잭션에서 커밋한다.
+
+    마지막 _seed_demo_user만 스키마가 아니라 데이터다 — 심사용 계정 한 행이라 따로
+    부트스트랩을 만들 만한 일이 아니라서 여기 얹었다. 심사가 끝나면 함께 지운다.
     """
     _create_tables()
     _alter_columns()
     _apply_fixups()
     _create_indexes()
+    _seed_demo_user()
 
 
 def _create_tables() -> None:
@@ -189,3 +197,25 @@ def _create_indexes() -> None:
     with engine.begin() as conn:
         for statement in _ADDED_INDEXES:
             conn.execute(text(statement))
+
+
+def _seed_demo_user() -> None:
+    """Play 스토어 심사용 데모 계정을 미리 만들어 둔다(없으면). 멱등.
+
+    로그인(POST /api/auth/login/demo)이 get-or-create 라 없어도 그 자리에서 생기지만,
+    **미리 있어야 심사원이 볼 여행·릴스를 붙여 둘 수 있다**.
+
+    실패해도 서버는 뜬다 — 심사용 편의라, 이것 때문에 부팅이 막히면 손해가 더 크다.
+    (스키마 단계와 달리 여기서 죽으면 서비스 전체가 안 뜬다.)
+    """
+    from databases.database import SessionLocal
+    from services import auth_service
+
+    db = SessionLocal()
+    try:
+        auth_service.ensure_demo_user(db)
+    except Exception as e:  # noqa: BLE001 - 부팅을 막지 않는다
+        db.rollback()
+        logger.warning("데모 계정 준비 실패(무시하고 계속): %s", e)
+    finally:
+        db.close()
