@@ -13,6 +13,12 @@ class GoogleIdTokenRequest(BaseModel):
     )
 
 
+class DemoLoginRequest(BaseModel):
+    """Play 스토어 심사용 데모 로그인 요청 (소셜 제공자를 거치지 않는다)."""
+    username: str = Field(..., description="데모 계정 아이디 (Play Console '앱 액세스'에 등록한 값)")
+    password: str = Field(..., description="데모 계정 비밀번호 (Play Console '앱 액세스'에 등록한 값)")
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str = Field(..., description="로그인/재발급 시 발급된 refresh token(JWT)")
 
@@ -25,7 +31,7 @@ class TokenResponse(BaseModel):
 
 class UserResponse(BaseModel):
     user_idx: int = Field(..., description="사용자 PK")
-    provider: str = Field(..., description="소셜 제공자 (google | kakao)")
+    provider: str = Field(..., description="소셜 제공자 (google | kakao | demo — demo는 스토어 심사용 계정)")
     email: Optional[str] = Field(None, description="이메일 (동의하지 않았으면 null)")
 
     class Config:
