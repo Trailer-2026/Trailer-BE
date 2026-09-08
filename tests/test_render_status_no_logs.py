@@ -53,11 +53,20 @@ def main() -> None:
         for secret in SECRETS:
             assert secret not in payload, f"{status} 응답에 서버 로그가 실렸다: {secret}"
 
-    # 3) 사용자 문구는 그대로 나가야 한다(마스킹한다고 사유까지 사라지면 안 된다).
+    # 3) 응답을 만드는 경로가 둘(_new_job 레지스트리 / _status_from_reels)이라 한쪽에만
+    #    필드를 더하면 조용히 어긋난다 — log_tail 이 스키마에만 남아 있던 게 그 사고였다.
+    import types
+
+    job_keys = set(video_service._new_job(1, 1)) - set(video_service._INTERNAL_JOB_KEYS)
+    reels_keys = set(video_service._status_from_reels(types.SimpleNamespace(reels_idx=1, url="")))
+    assert job_keys == fields, f"_new_job 과 응답 모델이 어긋났다: {job_keys ^ fields}"
+    assert reels_keys == fields, f"_status_from_reels 와 응답 모델이 어긋났다: {reels_keys ^ fields}"
+
+    # 4) 사용자 문구는 그대로 나가야 한다(마스킹한다고 사유까지 사라지면 안 된다).
     job = video_service._new_job(1, 1, status="failed", error=video_service.FAILED_MESSAGE)
     assert video_service.FAILED_MESSAGE in _serialized(job), "실패 사유가 응답에서 사라졌다"
 
-    # 4) 사용자 문구 자체에 서버 경로·예외 이름이 섞여 있으면 안 된다.
+    # 5) 사용자 문구 자체에 서버 경로·예외 이름이 섞여 있으면 안 된다.
     for message in (video_service.FAILED_MESSAGE, video_service.INTERRUPTED_MESSAGE):
         assert "/" not in message and "Traceback" not in message, message
 

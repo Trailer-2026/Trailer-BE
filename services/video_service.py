@@ -1108,11 +1108,14 @@ def sweep_stale_renders() -> None:
         logger.warning("중단된 렌더 정리 실패(무시)", exc_info=True)
 
 
-def _new_job(reels_idx: int, user_idx: int, **overrides) -> dict:
+def _new_job(reels_idx: int, user_idx: int | None, **overrides) -> dict:
     """job 레지스트리 항목의 기본 모양 — 진행률 응답(_job_snapshot)이 읽는 키를 한곳에 둔다.
 
     렌더를 띄우는 _spawn_render_job 과 부팅 스윕(sweep_stale_renders)이 같이 쓴다.
     스윕이 만드는 항목은 돌 스레드가 없으므로 status·error 를 덮어쓴다.
+
+    user_idx 가 None 인 건 스윕이 만난 옛 익명 릴스뿐이다(Reels.user_idx 는 nullable).
+    소유 확인(get_render_job)이 JWT 의 int 와 비교하므로 그 항목은 아무에게도 안 잡힌다.
     """
     return {
         "user_idx": user_idx,
