@@ -79,7 +79,20 @@ MODAL_CALL_SCRIPT = VIDEO_MAKER_DIR / "modal_call.py"
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
-RENDER_TIMEOUT_SECONDS = 60 * 30  # 30분 하드 캡
+RENDER_TIMEOUT_SECONDS = 60 * 30  # 30분 하드 캡 (슬롯을 잡은 뒤부터 센다 — 대기는 안 센다)
+# 동시에 돌릴 렌더 편수. 편당 Modal GPU 컨테이너를 modal_call.MAX_CHUNKS(2)개 쓰고,
+# 조각 합치기·BGM·인트로/아웃트로는 이 서버의 ffmpeg 가 한다. 무제한으로 띄우면 Modal
+# 동시 GPU 한도를 넘겨 렌더가 **실패로** 떨어지는데, 실패하면 자리표 릴스 행이 지워져
+# 사용자에겐 이유 없이 사라진 것처럼 보인다. 그래서 초과 요청은 거절하지 않고 슬롯이
+# 빌 때까지 기다린다(앱은 이미 진행률을 폴링하므로 phase 만 "대기 중"으로 바뀐다).
+# Modal 플랜을 올렸으면 환경변수로 키운다 — **N × 2 ≤ 계정 동시 GPU 한도**.
+_CONCURRENCY_ENV = os.getenv("RENDER_CONCURRENCY", "").strip()
+RENDER_CONCURRENCY = (
+    int(_CONCURRENCY_ENV) if _CONCURRENCY_ENV.isdigit() and int(_CONCURRENCY_ENV) > 0 else 3
+)
+# ponytail: 프로세스 안에서만 세는 슬롯이다. 다중 워커로 띄우면 워커마다 이 수만큼
+# 돌아 한도를 넘는다 — 그 땐 워커 수로 나눠 잡거나 큐를 밖으로 빼야 한다.
+_render_slots = threading.BoundedSemaphore(RENDER_CONCURRENCY)
 # render_video.py --theme 와 map_themes.js THEMES 에 맞춰 유지.
 ALLOWED_THEMES = {"default", "spring", "summer", "autumn", "winter"}
 
@@ -1497,13 +1510,24 @@ def _job_snapshot(job: dict) -> dict[str, object]:
 def _run_render_job(job: dict, command: list[str]) -> None:
     """렌더를 돌리고, 끝나면 입력 디렉터리·미완성 릴스를 정리한다 (스레드 진입점).
 
+    렌더 슬롯(_render_slots)이 다 차 있으면 여기서 기다린다. 정리(디렉터리 삭제·
+    릴스 정리)는 슬롯을 놓은 뒤에 하므로 GPU 자리를 붙잡지 않는다.
+
     성공·실패·예외 어느 쪽이든 uploads/<job> 를 지운다. 안 지우면 업로드된
     원본 사진이 계속 쌓여 디스크가 찬다(렌더 산출물과 같은 이유). 끝내 done 이
     되지 못했으면 시작할 때 만들어 둔 릴스 행도 소프트 삭제한다 — 영상 없는
     자리표 행이 DB 에 남지 않게.
     """
     try:
-        _render_job(job, command)
+        with _jobs_lock:
+            job["phase"] = "대기 중"
+        with _render_slots:
+            with _jobs_lock:
+                # 대기 시간을 그대로 두면 ETA(경과 × 남은 비율)가 통째로 부풀어
+                # "5% 인데 1시간 남음"이 나간다. 렌더 시작 시각을 여기서 다시 잡아
+                # elapsed_seconds·eta_seconds 가 순수 렌더 시간이 되게 한다.
+                job.update(started_at=time.time(), phase="렌더 준비 중")
+            _render_job(job, command)
     except Exception as error:  # 예상 못 한 예외도 job 상태에 남긴다
         logger.exception("렌더 작업 처리 중 오류 (reels_idx=%s)", job.get("reels_idx"))
         with _jobs_lock:

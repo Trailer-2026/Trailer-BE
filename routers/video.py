@@ -469,7 +469,11 @@ def insert_image_clip(
     "/render/{reels_idx}",
     summary="영상 렌더링 진행률 조회 (reels_idx)",
     description="렌더 시작 응답으로 받은 reels_idx 로 진행률(percent), 현재 단계, 경과/예상 "
-                "남은 시간을 조회합니다. status 가 done 이면 video_url(=reels_url)로 영상을 "
+                "남은 시간을 조회합니다. 서버가 한 번에 돌리는 렌더 편수에 상한이 있어, 앞선 "
+                "렌더가 밀려 있으면 status=running 인 채 phase 가 '대기 중'으로 머뭅니다"
+                "(요청이 거절되는 것이 아니라 순서가 오면 자동으로 시작하며, 경과·예상 "
+                "시간은 실제 렌더가 시작된 시점부터 셉니다). "
+                "status 가 done 이면 video_url(=reels_url)로 영상을 "
                 "받을 수 있고, failed 면 error 에 사유가 담기며 그 릴스 행은 삭제됩니다. "
                 "진행 정보는 서버 메모리에만 유지되므로 렌더 도중 서버가 재시작되면 "
                 "status=unknown 으로 응답합니다(완료된 릴스는 재시작 후에도 done). 본인 "
