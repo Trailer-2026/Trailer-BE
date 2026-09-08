@@ -39,7 +39,8 @@ def _check_env_parsing() -> None:
     _reload("5")
     assert video_service.RENDER_CONCURRENCY == 5, video_service.RENDER_CONCURRENCY
     # 배포 환경변수는 사람이 손으로 넣는다 — 오타·빈 값·0 에 서버가 죽으면 안 된다.
-    for bad in ("", "쓰레기", "-1", "0", "2.5"):
+    # "²" 는 isdigit() 이 True 라 숫자로 보이지만 int() 는 ValueError 를 낸다.
+    for bad in ("", "쓰레기", "-1", "0", "2.5", "²", " "):
         _reload(bad)
         assert video_service.RENDER_CONCURRENCY == 3, f"{bad!r} → {video_service.RENDER_CONCURRENCY}"
     _reload(None)

@@ -86,10 +86,13 @@ RENDER_TIMEOUT_SECONDS = 60 * 30  # 30분 하드 캡 (슬롯을 잡은 뒤부터
 # 사용자에겐 이유 없이 사라진 것처럼 보인다. 그래서 초과 요청은 거절하지 않고 슬롯이
 # 빌 때까지 기다린다(앱은 이미 진행률을 폴링하므로 phase 만 "대기 중"으로 바뀐다).
 # Modal 플랜을 올렸으면 환경변수로 키운다 — **N × 2 ≤ 계정 동시 GPU 한도**.
-_CONCURRENCY_ENV = os.getenv("RENDER_CONCURRENCY", "").strip()
-RENDER_CONCURRENCY = (
-    int(_CONCURRENCY_ENV) if _CONCURRENCY_ENV.isdigit() and int(_CONCURRENCY_ENV) > 0 else 3
-)
+# 값이 이상해도 부팅을 막지 않고 기본값으로 떨어진다. 판정은 isdigit() 이 아니라
+# int() 로 해야 한다 — "²" 같은 문자는 isdigit() 이 True 인데 int() 는 ValueError 다.
+try:
+    _concurrency = int(os.getenv("RENDER_CONCURRENCY", ""))
+except ValueError:
+    _concurrency = 0
+RENDER_CONCURRENCY = _concurrency if _concurrency > 0 else 3
 # ponytail: 프로세스 안에서만 세는 슬롯이다. 다중 워커로 띄우면 워커마다 이 수만큼
 # 돌아 한도를 넘는다 — 그 땐 워커 수로 나눠 잡거나 큐를 밖으로 빼야 한다.
 _render_slots = threading.BoundedSemaphore(RENDER_CONCURRENCY)
