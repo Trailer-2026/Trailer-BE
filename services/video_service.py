@@ -970,8 +970,8 @@ def upload_reels(
 _jobs: dict[int, dict] = {}
 _jobs_lock = threading.Lock()
 
-# 레지스트리에 남길 job 수 상한. 등록만 하고 지우지 않으면 재시작 전까지 계속 쌓인다
-# (항목당 log_tail 이 최대 2KB). 끝난 job 을 바로 버리지 않는 이유는 **실패 사유**다 —
+# 레지스트리에 남길 job 수 상한. 등록만 하고 지우지 않으면 재시작 전까지 계속 쌓인다.
+# 끝난 job 을 바로 버리지 않는 이유는 **실패 사유**다 —
 # 렌더가 실패하면 자리표 릴스 행이 삭제되므로, 여기서 지우면 폴링하던 클라이언트가
 # error 대신 404 를 받는다. 그래서 '오래된 끝난 job 부터' 덜어낸다.
 _MAX_JOBS = 200
@@ -1129,7 +1129,6 @@ def _new_job(reels_idx: int, user_idx: int, **overrides) -> dict:
         "bgm": None,
         "video_url": None,
         "error": None,
-        "log_tail": "",
         **overrides,
     }
 
@@ -1574,7 +1573,6 @@ def _status_from_reels(reels) -> dict[str, object]:
         "video_url": reels.url or None,
         "reels_url": reels.url or None,
         "error": None if done else "렌더 진행 상태를 알 수 없습니다 (서버가 재시작되었을 수 있습니다).",
-        "log_tail": "",
     }
 
 
@@ -1719,7 +1717,6 @@ def _render_job(job: dict, command: list[str]) -> None:
             status="failed",
             error="렌더링이 제한 시간(30분)을 초과했습니다.",
             elapsed_seconds=elapsed,
-            log_tail=stdout[-2000:],
         )
         return
     if returncode != 0:
@@ -1733,7 +1730,6 @@ def _render_job(job: dict, command: list[str]) -> None:
             status="failed",
             error=FAILED_MESSAGE,
             elapsed_seconds=elapsed,
-            log_tail=stdout[-2000:],
         )
         return
 
@@ -1747,11 +1743,9 @@ def _render_job(job: dict, command: list[str]) -> None:
             status="failed",
             error=FAILED_MESSAGE,
             elapsed_seconds=elapsed,
-            log_tail=stdout[-2000:],
         )
         return
 
-    log_tail = stdout[-2000:]
     update(percent=99.0, phase="영상 업로드(버킷)")
     video_path = OUTPUT_DIR / output_name
     try:
@@ -1761,13 +1755,15 @@ def _render_job(job: dict, command: list[str]) -> None:
         video_path.unlink(missing_ok=True)
     except Exception as error:
         # 영상은 만들었지만 내려줄 방법이 없다(URL 없음) → 실패로 처리해서
-        # 자리표 릴스 행이 정리되게 한다. mp4 는 서버에 남겨 회수할 수 있게 둔다.
-        logger.exception("렌더 결과 업로드 실패: %s", output_name)
+        # 자리표 릴스 행이 정리되게 한다. mp4 는 서버에 남겨 회수할 수 있게 둔다
+        # (회수 경로는 응답이 아니라 로그로 남긴다 — 서버 경로를 앱에 흘리지 않는다).
+        logger.exception(
+            "렌더 결과 업로드 실패: %s (영상은 서버에 보존: output/%s)", output_name, output_name
+        )
         update(
             status="failed",
             error="영상 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.",
             elapsed_seconds=round(time.time() - job["started_at"], 1),
-            log_tail=log_tail + f"\n[warn] 영상은 서버에 보존: output/{output_name}",
         )
         return
 
@@ -1779,7 +1775,6 @@ def _render_job(job: dict, command: list[str]) -> None:
         reels_url=video_url,
         elapsed_seconds=round(time.time() - job["started_at"], 1),
         eta_seconds=0.0,
-        log_tail=log_tail,
     )
 
 

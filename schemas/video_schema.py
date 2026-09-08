@@ -201,4 +201,3 @@ class VideoRenderStatusResponse(BaseModel):
         description="실패 사유 (status=failed/unknown 일 때만) — **그대로 보여줄 수 있는 문구**다. "
                     "원인 로그는 서버에만 남고 여기로 나오지 않는다",
     )
-    log_tail: str = Field("", description="렌더 로그 끝부분 (종료 후 디버깅용)")
