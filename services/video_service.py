@@ -1065,8 +1065,11 @@ def sweep_stale_renders() -> None:
 
     ponytail: 자리표 행을 지우는 기준이 "url 이 비었다" 뿐이라 **다중 워커에서 워커
     하나만 되살아나면** 다른 워커가 지금 돌리는 렌더의 행까지 지운다. 그래도 결과가
-    깨지지는 않는다 — 그 렌더는 update_url_if_alive 가 0건을 받아 산출물을 정리한다.
-    낭비가 문제가 되면 자리표 행에 렌더 시작 시각을 두고 나이로 걸러야 한다.
+    깨지지는 않는다 — 그 렌더는 update_url_if_alive 가 0건을 받고, _publish_reels_video
+    가 방금 올린 버킷 객체를 되돌린다. 손해는 GPU 시간과 그 한 편의 재시도뿐이다.
+    다중 워커로 갈 일이 생기면 lease·소유권을 만들 것 없이 list_pending 에 나이 조건만
+    걸면 된다 — Reels 는 BaseModel 이라 created_at 이 이미 있고, 렌더는 30분 하드
+    캡이라 그보다 넉넉한 값이면 살아 있는 렌더를 건드리지 않는다.
     """
     try:
         from databases.database import SessionLocal
