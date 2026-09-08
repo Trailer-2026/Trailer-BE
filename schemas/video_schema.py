@@ -174,10 +174,15 @@ class VideoRenderStatusResponse(BaseModel):
     reels_idx: int = Field(..., description="릴스 PK — 진행률 조회·다운로드·편집 공용 키")
     status: str = Field(
         ...,
-        description="작업 상태: running | done | failed | unknown"
-                    "(unknown = 서버 재시작으로 진행 정보가 사라진 미완료 릴스)",
+        description="작업 상태: running | done | failed | unknown. 렌더 도중 서버가 "
+                    "재시작되면 그 작업은 다음 부팅 때 failed(phase=중단됨)로 확정되므로 "
+                    "'다시 만들기'를 안내하면 된다(unknown 은 그 정리 전에 조회한 경우)",
     )
-    phase: str = Field(..., description="현재 단계 (렌더 준비 중 / 프레임 렌더링 / 후처리 / 완료)")
+    phase: str = Field(
+        ...,
+        description="현재 단계 (대기 중 / 렌더 준비 중 / 프레임 렌더링 / 후처리 / 완료 / 중단됨). "
+                    "'대기 중'은 동시 렌더 상한에 걸려 순서를 기다리는 상태로, 실패가 아니다",
+    )
     percent: float = Field(..., description="진행률 0~100")
     frame: int = Field(..., description="렌더링된 프레임 번호 (프레임 단계에서만 증가)")
     total_frames: int | None = Field(None, description="전체 프레임 수 (프레임 단계 진입 전엔 null)")
@@ -191,5 +196,9 @@ class VideoRenderStatusResponse(BaseModel):
         description="완성 영상 URL (status=done 일 때만) — reels_url 과 같은 GCS 공개 URL",
     )
     reels_url: str | None = Field(None, description="GCS 버킷 공개 영상 URL (렌더 완료 시)")
-    error: str | None = Field(None, description="실패 사유 (status=failed/unknown 일 때만)")
+    error: str | None = Field(
+        None,
+        description="실패 사유 (status=failed/unknown 일 때만) — **그대로 보여줄 수 있는 문구**다. "
+                    "원인 로그는 서버에만 남고 여기로 나오지 않는다",
+    )
     log_tail: str = Field("", description="렌더 로그 끝부분 (종료 후 디버깅용)")
