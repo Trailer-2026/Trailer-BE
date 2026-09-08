@@ -981,6 +981,17 @@ PENDING_REELS_URL = ""
 # job dict 에만 두고 상태 응답(_job_snapshot)에서는 빼는 내부 필드.
 _INTERNAL_JOB_KEYS = ("started_at", "user_idx", "job_dir")
 
+# 사용자에게 내보내는 실패 문구. **렌더 stdout·예외 메시지를 그대로 실어 보내지 않는다** —
+# 서버 경로·Modal 내부 로그가 앱 화면까지 나간다. 원인은 서버 로그에만 남긴다.
+FAILED_MESSAGE = "영상 만들기에 실패했습니다. 잠시 후 다시 시도해 주세요."
+INTERRUPTED_MESSAGE = "서버 재시작으로 영상 만들기가 중단됐습니다. 다시 시도해 주세요."
+
+# 부팅 스윕이 지우는 잔여물의 나이 기준. 살아 있는 렌더의 입력을 지우지 않으려고 나이로
+# 자른다 — 렌더는 30분 하드 캡이라 하루 지난 디렉터리가 진행 중일 수는 없다.
+# output/ 은 GCS 업로드에 실패한 영상을 회수용으로 남기는 곳이라(_render_job) 더 넉넉히 둔다.
+STALE_UPLOAD_HOURS = 24
+STALE_OUTPUT_DAYS = 7
+
 # render_video.py 가 15프레임마다 찍는 "[perf:frame] 000060/000127 ..." 라인.
 _FRAME_PROGRESS_RE = re.compile(r"\[perf:frame\]\s*(\d+)/(\d+)")
 # 프레임 이후 후처리 마커 → 해당 시점의 percent.
@@ -1036,6 +1047,85 @@ def _region_of_trip(track_points: list[dict[str, object]]) -> str | None:
         return None
 
 
+def sweep_stale_renders() -> None:
+    """재시작으로 중단된 렌더가 남긴 것들을 치운다 (lifespan 부팅 시 1회).
+
+    렌더는 데몬 스레드라 프로세스가 죽으면 _run_render_job 의 finally 가 못 돈다.
+    배포가 `systemctl restart` 라 렌더 중 재시작은 드문 일이 아니고, 그때마다
+    영상 없는 자리표 릴스 행과 업로드 사진 디렉터리가 그대로 남는다.
+
+    1. 자리표 릴스 행을 지우고(_discard_pending_reels — FK 걸리면 소프트 삭제로 물러섬),
+       폴링하던 클라이언트가 404 대신 사유를 받도록 실패한 job 을 레지스트리에 남긴다.
+    2. uploads/ 와 output/ 의 오래된 잔여물을 지운다(나이 기준은 STALE_* 상수 주석 참고).
+
+    정리는 부가 작업이라 어떤 실패도 부팅을 막지 않는다 — 전부 삼키고 로그만 남긴다.
+    """
+    try:
+        from databases.database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            stale = [(r.reels_idx, r.user_idx) for r in reels_dao.list_pending(db, PENDING_REELS_URL)]
+        finally:
+            db.close()
+
+        for reels_idx, user_idx in stale:
+            _discard_pending_reels(reels_idx)
+            with _jobs_lock:
+                _jobs[reels_idx] = _new_job(
+                    reels_idx, user_idx,
+                    status="failed", phase="중단됨", error=INTERRUPTED_MESSAGE,
+                )
+        if stale:
+            # 첫 스윕은 그동안 쌓인 걸 한꺼번에 만나므로 레지스트리 상한을 넘길 수 있다.
+            with _jobs_lock:
+                _trim_jobs_locked()
+            logger.info("재시작으로 중단된 렌더 정리: %d건", len(stale))
+
+        # ponytail: 나이로만 자른다. 이 프로세스가 아는 job 을 빼는 게 정확하지만, 그러면
+        # 다중 워커에서 남의 워커가 렌더 중인 디렉터리를 지우게 된다.
+        upload_cutoff = time.time() - STALE_UPLOAD_HOURS * 3600
+        for path in UPLOADS_DIR.glob("*"):
+            if path.is_dir() and path.stat().st_mtime < upload_cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+
+        output_cutoff = time.time() - STALE_OUTPUT_DAYS * 86400
+        for path in OUTPUT_DIR.glob("*.mp4"):
+            if path.stat().st_mtime < output_cutoff:
+                path.unlink(missing_ok=True)
+    except Exception:
+        logger.warning("중단된 렌더 정리 실패(무시)", exc_info=True)
+
+
+def _new_job(reels_idx: int, user_idx: int, **overrides) -> dict:
+    """job 레지스트리 항목의 기본 모양 — 진행률 응답(_job_snapshot)이 읽는 키를 한곳에 둔다.
+
+    렌더를 띄우는 _spawn_render_job 과 부팅 스윕(sweep_stale_renders)이 같이 쓴다.
+    스윕이 만드는 항목은 돌 스레드가 없으므로 status·error 를 덮어쓴다.
+    """
+    return {
+        "user_idx": user_idx,
+        "job_dir": None,
+        "reels_idx": reels_idx,
+        "reels_url": None,
+        "status": "running",
+        "phase": "렌더 준비 중",
+        "percent": 0.0,
+        "frame": 0,
+        "total_frames": None,
+        "started_at": time.time(),
+        "elapsed_seconds": 0.0,
+        "eta_seconds": None,
+        "engine": "modal",
+        "theme": "default",
+        "bgm": None,
+        "video_url": None,
+        "error": None,
+        "log_tail": "",
+        **overrides,
+    }
+
+
 def _spawn_render_job(
     db: Session,
     travel_data_path: Path,
@@ -1059,27 +1149,14 @@ def _spawn_render_job(
     db.commit()
 
     command = _build_command(travel_data_path, theme)
-    job = {
-        "user_idx": user_idx,
+    job = _new_job(
+        reels.reels_idx,
+        user_idx,
         # 렌더 입력(업로드 사진·travel_data.json)이 담긴 디렉터리 — 끝나면 지운다.
-        "job_dir": str(travel_data_path.parent),
-        "reels_idx": reels.reels_idx,
-        "reels_url": None,
-        "status": "running",
-        "phase": "렌더 준비 중",
-        "percent": 0.0,
-        "frame": 0,
-        "total_frames": None,
-        "started_at": time.time(),
-        "elapsed_seconds": 0.0,
-        "eta_seconds": None,
-        "engine": "modal",
-        "theme": theme,
-        "bgm": bgm_path.name if bgm_path else None,
-        "video_url": None,
-        "error": None,
-        "log_tail": "",
-    }
+        job_dir=str(travel_data_path.parent),
+        theme=theme,
+        bgm=bgm_path.name if bgm_path else None,
+    )
     with _jobs_lock:
         _jobs[job["reels_idx"]] = job
     threading.Thread(
@@ -1528,10 +1605,10 @@ def _run_render_job(job: dict, command: list[str]) -> None:
                 # elapsed_seconds·eta_seconds 가 순수 렌더 시간이 되게 한다.
                 job.update(started_at=time.time(), phase="렌더 준비 중")
             _render_job(job, command)
-    except Exception as error:  # 예상 못 한 예외도 job 상태에 남긴다
+    except Exception:  # 예상 못 한 예외도 job 상태에 남긴다 (사유는 로그에만)
         logger.exception("렌더 작업 처리 중 오류 (reels_idx=%s)", job.get("reels_idx"))
         with _jobs_lock:
-            job.update(status="failed", error=f"렌더 처리 중 오류: {error}")
+            job.update(status="failed", error=FAILED_MESSAGE)
     finally:
         job_dir = job.get("job_dir")
         if job_dir:
@@ -1581,8 +1658,10 @@ def _render_job(job: dict, command: list[str]) -> None:
             encoding="utf-8",
             errors="replace",
         )
-    except OSError as error:
-        update(status="failed", error=f"렌더 프로세스 시작 실패: {error}")
+    except OSError:
+        # 보통 설정 문제(= [videomaker] python 경로)다 — 경로가 담긴 메시지는 로그에만.
+        logger.exception("렌더 프로세스 시작 실패 (reels_idx=%s)", job["reels_idx"])
+        update(status="failed", error=FAILED_MESSAGE)
         return
 
     # 30분 하드 캡 — 넘으면 프로세스를 죽인다 (아래 read 루프가 EOF 로 끝남).
@@ -1636,9 +1715,15 @@ def _render_job(job: dict, command: list[str]) -> None:
         )
         return
     if returncode != 0:
+        # 원인(렌더 stdout)은 서버 로그에만 남긴다 — 앱에 그대로 실어 보내면 서버 경로·
+        # Modal 내부 로그가 사용자 화면까지 간다.
+        logger.error(
+            "렌더 서브프로세스 실패 (reels_idx=%s, exit=%s):\n%s",
+            job["reels_idx"], returncode, stdout[-2000:],
+        )
         update(
             status="failed",
-            error=f"렌더링 실패:\n{stdout[-2000:]}",
+            error=FAILED_MESSAGE,
             elapsed_seconds=elapsed,
             log_tail=stdout[-2000:],
         )
@@ -1646,9 +1731,13 @@ def _render_job(job: dict, command: list[str]) -> None:
 
     output_name = _parse_output_name(stdout)
     if output_name is None:
+        logger.error(
+            "렌더 출력 파일 경로를 못 찾음 (reels_idx=%s):\n%s",
+            job["reels_idx"], stdout[-2000:],
+        )
         update(
             status="failed",
-            error="출력 파일 경로를 확인할 수 없습니다.",
+            error=FAILED_MESSAGE,
             elapsed_seconds=elapsed,
             log_tail=stdout[-2000:],
         )
@@ -1668,7 +1757,7 @@ def _render_job(job: dict, command: list[str]) -> None:
         logger.exception("렌더 결과 업로드 실패: %s", output_name)
         update(
             status="failed",
-            error=f"영상 저장에 실패했습니다: {error}",
+            error="영상 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.",
             elapsed_seconds=round(time.time() - job["started_at"], 1),
             log_tail=log_tail + f"\n[warn] 영상은 서버에 보존: output/{output_name}",
         )
