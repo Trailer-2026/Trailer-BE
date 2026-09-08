@@ -1059,6 +1059,11 @@ def sweep_stale_renders() -> None:
     2. uploads/ 와 output/ 의 오래된 잔여물을 지운다(나이 기준은 STALE_* 상수 주석 참고).
 
     정리는 부가 작업이라 어떤 실패도 부팅을 막지 않는다 — 전부 삼키고 로그만 남긴다.
+
+    ponytail: 자리표 행을 지우는 기준이 "url 이 비었다" 뿐이라 **다중 워커에서 워커
+    하나만 되살아나면** 다른 워커가 지금 돌리는 렌더의 행까지 지운다. 그래도 결과가
+    깨지지는 않는다 — 그 렌더는 update_url_if_alive 가 0건을 받아 산출물을 정리한다.
+    낭비가 문제가 되면 자리표 행에 렌더 시작 시각을 두고 나이로 걸러야 한다.
     """
     try:
         from databases.database import SessionLocal
