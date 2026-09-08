@@ -34,6 +34,7 @@ from routers.user import router as user_router
 from routers.share import router as share_router
 from routers.notification import router as notification_router
 from databases import provision
+from services import video_service
 from utils.firebase import init_firebase
 
 logger = logging.getLogger(__name__)
@@ -185,6 +186,9 @@ async def lifespan(app: FastAPI):
         # 마이그레이션 도구가 없어 테이블·컬럼·인덱스를 앱이 직접 챙긴다. 단계 사이의
         # 의존 순서(테이블 → 컬럼 → 인덱스)와 FK 순서는 provision 안에서 결정된다.
         provision.run()
+        # 렌더 스레드는 데몬이라 재시작 때 정리 없이 죽는다. 그 흔적(영상 없는 자리표
+        # 릴스 행·업로드 사진·오래된 mp4)을 부팅 때 한 번 치운다.
+        video_service.sweep_stale_renders()
         if os.getenv("TRAIN_STOP_AUTOSYNC", "1") == "1":
             tasks.append(asyncio.create_task(_train_stop_daily_loop()))
         if os.getenv("TRIP_REMINDER_AUTOSYNC", "1") == "1":

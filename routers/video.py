@@ -469,10 +469,16 @@ def insert_image_clip(
     "/render/{reels_idx}",
     summary="영상 렌더링 진행률 조회 (reels_idx)",
     description="렌더 시작 응답으로 받은 reels_idx 로 진행률(percent), 현재 단계, 경과/예상 "
-                "남은 시간을 조회합니다. status 가 done 이면 video_url(=reels_url)로 영상을 "
-                "받을 수 있고, failed 면 error 에 사유가 담기며 그 릴스 행은 삭제됩니다. "
-                "진행 정보는 서버 메모리에만 유지되므로 렌더 도중 서버가 재시작되면 "
-                "status=unknown 으로 응답합니다(완료된 릴스는 재시작 후에도 done). 본인 "
+                "남은 시간을 조회합니다. 서버가 한 번에 돌리는 렌더 편수에 상한이 있어, 앞선 "
+                "렌더가 밀려 있으면 status=running 인 채 phase 가 '대기 중'으로 머뭅니다"
+                "(요청이 거절되는 것이 아니라 순서가 오면 자동으로 시작하며, 경과·예상 "
+                "시간은 실제 렌더가 시작된 시점부터 셉니다). "
+                "status 가 done 이면 video_url(=reels_url)로 영상을 "
+                "받을 수 있고, failed 면 error 에 **그대로 보여줄 수 있는** 사유가 담기며 "
+                "그 릴스 행은 삭제됩니다(원인 로그는 서버에만 남습니다). "
+                "진행 정보는 서버 메모리에만 유지되므로 렌더 도중 서버가 재시작되면 그 작업은 "
+                "다음 부팅 때 failed(phase=중단됨)로 확정됩니다 — 그 사이에 조회하면 "
+                "status=unknown 입니다(완료된 릴스는 재시작 후에도 done). 본인 "
                 "릴스가 아니거나 없으면 404. JWT 인증이 필요하며 토큰이 없거나 유효하지 "
                 "않으면 401을 반환합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
