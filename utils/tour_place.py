@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from core.enums import Theme
+from recommend.routing import haversine
 from schemas.recommend_schema import Lodging
 from utils import tour_api, tour_category
 
@@ -34,7 +35,9 @@ _LODGING_RANK = {
     "홈스테이": 2, "민박": 3, "모텔": 3,
 }
 _RADIUS_M = 20000                # 기본 조회 반경(20km). 더 넓은 값도 API가 받는다 → _PLACE_FALLBACK_STEPS
-_AREA_CODES = [1, 2, 3, 4, 5, 6, 7, 8, 31, 32, 33, 34, 35, 36, 37, 38, 39]  # 시도
+# 법정동 시도 코드(ldongCode2 실측, 2026-09). 옛 areaCode(1~39)가 아니다 — 개편 뒤 등록된 항목은
+# 옛 코드가 비어 있어 그쪽으로는 안 잡힌다(area_based_list 주석). 전남·광주는 통합돼 '12' 하나다.
+_LDONG_CODES = ["11", "12", "26", "27", "28", "30", "31", "41", "43", "44", "47", "48", "50", "51", "52", "36110"]
 
 # 한 시도가 이 정도(대각 퍼짐, km) 이상이면 부분권으로 분리한다.
 # 큰 도(경북·강원 등)의 해안권(포항·강릉)이 내륙 중심에 묻혀 도착역 후보에서 빠지는 것을 막는다.
@@ -109,7 +112,9 @@ def _to_live(item: dict) -> LivePlace | None:
         return None
     lat, lng = coords
     ct = item.get("contenttypeid")
-    themes = tour_category.themes_for(ct, item.get("cat1"), item.get("cat2"), item.get("cat3"))
+    themes = tour_category.themes_for(
+        ct, item.get("cat1"), item.get("cat2"), item.get("cat3"), item.get("lclsSystm3"),
+    )
     if not themes:  # 8개 테마 어디에도 안 걸리는 항목(레포츠 등)은 버린다
         return None
     cid = str(item.get("contentid") or "")
@@ -127,6 +132,33 @@ def _to_live(item: dict) -> LivePlace | None:
         content_id=cid,
         content_type_id=ctid,
     )
+
+
+# 좌표 조회(locationBasedList2)가 못 보는 항목을 시도 단위 목록으로 보강한다.
+# 2025년 개편 뒤 등록·갱신된 항목은 옛 지역/분류 코드가 비어 있어 좌표 조회에 아예 안 나온다 —
+# 부산 관광지 351건 중 212건, 서울 종로는 절반 이상이 그렇고 해운대해수욕장·경복궁·불국사가 거기
+# 들어 있다(실측 2026-09). 법정동 시도 코드(lDongRegnCd)로 areaBasedList2 를 부르면 전부 나오므로,
+# 좌표 조회 결과에 등장한 시도를 통째로 받아(1000행/콜) 반경 안만 걸러 합친다.
+# 콜 수는 (등장 시도 수 × 유형 수), 보통 3~6콜. 시도 목록은 매 요청 새로 받는다 — 관광 데이터를
+# 프로세스에 캐시하지 않는다는 원칙(공모전 실시간 호출 조건) 그대로다.
+_LDONG_ROWS = 1000
+_LDONG_MAX_PAGES = 2  # 서울 음식점(1603)·경북 관광지(1313)만 2페이지, 나머지는 1페이지에 끝난다
+
+
+def _ldong_items(regn: str, ct: int) -> list[dict]:
+    out: list[dict] = []
+    for page in range(1, _LDONG_MAX_PAGES + 1):
+        try:
+            items, total = tour_api.area_based_list(
+                ldong_regn_cd=regn, content_type_id=ct, num_of_rows=_LDONG_ROWS, page_no=page,
+            )
+        except Exception as e:
+            logger.warning("TourAPI 시도기반(lDong=%s, ct=%s) 실패: %s", regn, ct, e)
+            break
+        out.extend(items)
+        if len(out) >= total or not items:
+            break
+    return out
 
 
 def _location_items(lat, lng, radius_m, ct, per_type) -> list[dict]:
@@ -149,10 +181,24 @@ def live_places(lat: float, lng: float, themes: list[Theme], radius_m: int = _RA
     조회에 중복 등장할 수 있어 content_id를 키로 dict에 담아 마지막 값으로 dedup한다.
     """
     selected = set(themes or [])
-    ctypes = _ctypes_for(themes)
-    out: dict[str, LivePlace] = {}
+    ctypes = sorted(_ctypes_for(themes))
     with ThreadPoolExecutor(max_workers=max(1, len(ctypes))) as ex:
-        batches = ex.map(lambda ct: _location_items(lat, lng, radius_m, ct, per_type), ctypes)
+        batches = list(ex.map(lambda ct: _location_items(lat, lng, radius_m, ct, per_type), ctypes))
+
+    # 보강: 좌표 조회 결과가 걸친 시도들을 통째로 받아 반경 안만 남긴다(위 _ldong_items 주석).
+    regns = sorted({str(it.get("lDongRegnCd")) for items in batches for it in items if it.get("lDongRegnCd")})
+    jobs = [(r, ct) for r in regns for ct in ctypes]
+    if jobs:
+        with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as ex:
+            extra = list(ex.map(lambda j: _ldong_items(j[0], j[1]), jobs))
+        limit_km = radius_m / 1000
+        for items in extra:
+            batches.append([
+                it for it in items
+                if (c := _coords(it)) is not None and haversine(lat, lng, c[0], c[1]) <= limit_km
+            ])
+
+    out: dict[str, LivePlace] = {}
     for items in batches:
         for it in items:
             lp = _to_live(it)
@@ -387,7 +433,7 @@ def fetch_detail(content_id: str) -> PlaceDetail | None:
         lat=lat,
         lng=lng,
         themes=tour_category.themes_for(
-            ct, common.get("cat1"), common.get("cat2"), common.get("cat3"),
+            ct, common.get("cat1"), common.get("cat2"), common.get("cat3"), common.get("lclsSystm3"),
         ),
         images=images,
         overview=_plain(common.get("overview")),
@@ -631,14 +677,14 @@ class AreaScan:
     total: int                       # 좌표 보유 장소 총수
 
 
-def _area_items(area: int, ct: int) -> list[dict]:
+def _area_items(area: str, ct: int) -> list[dict]:
     try:
         items, _ = tour_api.area_based_list(
-            area_code=area, content_type_id=ct, num_of_rows=50, arrange="O",
+            ldong_regn_cd=area, content_type_id=ct, num_of_rows=50, arrange="O",
         )
         return items
     except Exception as e:
-        logger.warning("TourAPI 지역기반(area=%s, ct=%s) 실패: %s", area, ct, e)
+        logger.warning("TourAPI 시도기반(lDong=%s, ct=%s) 실패: %s", area, ct, e)
         return []
 
 
@@ -650,7 +696,7 @@ def scan_area_profiles(themes: list[Theme]) -> list[AreaScan]:
     분리해 **각 부분권을 별도 후보**로 낸다. recommend.destination이 이 분포로 도착지를 점수화한다.
     """
     ctypes = sorted(_ctypes_for(themes))
-    jobs = [(area, ct) for area in _AREA_CODES for ct in ctypes]
+    jobs = [(area, ct) for area in _LDONG_CODES for ct in ctypes]
     # HTTP 대기(I/O bound)라 CPU 수와 무관 — 전 시도×유형 콜을 한두 웨이브로 겹친다.
     with ThreadPoolExecutor(max_workers=min(32, len(jobs))) as ex:
         results = list(ex.map(lambda j: _area_items(j[0], j[1]), jobs))
@@ -677,7 +723,7 @@ def scan_area_profiles(themes: list[Theme]) -> list[AreaScan]:
                 sum(p[1] for p in cluster) / len(cluster),
             )
             counts = Counter(t for _, _, themes_t in cluster for t in themes_t)
-            profiles.append(AreaScan(area, centroid, counts, len(cluster)))
+            profiles.append(AreaScan(int(area), centroid, counts, len(cluster)))
     return profiles
 
 

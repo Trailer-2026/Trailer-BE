@@ -47,6 +47,65 @@ _CAT2 = {
     "A0208": [Theme.CULTURE],  # 공연/행사
 }
 
+# 새 분류체계(lclsSystm1/2/3, 2025 개편) → Theme. lclsSystmCode2 코드표(246행) 기준.
+# 개편 뒤 등록·갱신된 항목은 cat1/2/3 이 비어 있고 이 코드만 있다(해운대해수욕장·경복궁·불국사 등
+# 유명 관광지가 대부분 그렇다). 옛 cat 이 있으면 그쪽이 우선이고, 없을 때 여기로 잡는다.
+# 우선순위는 cat 과 같다: 세분(3) > 중분류(2) > 대분류(1). 레저스포츠(LS)는 옛 정책대로 제외.
+_LCLS3 = {
+    "NA010500": [Theme.NATURE, Theme.HEALING],  # 약수터
+    "NA040600": [Theme.NATURE, Theme.HEALING],  # 자연휴양림
+    "VE010800": [Theme.OCEAN],                   # 등대
+    "VE020400": [Theme.THEME_PARK, Theme.OCEAN], # 수족관/아쿠아리움
+    "VE040300": [Theme.NATURE, Theme.HEALING],  # 둘레길
+    "EX060800": [Theme.FOOD],                    # 화장품/주류/먹거리 산업관광
+    "EX070100": [Theme.OCEAN],                   # 유람선/잠수함관광
+}
+_LCLS2 = {
+    "NA01": [Theme.NATURE],                     # 자연경관(산)
+    "NA02": [Theme.NATURE],                     # 자연경관(하천·해양) — 해양 세분은 아래 _LCLS2_OCEAN
+    "NA03": [Theme.NATURE],                     # 자연생태
+    "NA04": [Theme.NATURE],                     # 자연공원
+    "NA05": [Theme.NATURE],                     # 기타자연관광
+    "VE01": [Theme.CITY],                       # 랜드마크(건물·타워·다리)
+    "VE02": [Theme.THEME_PARK],                 # 테마공원
+    "VE03": [Theme.NATURE],                     # 도시공원
+    "VE04": [Theme.CITY],                       # 골목길·문화거리·마을관광지
+    "VE05": [Theme.CITY],                       # 관광단지·리조트
+    "VE06": [Theme.CULTURE],                    # 공연시설
+    "VE07": [Theme.CULTURE],                    # 전시시설(박물관·미술관)
+    "VE09": [Theme.CULTURE],                    # 교육시설(문화원)
+    "VE12": [Theme.CULTURE],                    # 기타문화관광지
+    "EX01": [Theme.CULTURE],                    # 전통체험
+    "EX02": [Theme.CULTURE],                    # 공예체험
+    "EX03": [Theme.NATURE],                     # 농·산·어촌 체험
+    "EX04": [Theme.HISTORY],                    # 산사체험
+    "EX05": [Theme.HEALING],                    # 웰니스(온천·찜질·명상)
+    "EX06": [Theme.CULTURE],                    # 산업관광
+}
+# NA02 중 바다 계열 세분 — 강·호수(NATURE)와 갈라야 해서 세분 코드로 OCEAN 을 준다.
+_LCLS2_OCEAN = {"NA020500", "NA020700", "NA020800", "NA020900"}  # 섬·항구/포구·해안절경·해변
+_LCLS1 = {
+    "HS": [Theme.HISTORY],   # 역사관광(유적·유물·종교성지·안보)
+    "EV": [Theme.CULTURE],   # 축제/공연/행사
+    "SH": [Theme.CITY],      # 쇼핑
+    "FD": [Theme.FOOD],      # 음식
+}
+
+
+def _themes_from_lcls(lcls3: str | None) -> set[Theme]:
+    if not lcls3:
+        return set()
+    if lcls3 in _LCLS2_OCEAN:
+        return {Theme.OCEAN}
+    if lcls3 in _LCLS3:
+        return set(_LCLS3[lcls3])
+    if lcls3[:4] in _LCLS2:
+        return set(_LCLS2[lcls3[:4]])
+    if lcls3[:2] in _LCLS1:
+        return set(_LCLS1[lcls3[:2]])
+    return set()
+
+
 # contentTypeId 보강 (cat 정보로 못 잡았을 때)
 _CT = {
     "14": [Theme.CULTURE],  # 문화시설
@@ -61,11 +120,13 @@ def themes_for(
     cat1: str | None = None,
     cat2: str | None = None,
     cat3: str | None = None,
+    lcls3: str | None = None,
 ) -> list[Theme]:
     """관광 항목 1건의 테마 태그 목록(0개일 수 있음 → 호출측에서 스킵).
 
-    우선순위: cat3(세분) > cat2(기본값) > contentType(보강). cat3가 잡히면 cat2는
-    보지 않는다(elif) — 더 구체적인 코드가 항상 이긴다. contentType은 cat으로 아무것도
+    우선순위: cat3(세분) > cat2(기본값) > 새 분류 lclsSystm3 > contentType(보강). cat3가
+    잡히면 cat2는 보지 않는다(elif) — 더 구체적인 코드가 항상 이긴다. 새 분류는 옛 cat 이
+    비어 있는 항목(2025 개편 뒤 등록·갱신분)을 위한 것이다. contentType은 아무것도
     못 잡았을 때(`not out`)만 쓰는 최후 보루다.
     """
     out: set[Theme] = set()
@@ -73,6 +134,8 @@ def themes_for(
         out.update(_CAT3[cat3])
     elif cat2 and cat2 in _CAT2:
         out.update(_CAT2[cat2])
+    if not out:
+        out.update(_themes_from_lcls(lcls3))
 
     ct = str(content_type_id or "")
     if not out and ct in _CT:
