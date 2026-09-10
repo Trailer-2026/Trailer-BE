@@ -64,7 +64,7 @@ from schemas.video_schema import (
     ReelsTitleUpdateResponse,
     ReelsUploadResponse,
 )
-from utils import gcs, kakao_local
+from utils import gcs, kakao_local, tour_place
 
 logger = logging.getLogger(__name__)
 
@@ -1435,6 +1435,35 @@ def start_render_photos_only(
 # --------------------------------------------------------------------------- #
 # 여행(travel) 일정으로 렌더링 — 스케줄 좌표·첨부 이미지로 경로를 구성한다.
 # --------------------------------------------------------------------------- #
+# 여행 렌더 사진 상한. 관광 이미지가 빈 지점을 다 채우면 지점 수만큼 사진이 늘어 60초 상한
+# (이동 구간만 압축하고 사진 시간은 안 줄인다)을 넘기므로 여기서 자른다. 15장 = 사진 36초.
+# photos-only 렌더에는 안 건다 — 그쪽은 사용자가 장수를 직접 고른 것이라 말없이 빼면 안 된다.
+PHOTOS_PER_STOP = 3
+MAX_TRAVEL_RENDER_PHOTOS = 15
+
+
+def _trim_photos(
+    media_points: list[dict[str, object]],
+    per_stop: int = PHOTOS_PER_STOP,
+    total: int = MAX_TRAVEL_RENDER_PHOTOS,
+) -> None:
+    """지점당 per_stop 장, 전체 total 장으로 자른다(제자리 수정).
+
+    한 바퀴씩 돈다 — 모든 지점의 1번째, 다음 모든 지점의 2번째… 상한에 닿으면 멈춘다.
+    사진 많은 지점 하나가 영상을 독점하지 않고 모든 지점이 최소 한 장은 보이며, 지점 안
+    순서(촬영/업로드 순)는 유지된다. 관광 이미지는 지점당 1장이라 첫 바퀴에 다 들어간다.
+    """
+    keep = [0] * len(media_points)
+    budget = total
+    for round_ in range(per_stop):
+        for i, point in enumerate(media_points):
+            if budget and len(point["photos"]) > round_:
+                keep[i] += 1
+                budget -= 1
+    for point, n in zip(media_points, keep):
+        del point["photos"][n:]
+
+
 def _fetch_travel_image(url: str) -> bytes | None:
     """travel_image URL 의 이미지 바이트를 받아온다. 실패하면 None (렌더는 계속).
 
@@ -1466,9 +1495,12 @@ def start_render_travel(
     스케줄을 타임라인 순(day_no, sequence)으로 따라가며 지점을 만들고, 각 스케줄에
     첨부된 travel_image 이미지들을 해당 지점에서 보여준다. 직전 지점 기준
     PHOTO_CLUSTER_KM(1km) 미만인 연속 스케줄은 별도 지점 없이 직전 지점에 사진만
-    합친다(기차 일정은 출발역 좌표가 경유 지점이 된다). 본인 여행이 아니거나 없으면
-    404. 이미지 다운로드 실패는 건너뛴다. 시작과 동시에 요청자(user_idx)의 릴스 행이
-    "렌더 중" 상태로 만들어지고, 그 reels_idx 로 진행률을 조회한다.
+    합친다(기차 일정은 출발역 좌표가 경유 지점이 된다). 사진이 없는 일정은 관광 대표
+    이미지 1장으로 메운다(추천 코스는 schedule.image_url, 직접 만든 여행은 좌표로 TourAPI
+    실시간 조회). 사진은 지점당 PHOTOS_PER_STOP 장·전체 MAX_TRAVEL_RENDER_PHOTOS 장까지
+    (_trim_photos). 본인 여행이 아니거나 없으면 404. 이미지 다운로드 실패는 건너뛴다.
+    시작과 동시에 요청자(user_idx)의 릴스 행이 "렌더 중" 상태로 만들어지고, 그 reels_idx 로
+    진행률을 조회한다.
     """
     theme = _validate_render_options(theme)
 
@@ -1491,38 +1523,50 @@ def start_render_travel(
         else:
             by_schedule.setdefault(image.schedule_idx, []).append(image)
 
-    # 이미지 다운로드는 서로 독립이라 병렬로 받는다. 결과를 image_idx로 찾아 쓰므로
-    # 다운로드 순서와 아래 소비 순서가 달라져도 사진이 엉뚱한 지점에 붙지 않는다.
+    # 내 사진이 하나도 안 붙은 일정은 관광 대표 이미지 1장으로 메운다 — 여행 전에 만드는 영상이
+    # 지도만 돌지 않게. 추천 코스는 저장할 때 받아둔 schedule.image_url을 그대로 쓰고(API 호출
+    # 없음), 직접 만든 여행은 그 값이 늘 비어(장소 검색이 카카오라) 좌표로 실시간 조회한다
+    # (일정당 1콜, 실패는 None). 기차 일정은 출발역 좌표라 뺀다 — 역 앞 관광지 사진이 붙으면
+    # 안 된다. 내 사진이 있는 일정엔 안 붙는다 — 빈자리용이지 내 사진 옆에 끼우는 게 아니다.
+    empty = [s for s in schedules if not by_schedule.get(s.schedule_idx) and s.kind != "train"]
     with ThreadPoolExecutor(max_workers=8) as pool:
-        downloaded = dict(
-            zip(
-                [img.image_idx for img in images],
-                pool.map(_fetch_travel_image, [img.url for img in images]),
-            )
-        )
+        fallback = dict(zip(
+            [s.schedule_idx for s in empty],
+            pool.map(lambda s: s.image_url or tour_place.image_near(s.latitude, s.longitude), empty),
+        ))
+
+    # 이미지 다운로드는 서로 독립이라 병렬로 받는다. 결과를 URL로 찾아 쓰므로 다운로드 순서와
+    # 아래 소비 순서가 달라져도 사진이 엉뚱한 지점에 붙지 않고, 같은 URL은 한 번만 받는다.
+    urls = list(dict.fromkeys([img.url for img in images] + [u for u in fallback.values() if u]))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        downloaded = dict(zip(urls, pool.map(_fetch_travel_image, urls)))
 
     job_dir = _new_job_dir()
     track_points: list[dict[str, object]] = []
     media_points: list[dict[str, object]] = []
     saved_count = 0
 
-    def _save(images_) -> list[str]:
+    def _save(urls_: list[str]) -> list[str]:
         """다운로드한 바이트를 job 디렉터리에 떨궈 렌더가 읽을 경로 목록으로. 실패분은 건너뛴다."""
         nonlocal saved_count
         saved: list[str] = []
-        for img in images_:
-            content = downloaded.get(img.image_idx)
+        for url in urls_:
+            content = downloaded.get(url)
             if content is None:
                 continue
-            saved.append(_save_render_image(job_dir, f"img_{saved_count}", img.url, content))
+            saved.append(_save_render_image(job_dir, f"img_{saved_count}", url, content))
             saved_count += 1
         return saved
 
     for schedule in schedules:
+        photos = _save([img.url for img in by_schedule.get(schedule.schedule_idx, [])])
+        if not photos and fallback.get(schedule.schedule_idx):
+            photos = _save([fallback[schedule.schedule_idx]])
+        # 폴백 판정은 일정 단위다 — 직전 지점 1km 안이라 병합되면 관광 이미지가 이웃 일정의
+        # 내 사진 뒤에 이어 붙는다. 코스에 있는 장소라 그대로 둔다.
         _append_stop(
             track_points, media_points,
-            schedule.latitude, schedule.longitude,
-            _save(by_schedule.get(schedule.schedule_idx, [])), name=schedule.title,
+            schedule.latitude, schedule.longitude, photos, name=schedule.title,
         )
 
     if len(track_points) < 2:
@@ -1531,7 +1575,8 @@ def start_render_travel(
     # 일정에 매핑되지 않은 사진(업로드 때 EXIF GPS가 없어 붙일 일정을 못 정했거나, 붙어
     # 있던 일정이 삭제된 사진)은 마지막 지점 뒤에 이어 붙인다 — 지도 위 어디에 둘지 알
     # 방법이 없어서다. ponytail: 좌표를 아는 사진만 제 위치에 뜨고 나머지는 끝에 몰린다.
-    media_points[-1]["photos"].extend(_save(unassigned))
+    media_points[-1]["photos"].extend(_save([img.url for img in unassigned]))
+    _trim_photos(media_points)
 
     travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
     # 제목을 안 주면 여행 이름을 그대로 쓴다 — 이미 조회한 값이라 공짜다.

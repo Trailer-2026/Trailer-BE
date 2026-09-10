@@ -445,6 +445,36 @@ def nearby_restaurants(
     return out[:limit]
 
 
+# ── 좌표의 대표 이미지(영상 렌더 폴백) ────────────────────────────────────────
+# 직접 만든 여행의 일정은 장소 검색이 카카오 로컬이라 schedule.image_url이 늘 빈다. 영상에서
+# 사진 없는 지점을 관광 사진으로 메우려면 좌표로 되물어보는 수밖에 없다.
+# 반경이 이 기능의 전부다 — TourAPI 등록 좌표가 실제와 100~200m 어긋나는 경우가 있어 그보다는
+# 넓게, '친구 집' 지점에 옆 동네 관광지가 붙지 않을 만큼 좁게. 감이 다르면 이 값만 만진다.
+_IMAGE_NEAR_RADIUS_M = 300
+
+
+def image_near(lat: float, lng: float, radius_m: int = _IMAGE_NEAR_RADIUS_M) -> str | None:
+    """좌표 반경 안에서 가장 가까운, 사진이 있는 관광 항목의 대표 이미지 URL. 없으면 None.
+
+    유형(contentTypeId)은 안 가린다 — 사용자가 직접 넣은 지점은 관광지일 수도 식당일 수도
+    있어서다. 조회 실패도 None — 영상 렌더의 부가 정보라 렌더를 막지 않는다.
+    ponytail: 항목 이름과 일정 제목을 대조하지 않는다. 엉뚱한 사진이 보이면 반경보다 먼저
+    제목 유사도를 넣는 게 답이다.
+    """
+    try:
+        items, _ = tour_api.location_based_list(
+            lat=lat, lng=lng, radius_m=radius_m, num_of_rows=10, arrange="E",
+        )
+    except Exception as e:
+        logger.warning("TourAPI 대표 이미지 조회(lat=%s, lng=%s) 실패: %s", lat, lng, e)
+        return None
+    for it in items:  # 거리순이라 첫 매치가 가장 가깝다
+        url = _image_url(it.get("firstimage"))
+        if url:
+            return url
+    return None
+
+
 # ── 운영시간(오픈/마감·휴무요일) ─────────────────────────────────────────────
 # detailIntro2는 유형(contentTypeId)마다 시간/휴무 필드명이 다르다. (시간필드, 휴무필드).
 _HOURS_FIELDS = {
