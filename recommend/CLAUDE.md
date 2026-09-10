@@ -51,7 +51,7 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 | `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`). `party`를 주면 장소 테마 × `destination._AGE_SUIT`로 인원 구성 계수(`_party_factor`)를 곱한다 — **성인 기준 대비 비율**이라 성인만·미입력이면 1.0(순위 불변), 아이·청소년이 섞일 때만 테마파크·바다↑ 힐링·역사↓ |
 | `clustering.py` | ② k-means(결정적)로 중심 잡고 **용량 균형 재배정**으로 날짜 묶기 — 각 날 floor~ceil(n/k)개로 과밀·빈 날 없이 정확히 k일 보장 (`kmeans_by_geo`/`_balanced_assign`) |
 | `routing.py` | ③④ Nearest Neighbor + 2-opt + 순환 복귀, `haversine` (`nearest_neighbor`/`two_opt`/`close_cycle`) |
-| `scheduling.py` | ⑤ Day 내부 **시각 스케줄링**. 체류(`_DWELL_H`)+장소 간 이동시간(`_travel_h`) 반영해 동선 순 배치, 식당은 그 시간대 동선 근처 우선(점수−이탈거리 감점). 관광지 운영시간(오픈/마감·휴무요일) 소프트 제약, 밖이면 차순위 대체. 운영시간 정보 없는 날은 `routing` 동선 순서로 폴백 (`schedule_day`) |
+| `scheduling.py` | ⑤ Day 내부 **시각 스케줄링**. 유형별 체류(`dwell_h`: 식당 1h·관광지 2h·테마파크 4h)+장소 간 이동시간(`_travel_h`) 반영해 동선 순 배치, 식당은 그 시간대 동선 근처 우선(점수−이탈거리 감점). 관광지 운영시간(오픈/마감·휴무요일) 소프트 제약, 밖이면 차순위 대체. 운영시간 정보 없는 날은 `routing` 동선 순서로 폴백 (`schedule_day`) |
 | `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 최대 3곳(첫/마지막날은 열차 시각 기반 `first_cap`/`last_cap`으로 축소), Day 순서는 `scheduling`이 운영시간 반영해 확정 |
 | `destination.py` | **도착지 선택**(코스 파이프라인과 별개). 도착역 미지정 시 `theme + party` 기준으로 시도 area 후보를 점수화·권역 다양성 필터 (`rank_and_diversify`, 값 객체 `AreaProfile`) |
 
@@ -155,14 +155,14 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
     그 날 휴무인 곳은 제외. 채울 비식당이 부족하면 가짜 식사로 메우지 않고 그 시간을 비운다.
   - `ScoredPlace.open_hour/close_hour/closed_weekdays`(recommend_service가 채움)를 읽고, 결과 방문 시각은
     `RecommendedPlace.open_time/close_time/visit_time`(HH:MM)로 노출된다. 방문시각은 `reason`에도 표기.
-  - ⚠️ **시간 가정**: 관광지 1곳 = 체류 `_DWELL_H`=**2.0h**(관람) + **장소 간 이동시간 `_travel_h`**를 따로 더한다.
+  - ⚠️ **시간 가정**: 관광지 1곳 = **유형별 체류 `dwell_h`**(contentTypeId별 `_DWELL_BY_CT`: 식당·쇼핑 1h, 문화시설 1.5h, 관광지 2h, 레포츠 3h, 그 외 `_DWELL_H` 2h; 테마파크 테마면 `_DWELL_THEME_PARK_H` 4h) + **장소 간 이동시간 `_travel_h`**를 따로 더한다.
     `_travel_h` = Haversine 직선거리 × `_DETOUR`(1.3) ÷ `_SPEED_KMH`(30) — 인접해도 `_MIN_MOVE_H`(15분) 하한.
     → **가까운 장소는 촘촘, 먼 장소는 벌어져 하루에 덜 들어간다**(예전 고정 2.5h 슬롯을 체류+가변 이동으로 대체).
     Haversine는 이제 방문 *순서*(NN+2-opt) 최적화 **와** 이 이동시간 추정 **양쪽**에 쓰인다(예전엔 순서에만).
-    관광지 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 체류 2.0h+가변 이동시간 간격으로 찍히되
+    관광지 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 유형별 체류+가변 이동시간 간격으로 찍히되
     **식사(식당) 구간은 건너뛴다**. 식당은 점심(~12)·저녁(~18) 앵커 시각에 배정된다(균등 그리드가 아님).
-    체류 상수는 **`scheduling._DWELL_H`(2.0) = `itinerary._HOURS_PER_PLACE`(2.0)**로 반드시 일치해야 방문 종료시각
-    표기가 어긋나지 않는다(바꿀 땐 둘 다). `services/recommend_service._HOURS_PER_PLACE`(2.5)는 **별개** —
+    체류 시간은 **`scheduling.dwell_h` 하나만** 쓴다 — `itinerary._visit_seg`(방문 종료시각 표기)도 같은 함수를 부르므로
+    표기와 스케줄이 어긋나지 않는다(`RecommendedPlace.content_type_id`가 그 연결이다). `services/recommend_service._HOURS_PER_PLACE`(2.5)는 **별개** —
     `_day_caps`(하루 방문 개수 상한)를 열차 시각에서 뽑는 '평균 슬롯' 근사치일 뿐 실제 시각 배치엔 안 쓴다.
     정밀 도로 이동시간 API 연동은 추후.
 

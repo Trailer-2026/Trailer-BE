@@ -169,7 +169,7 @@ def _metrics(days: list[tuple[int, list[tuple[ScoredPlace, float]]]], origin, se
                 if open_ok and close_ok and weekday not in p.closed_weekdays:
                     ok_hours += 1
         if visits:
-            first, last = visits[0][1], visits[-1][1] + scheduling._DWELL_H
+            first, last = visits[0][1], visits[-1][1] + scheduling._dwell(visits[-1][0])
             day_ok += first >= lo - 1e-9 and last <= hi + 1e-9
     n = len(all_places) or 1
     return {
@@ -216,7 +216,7 @@ def _naive_days(order: list[ScoredPlace], k: int, origin) -> list:
         t, prev, visits = scheduling._DAY_START, None, []
         for p in chunk:
             if prev is not None:
-                t += scheduling._DWELL_H + scheduling._travel_h(prev, p)
+                t += scheduling._dwell(prev) + scheduling._travel_h(prev, p)
             visits.append((p, t))
             prev = p
         days.append((idx, visits))

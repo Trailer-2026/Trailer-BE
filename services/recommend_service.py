@@ -658,11 +658,15 @@ def _caps_between(arr, dep, k: int, ref=None) -> tuple[int | None, int | None]:
 
     첫날은 '도착시각+버퍼~하루 끝', 마지막날은 '하루 시작~출발시각-버퍼'의 가용 시간으로 제한.
     ref(여행 첫날)를 주면 자정 넘긴 도착을 첫날 기준 24+시로 봐서 첫날 상한이 0이 된다(빈 날).
-    k<=1이면 도착~출발 한 구간. arr/dep가 없으면(None) (None, None) → pipeline 기본 상한.
+    k<=1이면 도착~출발 한 구간. arr가 없으면(None) (None, None) → pipeline 기본 상한.
+    dep만 없으면(오는편 열차를 못 찾음 — TAGO 시간표가 약 10일치뿐이라 그 너머 귀가일은 비어 있다)
+    마지막날은 제약 없이 두되 **도착 제약은 유지한다**. 둘 다 버리면 도착 전에 관광이 시작된다.
     """
-    if arr is None or dep is None:
+    if arr is None:
         return None, None
     arr_h = _time_of(arr, ref) + _ARRIVE_BUFFER_H
+    if dep is None:
+        return _cap_from_hours(_DAY_END_HOUR - arr_h), None
     dep_h = dep.hour + dep.minute / 60 - _DEPART_BUFFER_H
     if k <= 1:
         cap = _cap_from_hours((dep - arr).total_seconds() / 3600 - _ARRIVE_BUFFER_H - _DEPART_BUFFER_H)
@@ -675,12 +679,13 @@ def _windows_between(arr, dep, k: int, ref=None) -> list[tuple[float, float]] | 
 
     첫날은 도착시각+버퍼~하루 끝, 마지막날은 하루 시작~출발시각-버퍼, 중간날은 하루 종일(9~21).
     ref(여행 첫날)를 주면 자정 넘긴 도착이 첫날 창을 벗어나(24+시) 첫날은 비고 관광이 다음날로 밀린다.
-    k<=1이면 도착~출발 한 구간. arr/dep가 없으면 None → pipeline 기본 시간대(9~21).
+    k<=1이면 도착~출발 한 구간. arr가 없으면 None → pipeline 기본 시간대(9~21).
+    dep만 없으면(오는편 미확보) 마지막날 끝은 하루 끝(_DAY_END_HOUR)으로 두고 도착 제약만 건다.
     """
-    if arr is None or dep is None:
+    if arr is None:
         return None
     arr_h = _time_of(arr, ref) + _ARRIVE_BUFFER_H
-    dep_h = dep.hour + dep.minute / 60 - _DEPART_BUFFER_H
+    dep_h = dep.hour + dep.minute / 60 - _DEPART_BUFFER_H if dep is not None else _DAY_END_HOUR
     if k <= 1:
         return [(arr_h, dep_h)]
     return [
@@ -690,10 +695,14 @@ def _windows_between(arr, dep, k: int, ref=None) -> list[tuple[float, float]] | 
 
 
 def _route_arr_dep(route):
-    """경로의 (목적지 도착 dt, 귀가 출발 dt). 경유는 go_trains[-1]/back_trains[0]라 체류가 반영된다."""
-    if route is None or not route.go_trains or not route.back_trains:
+    """경로의 (목적지 도착 dt, 귀가 출발 dt). 경유는 go_trains[-1]/back_trains[0]라 체류가 반영된다.
+
+    오는편이 없으면 dep만 None — 도착 제약은 살려야 도착 전 관광이 안 생긴다.
+    """
+    if route is None or not route.go_trains:
         return None, None
-    return route.go_trains[-1].arr_time, route.back_trains[0].dep_time
+    dep = route.back_trains[0].dep_time if route.back_trains else None
+    return route.go_trains[-1].arr_time, dep
 
 
 def _trip_start(route):

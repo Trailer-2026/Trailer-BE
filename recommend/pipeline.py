@@ -244,6 +244,7 @@ def _to_reco(
         open_time=routing.hhmm(p.open_hour),
         close_time=routing.hhmm(p.close_hour, closing=True),
         visit_time=routing.hhmm(arrive_hour),
+        content_type_id=p.content_type_id,
     )
 
 

@@ -11,6 +11,8 @@ Phase 1: 대표 코스 1개를 각 경로에 그대로 엮는다(코스는 route
 from collections import Counter
 from datetime import datetime, timedelta
 
+from recommend import scheduling
+
 from schemas.recommend_schema import (
     Itinerary,
     ItinerarySegment,
@@ -18,9 +20,8 @@ from schemas.recommend_schema import (
 )
 from utils.train_api import KST
 
-# 관광지 1곳 체류 시간(h) — 방문 종료시각 표기용. scheduling._DWELL_H와 반드시 일치해야
-# 타임라인에서 방문 종료가 다음 방문 시작을 넘지 않는다(장소 간 이동은 시각 간격으로 드러남).
-_HOURS_PER_PLACE = 2.0
+# 관광지 1곳 체류 시간(h)은 scheduling.dwell_h(유형별)로 통일 — 방문 종료시각 표기가 스케줄과 같은
+# 값을 써야 타임라인에서 방문 종료가 다음 방문 시작을 넘지 않는다(장소 간 이동은 시각 간격으로 드러남).
 
 # 경유역 관광 1곳 점유 시간(h) — recommend_service._VIA_STAY_H와 동기화(역 근처 잠깐이라 목적지보다 짧게).
 # 경유 관광 종료시각은 이 값과 '다음 열차 출발' 중 이른 쪽으로 상한한다(열차 출발 후로 새지 않게).
@@ -54,7 +55,7 @@ def build_itinerary(route, course, go_date: str) -> Itinerary:
                 if seg.start_time is None:  # 체류 중 폐점 등으로 방문시각 미상 → 체류 슬롯에 정렬
                     seg.start_time = dwell
                 # 경유 관광 종료시각은 (시작+경유 점유) 또는 다음 열차 출발 중 이른 쪽으로 상한.
-                # _visit_seg가 목적지용 2.5h로 찍은 end를 여기서 경유 모델(_STOPOVER_HOURS)로 덮어써
+                # _visit_seg가 목적지용 체류(dwell_h)로 찍은 end를 여기서 경유 모델(_STOPOVER_HOURS)로 덮어써
                 # 열차 출발(예: 12:16)을 넘겨 "일정 충돌"이 나던 문제를 막는다.
                 if seg.start_time is not None:
                     end = seg.start_time + timedelta(hours=_STOPOVER_HOURS)
@@ -109,7 +110,7 @@ def _sort_key(seg, go: datetime) -> datetime:
 
 def _visit_seg(place: RecommendedPlace, date_ymd: str | None, go: datetime) -> ItinerarySegment:
     st = _visit_dt(date_ymd, place.visit_time)
-    end = st + timedelta(hours=_HOURS_PER_PLACE) if st is not None else None
+    end = st + timedelta(hours=scheduling.dwell_h(place.content_type_id, place.themes)) if st is not None else None
     # visit_time이 없어도 날짜(date_ymd)로 day_no를 유지 — 늦은 날 방문지가 day1로 뭉개지지 않게.
     day_ref = st or _visit_dt(date_ymd, "00:00")
     return ItinerarySegment(

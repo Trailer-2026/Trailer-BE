@@ -96,6 +96,9 @@ class RecommendedPlace(PlaceBase):
     visit_time: str | None = Field(
         None, description="예상 방문 시각 (HH:MM). 운영시간을 반영해 배정된 방문 순서상의 시각"
     )
+    content_type_id: int | None = Field(
+        None, description="TourAPI 콘텐츠 유형(12 관광지·14 문화시설·39 음식점 …). 체류 시간 산정 기준"
+    )
 
 
 class Lodging(BaseModel):
