@@ -57,10 +57,14 @@ def build_courses(
     buckets = [working[i::_NUM_COURSES] for i in range(_NUM_COURSES)]
 
     # 중간 날이 식당만이라 2끼(2곳)에 그칠 때 보충할 비-식당 관광지 풀. working(운영시간
-    # 부착 작업셋)에서만 뽑아 hours 일관성을 유지한다. 코스 간 중복은 허용(관광지 희소).
+    # 부착 작업셋)에서만 뽑아 hours 일관성을 유지한다. 코스 간 중복은 허용하되(관광지 희소)
+    # 최소화한다 — 풀이 세 버킷 전체라 보충분은 항상 다른 코스의 관광지다. 그래서 (1) 모자란
+    # 만큼만 보충하고 (2) 앞 코스가 이미 쓴 곳은 뒤로 미룬다(used_elsewhere). 실측(역 6곳 ×
+    # 테마 3조합)에서 cap 만큼 늘 보충하던 때는 코스 셋이 평균 4.6곳을 공유했다.
     attraction_pool = [p for p in working if p.content_type_id != scheduling._MEAL_CT]
 
     courses: list[Course] = []
+    used_elsewhere: set[int] = set()
     for label, bucket in zip(_LABELS, buckets):
         if not bucket:
             continue
@@ -71,10 +75,11 @@ def build_courses(
         # 하루 방문지 상한은 _assemble이 날짜별로 적용(첫날/마지막날은 열차 시각 기반).
         course = _assemble(
             label, clusters, criteria, origin, selected,
-            first_cap, last_cap, day_windows, attraction_pool,
+            first_cap, last_cap, day_windows, attraction_pool, used_elsewhere,
         )
         if course.days:
             courses.append(course)
+            used_elsewhere.update(rp.place_idx for d in course.days for rp in d.places)
     return courses
 
 
@@ -139,6 +144,7 @@ def _assemble(
     last_cap: int | None = None,
     day_windows: list[tuple[float, float]] | None = None,
     attraction_pool: list[ScoredPlace] | None = None,
+    used_elsewhere: set[int] | frozenset[int] = frozenset(),
 ) -> Course:
     """정해진 군집(Day)들을 하나의 Course로 조립한다.
 
@@ -181,14 +187,24 @@ def _assemble(
         # 도시) 구간의 마지막 날은 여행 마지막 날이 아니라 '그 밤 자고 다음날 이동'하는 종일 관광
         # 날이라 열차 제약이 없다 → last_cap=None. 이런 날만 마지막 위치여도 채운다.
         fillable = idx > 0 and (idx < n - 1 or last_cap is None)
-        if fillable and attraction_pool:
+        # 모자란 만큼만 보충한다 — 그 날 관광지(비-식당, 그 요일에 여는 곳)가 cap 에 못 미치는 수.
+        # 항상 cap 만큼 넣으면 scheduling 이 동선순으로 섞어 보충분이 자기 관광지를 밀어내고,
+        # 그 보충분은 다른 코스의 관광지라 코스 셋이 서로 닮아 간다.
+        own = sum(
+            1 for p in cl.members
+            if p.content_type_id != scheduling._MEAL_CT
+            and (weekday is None or weekday not in p.closed_weekdays)
+        )
+        need = cap - own
+        if fillable and attraction_pool and need > 0:
             # 다른 날이 이미 소유(native)하거나 이미 배치된 관광지는 제외 → 코스 내 중복 방지.
+            # 앞 코스가 쓴 곳(used_elsewhere)은 뒤로 — 남는 게 그것뿐일 때만 재사용한다.
             extras = sorted(
                 (p for p in attraction_pool
                  if p.place_idx not in used_in_course and p.place_idx not in native_ids),
-                key=lambda p: routing.haversine(p.lat, p.lng, *cl.centroid),
+                key=lambda p: (p.place_idx in used_elsewhere, routing.haversine(p.lat, p.lng, *cl.centroid)),
             )
-            candidates = candidates + extras[:cap]
+            candidates = candidates + extras[:need]
         scheduled = scheduling.schedule_day(
             candidates, cap, window, weekday, origin=origin, is_last=(idx == n - 1)
         )
