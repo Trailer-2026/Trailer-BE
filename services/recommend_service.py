@@ -483,7 +483,7 @@ def _prepare_scored(places, criteria: SearchCriteria, k: int, themes=None) -> li
     (working_set·build_courses는 criteria.themes를 그대로 쓴다 — 테마 쿼터가 안 걸리면 점수 상위로
     채워지므로 '같은 작업셋' 불변식은 유지된다.)
     """
-    scored = scoring.score_places(places, criteria.themes if themes is None else themes)
+    scored = scoring.score_places(places, criteria.themes if themes is None else themes, party=criteria.party)
     _attach_hours(scored, criteria, k)
     return scored
 
@@ -929,7 +929,7 @@ def _enrich_stopovers(db: Session, routes, criteria: SearchCriteria) -> list:
         places = tour_place.live_places(lat, lng, criteria.themes, radius_m=_VIA_RADIUS_M)
         # 목적지 코스와 '같은 점수식'(테마 가중 코사인 + 이미지 품질)으로 경유역 관광지도 선호도를 매긴다.
         # → 경유 관광이 0점 고정이 아니라 목적지 관광과 같은 척도로 비교·노출된다.
-        score_map = {sp.place_idx: sp.score for sp in scoring.score_places(places, criteria.themes)}
+        score_map = {sp.place_idx: sp.score for sp in scoring.score_places(places, criteria.themes, party=criteria.party)}
         places.sort(key=lambda p: haversine(lat, lng, p.lat, p.lng))
         top = _pick_stopover(places, _VIA_PLACES_N)
         # 노출할 경유 관광지의 운영시간을 실시간(detailIntro2)으로 조회(역 근처 ≤3곳).

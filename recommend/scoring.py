@@ -3,6 +3,7 @@
 import math
 
 from core.enums import Theme
+from recommend.destination import _AGE_SUIT
 from recommend.types import ScoredPlace
 
 # 테마 벡터 차원 순서 고정 (코사인 계산용)
@@ -17,6 +18,28 @@ _NO_IMAGE_FACTOR = 0.6
 def _quality_factor(p) -> float:
     """대표이미지가 없으면 감점 계수(_NO_IMAGE_FACTOR), 있으면 1.0."""
     return 1.0 if getattr(p, "image_url", None) else _NO_IMAGE_FACTOR
+
+
+def _party_factor(themes: list[Theme], party) -> float:
+    """여행 인원 구성에 따른 장소 적합 계수 — 성인 기준 적합도 대비 비율.
+
+    장소 테마별 (성인, 청소년, 어린이) 적합도(destination._AGE_SUIT)를 인원 비율로 가중평균한 뒤
+    **성인만일 때의 값으로 나눈다.** 표 값을 그대로 곱하면 성인 2명 검색에서도 역사(0.9)가
+    자연(0.8)을 앞서 인원과 무관하게 순위가 전부 바뀐다. 비율로 두면 성인만·인원 미입력은 정확히
+    1.0이라 기존 결과가 유지되고, 아이·청소년이 섞일 때만 테마파크·바다가 오르고 힐링·역사가 내린다.
+    """
+    if party is None:
+        return 1.0
+    counts = (party.adult, party.youth, party.child)
+    total = sum(counts)
+    if total == 0 or counts[0] == total:
+        return 1.0
+    rows = [_AGE_SUIT[t] for t in themes if t in _AGE_SUIT]
+    if not rows:
+        return 1.0
+    suit = [sum(r[i] for r in rows) / len(rows) for i in range(3)]
+    mixed = sum(c * s for c, s in zip(counts, suit)) / total
+    return mixed / suit[0]
 
 
 def cosine_weighted(
@@ -55,10 +78,12 @@ def score_places(
     places: list,                       # 추천지 객체 목록 (utils.tour_place.LivePlace)
     themes: list[Theme],
     weights: dict[Theme, float] | None = None,
+    party=None,                          # schemas.recommend_schema.Party. None이면 인원 무시
 ) -> list[ScoredPlace]:
     """선택 테마와 각 추천지 테마를 매칭해 ScoredPlace 목록(score>0)을 점수 내림차순 반환.
 
     themes가 비면(테마 미선택) 전 추천지를 동일 점수 1.0으로 반환(지리 기반만으로 추천).
+    party를 주면 인원 구성 적합 계수(_party_factor)를 곱한다 — 성인만이면 1.0이라 순위 불변.
     """
     # 가중치 벡터도 _THEME_ORDER 순서로. 미지정 테마는 1.0(균등 가중).
     w_vec = tuple(
@@ -68,7 +93,8 @@ def score_places(
     # 테마 미선택: 점수화 생략, 좌표만 있으면 통과하되 이미지 유무로 품질 차등(무명 스팟 감점)
     if not themes:
         return sorted(
-            (_to_scored(p, _quality_factor(p)) for p in places if _has_coords(p)),
+            (_to_scored(p, _quality_factor(p) * _party_factor(p.themes or [], party))
+             for p in places if _has_coords(p)),
             key=lambda sp: sp.score,
             reverse=True,
         )
@@ -82,7 +108,7 @@ def score_places(
         score = cosine_weighted(_multi_hot(p.themes or []), pref_vec, w_vec)
         # score==0 = 선택 테마와 겹치는 게 하나도 없음 → 후보에서 버림(품질 계수는 테마 겹칠 때만 적용)
         if score > 0.0:
-            out.append(_to_scored(p, score * _quality_factor(p)))
+            out.append(_to_scored(p, score * _quality_factor(p) * _party_factor(p.themes or [], party)))
     out.sort(key=lambda sp: sp.score, reverse=True)
     return out
 
@@ -123,6 +149,19 @@ def _selfcheck() -> None:
     assert out[0].score > out[1].score, (out[0].score, out[1].score)
     # 이미지 없는 곳 점수 = 코사인 × 감점계수
     assert abs(out[1].score - 1.0 * _NO_IMAGE_FACTOR) < 1e-9, out[1].score
+
+    # 인원 반영: 성인만이면 순위 그대로, 어린이 동반이면 테마파크가 역사 위로.
+    from schemas.recommend_schema import Party
+    history = place(4, [Theme.HISTORY], "http://img/h.jpg")
+    park = place(5, [Theme.THEME_PARK], "http://img/p.jpg")
+    both = [Theme.HISTORY, Theme.THEME_PARK]
+    adults = [sp.place_idx for sp in score_places([history, park], both, party=Party(adult=2))]
+    plain = [sp.place_idx for sp in score_places([history, park], both)]
+    assert adults == plain, f"성인만이면 불변: {adults} vs {plain}"
+    kids = score_places([history, park], both, party=Party(adult=2, child=2))
+    assert kids[0].place_idx == 5, f"어린이 동반이면 테마파크 우선: {[sp.place_idx for sp in kids]}"
+    base = {sp.place_idx: sp.score for sp in score_places([history, park], both)}
+    assert kids[0].score > base[5] and kids[1].score < base[4], ([sp.score for sp in kids], base)
     print("scoring selfcheck OK")
 
 

@@ -48,7 +48,7 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 | 파일 | 역할 |
 |---|---|
 | `types.py` | 내부 값 객체: `ScoredPlace`(점수화된 장소), `Cluster`(Day 묶음) |
-| `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`) |
+| `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`). `party`를 주면 장소 테마 × `destination._AGE_SUIT`로 인원 구성 계수(`_party_factor`)를 곱한다 — **성인 기준 대비 비율**이라 성인만·미입력이면 1.0(순위 불변), 아이·청소년이 섞일 때만 테마파크·바다↑ 힐링·역사↓ |
 | `clustering.py` | ② k-means(결정적)로 중심 잡고 **용량 균형 재배정**으로 날짜 묶기 — 각 날 floor~ceil(n/k)개로 과밀·빈 날 없이 정확히 k일 보장 (`kmeans_by_geo`/`_balanced_assign`) |
 | `routing.py` | ③④ Nearest Neighbor + 2-opt + 순환 복귀, `haversine` (`nearest_neighbor`/`two_opt`/`close_cycle`) |
 | `scheduling.py` | ⑤ Day 내부 **시각 스케줄링**. 체류(`_DWELL_H`)+장소 간 이동시간(`_travel_h`) 반영해 동선 순 배치, 식당은 그 시간대 동선 근처 우선(점수−이탈거리 감점). 관광지 운영시간(오픈/마감·휴무요일) 소프트 제약, 밖이면 차순위 대체. 운영시간 정보 없는 날은 `routing` 동선 순서로 폴백 (`schedule_day`) |
