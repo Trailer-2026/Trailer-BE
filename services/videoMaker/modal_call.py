@@ -156,6 +156,9 @@ class ChunkState:
 def _run_chunk(index: int, chunk: dict, files: dict[str, bytes], args, state: ChunkState) -> None:
     try:
         render = modal.Function.from_name(APP_NAME, "render")
+        # 새 인자는 값이 있을 때만 넘긴다 — 배포된 함수가 옛 시그니처면 모르는 kwarg 로
+        # 죽는데, 그러면 홍보 영상만이 아니라 모든 렌더가 막힌다(재배포 전까지).
+        extra = {"max_video_seconds": args.max_video_seconds} if args.max_video_seconds else {}
         for event in render.remote_gen(
             travel_data_json=json.dumps(chunk, ensure_ascii=False),
             files=files,
@@ -164,6 +167,7 @@ def _run_chunk(index: int, chunk: dict, files: dict[str, bytes], args, state: Ch
             light_preset=args.light_preset,
             intro=False,
             outro=False,
+            **extra,
         ):
             if not isinstance(event, dict):
                 continue
@@ -297,6 +301,12 @@ def main() -> int:
     parser.add_argument("--light-preset", default="")
     parser.add_argument("--intro", action="store_true")
     parser.add_argument("--outro", action="store_true")
+    # 길이 상한은 조각마다 따로 걸린다(render_video 가 조각 하나만 본다). 전체 길이를 정확히
+    # 맞추려면 --max-chunks 1 과 같이 써라 — 홍보 영상(30초)이 그렇게 쓴다.
+    parser.add_argument("--max-video-seconds", type=float, default=None,
+                        help="조각당 영상 길이 상한(초). 생략하면 render_video 기본(60)")
+    parser.add_argument("--max-chunks", type=int, default=MAX_CHUNKS,
+                        help=f"병렬 조각 수 상한 (기본 {MAX_CHUNKS}, 1 이면 분할 없음)")
     args = parser.parse_args()
 
     travel_path = (HERE / args.travel_data).resolve()
@@ -314,7 +324,7 @@ def main() -> int:
         print("먼저 배포하세요: modal deploy modal_render.py")
         return 1
 
-    chunks = split_travel_data(data)
+    chunks = split_travel_data(data, max_chunks=args.max_chunks)
     print(f"[parallel] {len(chunks)}개 조각으로 분할 렌더링 시작", flush=True)
 
     results = render_chunks_parallel(chunks, all_files, args)

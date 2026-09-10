@@ -201,3 +201,29 @@ class VideoRenderStatusResponse(BaseModel):
         description="실패 사유 (status=failed/unknown 일 때만) — **그대로 보여줄 수 있는 문구**다. "
                     "원인 로그는 서버에만 남고 여기로 나오지 않는다",
     )
+
+
+class PromoPoint(BaseModel):
+    """홍보 영상 코스의 지점 1개 — GET /api/places/search 결과를 그대로 넣으면 된다."""
+
+    name: str = Field(..., min_length=1, max_length=100, description="지점 이름 (영상 라벨)", examples=["해운대 해수욕장"])
+    latitude: float = Field(..., ge=-90, le=90, description="위도")
+    longitude: float = Field(..., ge=-180, le=180, description="경도")
+    image_url: str | None = Field(
+        None, max_length=500,
+        description="이 지점에서 보여줄 사진 URL (생략하면 좌표 반경 300m 의 관광 대표 이미지를 실시간 조회, 없으면 사진 없이 지나감)",
+    )
+
+
+class PromoRenderRequest(BaseModel):
+    """지자체 홍보 영상 렌더 요청 — 사진 없이 코스(지점 목록)만 넣는다."""
+
+    title: str = Field(..., min_length=1, max_length=100, description="릴스 제목", examples=["부산 해안선 코스"])
+    region: str | None = Field(None, max_length=50, description="지역 태그 (생략하면 첫 지점 좌표로 역지오코딩)", examples=["부산"])
+    theme: str = Field("default", description="지도 계절 테마: default|spring|summer|autumn|winter")
+    bgm: str = Field("", description="BGM 파일명 또는 곡명 (GET /api/videos/bgm, 빈 값이면 무음)")
+    points: list[PromoPoint] = Field(
+        ..., min_length=2, max_length=6,
+        description="코스 지점 순서대로 2~6개. 지점당 사진 1장이 3.2초를 차지해 6개를 넘기면 30초 안에 들어오지 않는다",
+    )
+

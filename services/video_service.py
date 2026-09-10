@@ -63,6 +63,7 @@ from schemas.video_schema import (
     ReelsUrlResponse,
     ReelsTitleUpdateResponse,
     ReelsUploadResponse,
+    PromoRenderRequest,
 )
 from utils import gcs, kakao_local, tour_place
 
@@ -488,11 +489,17 @@ def _render_python() -> str:
     return Config.read("videomaker", "python", default=sys.executable) or sys.executable
 
 
-def _build_command(travel_data_path: Path, theme: str) -> list[str]:
+def _build_command(
+    travel_data_path: Path, theme: str, max_video_seconds: float | None = None
+) -> list[str]:
     """Modal 렌더 명령을 만든다.
 
     화질은 항상 quality-fast(JPEG q95, 풀해상도) — 무손실 PNG 대비 최종 mp4
     화질 차이가 사실상 없고 렌더가 크게 빠르다(modal_call.py 의 기본 --mode).
+
+    max_video_seconds 를 주면 **조각을 나누지 않는다**(--max-chunks 1) — 길이 상한은
+    render_video 가 조각 하나 안에서 걸어서, 2조각으로 나누면 상한이 조각마다 따로
+    걸려 전체는 두 배가 된다. 정확한 길이가 중요한 홍보 영상만 이 값을 준다.
     """
     command = [
         _render_python(),
@@ -502,6 +509,8 @@ def _build_command(travel_data_path: Path, theme: str) -> list[str]:
     ]
     if theme != "default":
         command += ["--theme", theme]
+    if max_video_seconds is not None:
+        command += ["--max-video-seconds", str(max_video_seconds), "--max-chunks", "1"]
     # TRAILER 인트로·아웃트로는 항상 붙인다.
     command += ["--intro", "--outro"]
     return command
@@ -1147,6 +1156,7 @@ def _spawn_render_job(
     user_idx: int,
     title: str | None = None,
     region: str | None = None,
+    max_video_seconds: float | None = None,
 ) -> dict[str, object]:
     """릴스 행을 먼저 등록하고, 렌더 서브프로세스를 백그라운드 스레드로 띄운다.
 
@@ -1161,7 +1171,7 @@ def _spawn_render_job(
     )
     db.commit()
 
-    command = _build_command(travel_data_path, theme)
+    command = _build_command(travel_data_path, theme, max_video_seconds)
     job = _new_job(
         reels.reels_idx,
         user_idx,
@@ -1586,6 +1596,57 @@ def start_render_travel(
         _clean_title(title) or travel.title,
         region=(travel.region or "").strip() or _region_of_trip(track_points),
     )
+
+
+# --------------------------------------------------------------------------- #
+# 홍보 영상 — 지자체가 코스(지점 목록)만 등록하면 30초 영상을 만든다.
+# --------------------------------------------------------------------------- #
+# 본편 상한(초). 인트로·아웃트로(각 ~3.6초)는 이 밖에 붙어 완성본은 37초쯤 된다.
+# 상한은 이동 구간만 압축하므로 지점 수가 실제 길이를 정한다 — 지점당 사진 1장 3.2초 +
+# 이동 최소 1.2초라 6지점이면 25초쯤. 지점 수 상한(6)은 스키마(PromoRenderRequest)가 건다.
+PROMO_VIDEO_SECONDS = 30.0
+
+
+def start_render_promo(db: Session, user_idx: int, req: PromoRenderRequest) -> dict[str, object]:
+    """코스 지점 목록만으로 홍보 영상 렌더링을 시작한다 — 사진 업로드 없음.
+
+    지점마다 image_url 이 있으면 그걸, 없으면 좌표로 관광 대표 이미지를 실시간 조회해
+    1장씩 붙인다(둘 다 없거나 다운로드 실패면 사진 없이 지나감). 결과는 요청자 소유의
+    보통 릴스 1건이라 공유 링크(/r/{reels_idx})·다운로드·피드 노출이 모두 그대로 된다.
+    ponytail: 코스는 저장하지 않는다 — 다시 뽑고 싶으면 다시 부른다. 권한 게이트도 없다.
+    """
+    theme = _validate_render_options(req.theme)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        urls = list(pool.map(
+            lambda p: p.image_url or tour_place.image_near(p.latitude, p.longitude), req.points,
+        ))
+        distinct = list(dict.fromkeys(u for u in urls if u))
+        downloaded = dict(zip(distinct, pool.map(_fetch_travel_image, distinct)))
+
+    job_dir = _new_job_dir()
+    try:
+        track_points: list[dict[str, object]] = []
+        media_points: list[dict[str, object]] = []
+        for i, (point, url) in enumerate(zip(req.points, urls)):
+            content = downloaded.get(url) if url else None
+            photos = [_save_render_image(job_dir, f"img_{i}", url, content)] if content else []
+            _append_stop(
+                track_points, media_points,
+                point.latitude, point.longitude, photos, name=point.name.strip(),
+            )
+        if len(track_points) < 2:
+            raise BadRequestException("지점들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
+
+        travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, req.bgm)
+        return _spawn_render_job(
+            db, travel_data_path, bgm_path, theme, user_idx, req.title,
+            region=(req.region or "").strip() or _region_of_trip(track_points),
+            max_video_seconds=PROMO_VIDEO_SECONDS,
+        )
+    except Exception:
+        shutil.rmtree(job_dir, ignore_errors=True)  # 렌더 job 이 안 떴으면 아무도 안 치운다
+        raise
 
 
 def get_render_job(db: Session, reels_idx: int, user_idx: int) -> dict[str, object]:
