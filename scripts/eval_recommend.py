@@ -343,7 +343,7 @@ def evaluate_dest() -> list[str]:
                     a = agg.setdefault(name, {"spread": [], "provs": set(), "fit": []})
                     provs = [p.province for p in top]
                     a["spread"].append(len(set(provs)) / len(provs) if provs else 0)
-                    a["provs"].update(provs)
+                    a["provs"].update(p for p in provs if p)  # 본부 미상(None)을 본부 하나로 세면 커버가 '9/8'이 된다
                     a["fit"] += [destination._theme_fit(destination._shares(p.theme_counts, p.total), themes) for p in top]
     lines = [
         "",
