@@ -174,10 +174,15 @@ class VideoRenderStatusResponse(BaseModel):
     reels_idx: int = Field(..., description="릴스 PK — 진행률 조회·다운로드·편집 공용 키")
     status: str = Field(
         ...,
-        description="작업 상태: running | done | failed | unknown"
-                    "(unknown = 서버 재시작으로 진행 정보가 사라진 미완료 릴스)",
+        description="작업 상태: running | done | failed | unknown. 렌더 도중 서버가 "
+                    "재시작되면 그 작업은 다음 부팅 때 failed(phase=중단됨)로 확정되므로 "
+                    "'다시 만들기'를 안내하면 된다(unknown 은 그 정리 전에 조회한 경우)",
     )
-    phase: str = Field(..., description="현재 단계 (렌더 준비 중 / 프레임 렌더링 / 후처리 / 완료)")
+    phase: str = Field(
+        ...,
+        description="현재 단계 (대기 중 / 렌더 준비 중 / 프레임 렌더링 / 후처리 / 완료 / 중단됨). "
+                    "'대기 중'은 동시 렌더 상한에 걸려 순서를 기다리는 상태로, 실패가 아니다",
+    )
     percent: float = Field(..., description="진행률 0~100")
     frame: int = Field(..., description="렌더링된 프레임 번호 (프레임 단계에서만 증가)")
     total_frames: int | None = Field(None, description="전체 프레임 수 (프레임 단계 진입 전엔 null)")
@@ -191,5 +196,34 @@ class VideoRenderStatusResponse(BaseModel):
         description="완성 영상 URL (status=done 일 때만) — reels_url 과 같은 GCS 공개 URL",
     )
     reels_url: str | None = Field(None, description="GCS 버킷 공개 영상 URL (렌더 완료 시)")
-    error: str | None = Field(None, description="실패 사유 (status=failed/unknown 일 때만)")
-    log_tail: str = Field("", description="렌더 로그 끝부분 (종료 후 디버깅용)")
+    error: str | None = Field(
+        None,
+        description="실패 사유 (status=failed/unknown 일 때만) — **그대로 보여줄 수 있는 문구**다. "
+                    "원인 로그는 서버에만 남고 여기로 나오지 않는다",
+    )
+
+
+class PromoPoint(BaseModel):
+    """홍보 영상 코스의 지점 1개 — GET /api/places/search 결과를 그대로 넣으면 된다."""
+
+    name: str = Field(..., min_length=1, max_length=100, description="지점 이름 (영상 라벨)", examples=["해운대 해수욕장"])
+    latitude: float = Field(..., ge=-90, le=90, description="위도")
+    longitude: float = Field(..., ge=-180, le=180, description="경도")
+    image_url: str | None = Field(
+        None, max_length=500,
+        description="이 지점에서 보여줄 사진 URL (생략하면 좌표 반경 300m 의 관광 대표 이미지를 실시간 조회, 없으면 사진 없이 지나감)",
+    )
+
+
+class PromoRenderRequest(BaseModel):
+    """지자체 홍보 영상 렌더 요청 — 사진 없이 코스(지점 목록)만 넣는다."""
+
+    title: str = Field(..., min_length=1, max_length=100, description="릴스 제목", examples=["부산 해안선 코스"])
+    region: str | None = Field(None, max_length=50, description="지역 태그 (생략하면 첫 지점 좌표로 역지오코딩)", examples=["부산"])
+    theme: str = Field("default", description="지도 계절 테마: default|spring|summer|autumn|winter")
+    bgm: str = Field("", description="BGM 파일명 또는 곡명 (GET /api/videos/bgm, 빈 값이면 무음)")
+    points: list[PromoPoint] = Field(
+        ..., min_length=2, max_length=6,
+        description="코스 지점 순서대로 2~6개. 지점당 사진 1장이 3.2초를 차지해 6개를 넘기면 30초 안에 들어오지 않는다",
+    )
+

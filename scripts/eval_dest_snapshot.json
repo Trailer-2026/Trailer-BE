@@ -1,0 +1,2312 @@
+[
+ {
+  "themes": [
+   "OCEAN"
+  ],
+  "profiles": [
+   {
+    "area_code": 11,
+    "centroid": [
+     19.69442748,
+     117.9925662504
+    ],
+    "total": 1,
+    "theme_counts": {
+     "NATURE": 1
+    },
+    "station": {
+     "station_idx": 59,
+     "name": "목포역",
+     "latitude": 34.791165,
+     "longitude": 126.386415,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 11,
+    "centroid": [
+     37.55876761166245,
+     127.05486759028975
+    ],
+    "total": 17,
+    "theme_counts": {
+     "HISTORY": 8,
+     "NATURE": 4,
+     "CITY": 4,
+     "HEALING": 1
+    },
+    "station": {
+     "station_idx": 207,
+     "name": "청량리역",
+     "latitude": 37.579983,
+     "longitude": 127.047679,
+     "province": "서울본부"
+    }
+   },
+   {
+    "area_code": 11,
+    "centroid": [
+     37.52664807677188,
+     126.92205597439879
+    ],
+    "total": 32,
+    "theme_counts": {
+     "NATURE": 17,
+     "CITY": 4,
+     "HISTORY": 10,
+     "CULTURE": 1
+    },
+    "station": {
+     "station_idx": 138,
+     "name": "영등포역",
+     "latitude": 37.517699,
+     "longitude": 126.912623,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 12,
+    "centroid": [
+     34.22000354290271,
+     127.14238719173363
+    ],
+    "total": 11,
+    "theme_counts": {
+     "OCEAN": 7,
+     "NATURE": 2,
+     "CITY": 2
+    },
+    "station": {
+     "station_idx": 133,
+     "name": "여천역",
+     "latitude": 34.768147,
+     "longitude": 127.659479,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 12,
+    "centroid": [
+     34.73870987871628,
+     126.66036414224651
+    ],
+    "total": 30,
+    "theme_counts": {
+     "OCEAN": 6,
+     "HISTORY": 12,
+     "THEME_PARK": 1,
+     "CITY": 3,
+     "NATURE": 7,
+     "CULTURE": 1
+    },
+    "station": {
+     "station_idx": 59,
+     "name": "목포역",
+     "latitude": 34.791165,
+     "longitude": 126.386415,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 12,
+    "centroid": [
+     35.00065595586426,
+     127.3723313885275
+    ],
+    "total": 8,
+    "theme_counts": {
+     "NATURE": 5,
+     "OCEAN": 1,
+     "CITY": 1,
+     "HISTORY": 1
+    },
+    "station": {
+     "station_idx": 111,
+     "name": "순천역",
+     "latitude": 34.946606,
+     "longitude": 127.500904,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 26,
+    "centroid": [
+     35.16662690214034,
+     129.03720087325453
+    ],
+    "total": 49,
+    "theme_counts": {
+     "OCEAN": 3,
+     "CITY": 11,
+     "NATURE": 16,
+     "HISTORY": 16,
+     "THEME_PARK": 1,
+     "HEALING": 1,
+     "CULTURE": 2
+    },
+    "station": {
+     "station_idx": 77,
+     "name": "부전역",
+     "latitude": 35.164421,
+     "longitude": 129.060169,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 27,
+    "centroid": [
+     35.928128341941935,
+     128.62253186964972
+    ],
+    "total": 49,
+    "theme_counts": {
+     "CITY": 4,
+     "NATURE": 18,
+     "HISTORY": 24,
+     "THEME_PARK": 3,
+     "HEALING": 1
+    },
+    "station": {
+     "station_idx": 48,
+     "name": "동대구역",
+     "latitude": 35.879012,
+     "longitude": 128.626219,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 28,
+    "centroid": [
+     37.8427720065,
+     124.7082252086
+    ],
+    "total": 1,
+    "theme_counts": {
+     "NATURE": 1
+    },
+    "station": {
+     "station_idx": 234,
+     "name": "행신역",
+     "latitude": 37.615263,
+     "longitude": 126.843493,
+     "province": "서울본부"
+    }
+   },
+   {
+    "area_code": 28,
+    "centroid": [
+     37.55871224437982,
+     126.55187349151086
+    ],
+    "total": 19,
+    "theme_counts": {
+     "NATURE": 9,
+     "HISTORY": 6,
+     "OCEAN": 3,
+     "HEALING": 1
+    },
+    "station": {
+     "station_idx": 234,
+     "name": "행신역",
+     "latitude": 37.615263,
+     "longitude": 126.843493,
+     "province": "서울본부"
+    }
+   },
+   {
+    "area_code": 28,
+    "centroid": [
+     37.73169494873311,
+     126.44541731843357
+    ],
+    "total": 27,
+    "theme_counts": {
+     "HISTORY": 18,
+     "NATURE": 5,
+     "CITY": 2,
+     "CULTURE": 1,
+     "HEALING": 1
+    },
+    "station": {
+     "station_idx": 234,
+     "name": "행신역",
+     "latitude": 37.615263,
+     "longitude": 126.843493,
+     "province": "서울본부"
+    }
+   },
+   {
+    "area_code": 30,
+    "centroid": [
+     36.36330820951141,
+     127.40182084689445
+    ],
+    "total": 49,
+    "theme_counts": {
+     "NATURE": 28,
+     "HISTORY": 10,
+     "HEALING": 1,
+     "CITY": 6,
+     "THEME_PARK": 5
+    },
+    "station": {
+     "station_idx": 97,
+     "name": "서대전역",
+     "latitude": 36.326388,
+     "longitude": 127.401657,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 31,
+    "centroid": [
+     35.51320665030824,
+     129.31282066441057
+    ],
+    "total": 50,
+    "theme_counts": {
+     "NATURE": 22,
+     "OCEAN": 9,
+     "CITY": 8,
+     "HEALING": 4,
+     "HISTORY": 7,
+     "THEME_PARK": 1,
+     "CULTURE": 1
+    },
+    "station": {
+     "station_idx": 217,
+     "name": "태화강역",
+     "latitude": 35.5397714,
+     "longitude": 129.3538491,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 41,
+    "centroid": [
+     37.33359017010273,
+     126.92587768571433
+    ],
+    "total": 15,
+    "theme_counts": {
+     "THEME_PARK": 1,
+     "NATURE": 8,
+     "CITY": 4,
+     "OCEAN": 1,
+     "HISTORY": 1
+    },
+    "station": {
+     "station_idx": 15,
+     "name": "광명역",
+     "latitude": 37.420592,
+     "longitude": 126.881594,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 41,
+    "centroid": [
+     37.63999369732705,
+     127.42716870379829
+    ],
+    "total": 31,
+    "theme_counts": {
+     "NATURE": 20,
+     "CITY": 2,
+     "HISTORY": 6,
+     "OCEAN": 2,
+     "HEALING": 1,
+     "CULTURE": 1
+    },
+    "station": {
+     "station_idx": 131,
+     "name": "양평역",
+     "latitude": 37.496011,
+     "longitude": 127.49178,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 43,
+    "centroid": [
+     36.2023780035,
+     127.678558179075
+    ],
+    "total": 4,
+    "theme_counts": {
+     "HISTORY": 2,
+     "NATURE": 1,
+     "THEME_PARK": 1
+    },
+    "station": {
+     "station_idx": 43,
+     "name": "대전역",
+     "latitude": 36.332269,
+     "longitude": 127.434183,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 43,
+    "centroid": [
+     36.82142027368017,
+     127.81617528016022
+    ],
+    "total": 46,
+    "theme_counts": {
+     "HISTORY": 27,
+     "NATURE": 15,
+     "HEALING": 1,
+     "CITY": 4
+    },
+    "station": {
+     "station_idx": 83,
+     "name": "살미역",
+     "latitude": 36.90222,
+     "longitude": 127.96028,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 44,
+    "centroid": [
+     36.2731766525129,
+     127.28325608083196
+    ],
+    "total": 13,
+    "theme_counts": {
+     "HISTORY": 9,
+     "NATURE": 4
+    },
+    "station": {
+     "station_idx": 10,
+     "name": "계룡역",
+     "latitude": 36.272439,
+     "longitude": 127.265714,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 44,
+    "centroid": [
+     36.37729578828947,
+     126.97148849485791
+    ],
+    "total": 19,
+    "theme_counts": {
+     "CITY": 2,
+     "NATURE": 6,
+     "HISTORY": 10,
+     "OCEAN": 1
+    },
+    "station": {
+     "station_idx": 14,
+     "name": "공주역",
+     "latitude": 36.3325,
+     "longitude": 127.0968,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 44,
+    "centroid": [
+     36.694138844757724,
+     126.4222630024877
+    ],
+    "total": 18,
+    "theme_counts": {
+     "NATURE": 8,
+     "OCEAN": 3,
+     "CITY": 2,
+     "HISTORY": 5
+    },
+    "station": {
+     "station_idx": 203,
+     "name": "천안아산역",
+     "latitude": 36.794613,
+     "longitude": 127.104529,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 47,
+    "centroid": [
+     35.93004724465285,
+     128.42923431424757
+    ],
+    "total": 25,
+    "theme_counts": {
+     "NATURE": 16,
+     "HISTORY": 7,
+     "CITY": 2,
+     "HEALING": 1
+    },
+    "station": {
+     "station_idx": 96,
+     "name": "서대구역",
+     "latitude": 35.881304,
+     "longitude": 128.539901,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 47,
+    "centroid": [
+     36.21541533061875,
+     129.39779831676876
+    ],
+    "total": 16,
+    "theme_counts": {
+     "OCEAN": 3,
+     "THEME_PARK": 1,
+     "CITY": 2,
+     "HISTORY": 2,
+     "NATURE": 8
+    },
+    "station": {
+     "station_idx": 224,
+     "name": "포항역",
+     "latitude": 36.03619,
+     "longitude": 129.359715,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 47,
+    "centroid": [
+     36.56958850534286,
+     128.39294934932857
+    ],
+    "total": 7,
+    "theme_counts": {
+     "NATURE": 3,
+     "HISTORY": 4
+    },
+    "station": {
+     "station_idx": 140,
+     "name": "영주역",
+     "latitude": 36.785543,
+     "longitude": 128.623836,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 48,
+    "centroid": [
+     34.8812594125271,
+     128.55798110889756
+    ],
+    "total": 22,
+    "theme_counts": {
+     "HISTORY": 4,
+     "OCEAN": 5,
+     "NATURE": 9,
+     "CITY": 4
+    },
+    "station": {
+     "station_idx": 54,
+     "name": "마산역",
+     "latitude": 35.235919,
+     "longitude": 128.577026,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 48,
+    "centroid": [
+     35.265238207917804,
+     128.66667567114814
+    ],
+    "total": 14,
+    "theme_counts": {
+     "CITY": 2,
+     "NATURE": 9,
+     "THEME_PARK": 1,
+     "HISTORY": 2
+    },
+    "station": {
+     "station_idx": 202,
+     "name": "창원중앙역",
+     "latitude": 35.2422624,
+     "longitude": 128.7014842,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 48,
+    "centroid": [
+     35.50382447430563,
+     127.96424466895647
+    ],
+    "total": 14,
+    "theme_counts": {
+     "NATURE": 10,
+     "HEALING": 1,
+     "HISTORY": 3
+    },
+    "station": {
+     "station_idx": 200,
+     "name": "진주역",
+     "latitude": 35.183267,
+     "longitude": 128.087144,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 50,
+    "centroid": [
+     33.372566767414234,
+     126.52830246820442
+    ],
+    "total": 50,
+    "theme_counts": {
+     "NATURE": 32,
+     "CULTURE": 2,
+     "OCEAN": 8,
+     "CITY": 3,
+     "HISTORY": 4,
+     "THEME_PARK": 1,
+     "HEALING": 1
+    },
+    "station": {
+     "station_idx": 59,
+     "name": "목포역",
+     "latitude": 34.791165,
+     "longitude": 126.386415,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 51,
+    "centroid": [
+     37.51321320598765,
+     128.1569284273356
+    ],
+    "total": 10,
+    "theme_counts": {
+     "CITY": 2,
+     "NATURE": 6,
+     "THEME_PARK": 1,
+     "HISTORY": 1
+    },
+    "station": {
+     "station_idx": 52,
+     "name": "둔내역",
+     "latitude": 37.510619,
+     "longitude": 128.222225,
+     "province": "강원본부"
+    }
+   },
+   {
+    "area_code": 51,
+    "centroid": [
+     37.427151258386026,
+     129.14707426157287
+    ],
+    "total": 7,
+    "theme_counts": {
+     "HEALING": 1,
+     "NATURE": 2,
+     "OCEAN": 2,
+     "CITY": 1,
+     "HISTORY": 1
+    },
+    "station": {
+     "station_idx": 87,
+     "name": "삼척역",
+     "latitude": 37.42988,
+     "longitude": 129.17859,
+     "province": "강원본부"
+    }
+   },
+   {
+    "area_code": 51,
+    "centroid": [
+     37.8230462030956,
+     128.82669208848466
+    ],
+    "total": 32,
+    "theme_counts": {
+     "CITY": 5,
+     "OCEAN": 4,
+     "HISTORY": 9,
+     "HEALING": 1,
+     "NATURE": 12,
+     "CULTURE": 2
+    },
+    "station": {
+     "station_idx": 6,
+     "name": "강릉역",
+     "latitude": 37.763401,
+     "longitude": 128.898856,
+     "province": "강원본부"
+    }
+   },
+   {
+    "area_code": 52,
+    "centroid": [
+     35.54687500367335,
+     126.59161964658945
+    ],
+    "total": 30,
+    "theme_counts": {
+     "OCEAN": 5,
+     "NATURE": 7,
+     "HISTORY": 12,
+     "CITY": 4,
+     "HEALING": 1,
+     "CULTURE": 2
+    },
+    "station": {
+     "station_idx": 186,
+     "name": "정읍역",
+     "latitude": 35.575371,
+     "longitude": 126.842753,
+     "province": "전북본부"
+    }
+   },
+   {
+    "area_code": 52,
+    "centroid": [
+     35.53321548160769,
+     127.2477347151077
+    ],
+    "total": 13,
+    "theme_counts": {
+     "HISTORY": 5,
+     "NATURE": 6,
+     "CULTURE": 1,
+     "CITY": 1
+    },
+    "station": {
+     "station_idx": 35,
+     "name": "남원역",
+     "latitude": 35.410791,
+     "longitude": 127.360528,
+     "province": "전북본부"
+    }
+   },
+   {
+    "area_code": 52,
+    "centroid": [
+     36.23011424991638,
+     127.06797752667428
+    ],
+    "total": 7,
+    "theme_counts": {
+     "NATURE": 5,
+     "HEALING": 1,
+     "HISTORY": 1,
+     "CITY": 1
+    },
+    "station": {
+     "station_idx": 37,
+     "name": "논산역",
+     "latitude": 36.207051,
+     "longitude": 127.09203,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 36110,
+    "centroid": [
+     36.55299987637952,
+     127.26289439236187
+    ],
+    "total": 48,
+    "theme_counts": {
+     "NATURE": 19,
+     "HISTORY": 15,
+     "CITY": 9,
+     "THEME_PARK": 2,
+     "CULTURE": 3
+    },
+    "station": {
+     "station_idx": 149,
+     "name": "오송역",
+     "latitude": 36.621521,
+     "longitude": 127.328793,
+     "province": "대전충청본부"
+    }
+   }
+  ]
+ },
+ {
+  "themes": [
+   "HISTORY",
+   "FOOD"
+  ],
+  "profiles": [
+   {
+    "area_code": 11,
+    "centroid": [
+     19.69442748,
+     117.9925662504
+    ],
+    "total": 1,
+    "theme_counts": {
+     "NATURE": 1
+    },
+    "station": {
+     "station_idx": 59,
+     "name": "목포역",
+     "latitude": 34.791165,
+     "longitude": 126.386415,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 11,
+    "centroid": [
+     37.54929934937491,
+     127.0494697231159
+    ],
+    "total": 51,
+    "theme_counts": {
+     "HISTORY": 8,
+     "NATURE": 4,
+     "CITY": 5,
+     "HEALING": 1,
+     "FOOD": 33
+    },
+    "station": {
+     "station_idx": 207,
+     "name": "청량리역",
+     "latitude": 37.579983,
+     "longitude": 127.047679,
+     "province": "서울본부"
+    }
+   },
+   {
+    "area_code": 11,
+    "centroid": [
+     37.536448646172914,
+     126.91917921125544
+    ],
+    "total": 48,
+    "theme_counts": {
+     "NATURE": 17,
+     "CITY": 3,
+     "HISTORY": 10,
+     "CULTURE": 1,
+     "FOOD": 17
+    },
+    "station": {
+     "station_idx": 138,
+     "name": "영등포역",
+     "latitude": 37.517699,
+     "longitude": 126.912623,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 12,
+    "centroid": [
+     34.24540789840229,
+     127.08711426180538
+    ],
+    "total": 13,
+    "theme_counts": {
+     "OCEAN": 7,
+     "NATURE": 2,
+     "HISTORY": 1,
+     "CITY": 2,
+     "FOOD": 1
+    },
+    "station": {
+     "station_idx": 133,
+     "name": "여천역",
+     "latitude": 34.768147,
+     "longitude": 127.659479,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 12,
+    "centroid": [
+     34.82730772597742,
+     127.58660053393986
+    ],
+    "total": 25,
+    "theme_counts": {
+     "OCEAN": 1,
+     "NATURE": 2,
+     "CITY": 1,
+     "HISTORY": 1,
+     "FOOD": 20
+    },
+    "station": {
+     "station_idx": 133,
+     "name": "여천역",
+     "latitude": 34.768147,
+     "longitude": 127.659479,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 12,
+    "centroid": [
+     34.91554272465526,
+     126.71773816870014
+    ],
+    "total": 61,
+    "theme_counts": {
+     "OCEAN": 6,
+     "NATURE": 10,
+     "HISTORY": 11,
+     "THEME_PARK": 1,
+     "CITY": 3,
+     "CULTURE": 1,
+     "FOOD": 29
+    },
+    "station": {
+     "station_idx": 33,
+     "name": "나주역",
+     "latitude": 35.013988,
+     "longitude": 126.717214,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 26,
+    "centroid": [
+     35.16719524477544,
+     129.06324898011897
+    ],
+    "total": 99,
+    "theme_counts": {
+     "OCEAN": 3,
+     "CITY": 11,
+     "NATURE": 16,
+     "HISTORY": 16,
+     "THEME_PARK": 1,
+     "HEALING": 1,
+     "CULTURE": 2,
+     "FOOD": 50
+    },
+    "station": {
+     "station_idx": 77,
+     "name": "부전역",
+     "latitude": 35.164421,
+     "longitude": 129.060169,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 27,
+    "centroid": [
+     35.89838880172905,
+     128.61007711013693
+    ],
+    "total": 99,
+    "theme_counts": {
+     "CITY": 4,
+     "NATURE": 18,
+     "HISTORY": 24,
+     "THEME_PARK": 3,
+     "HEALING": 1,
+     "FOOD": 50
+    },
+    "station": {
+     "station_idx": 48,
+     "name": "동대구역",
+     "latitude": 35.879012,
+     "longitude": 128.626219,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 28,
+    "centroid": [
+     37.41803493521481,
+     126.42395375002971
+    ],
+    "total": 7,
+    "theme_counts": {
+     "NATURE": 1,
+     "OCEAN": 2,
+     "FOOD": 4
+    },
+    "station": {
+     "station_idx": 15,
+     "name": "광명역",
+     "latitude": 37.420592,
+     "longitude": 126.881594,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 28,
+    "centroid": [
+     37.49401944385443,
+     126.65732059026251
+    ],
+    "total": 40,
+    "theme_counts": {
+     "NATURE": 6,
+     "HISTORY": 1,
+     "FOOD": 33
+    },
+    "station": {
+     "station_idx": 234,
+     "name": "행신역",
+     "latitude": 37.615263,
+     "longitude": 126.843493,
+     "province": "서울본부"
+    }
+   },
+   {
+    "area_code": 28,
+    "centroid": [
+     37.69672512957028,
+     126.42899318876897
+    ],
+    "total": 50,
+    "theme_counts": {
+     "HISTORY": 23,
+     "NATURE": 8,
+     "OCEAN": 1,
+     "CITY": 2,
+     "CULTURE": 1,
+     "HEALING": 2,
+     "FOOD": 13
+    },
+    "station": {
+     "station_idx": 234,
+     "name": "행신역",
+     "latitude": 37.615263,
+     "longitude": 126.843493,
+     "province": "서울본부"
+    }
+   },
+   {
+    "area_code": 30,
+    "centroid": [
+     36.36226565986677,
+     127.38732899531267
+    ],
+    "total": 99,
+    "theme_counts": {
+     "NATURE": 28,
+     "HISTORY": 10,
+     "HEALING": 1,
+     "CITY": 6,
+     "THEME_PARK": 5,
+     "FOOD": 50
+    },
+    "station": {
+     "station_idx": 97,
+     "name": "서대전역",
+     "latitude": 36.326388,
+     "longitude": 127.401657,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 31,
+    "centroid": [
+     35.52254375384566,
+     129.2973021423678
+    ],
+    "total": 100,
+    "theme_counts": {
+     "NATURE": 22,
+     "OCEAN": 9,
+     "CITY": 8,
+     "HEALING": 4,
+     "HISTORY": 7,
+     "THEME_PARK": 1,
+     "CULTURE": 1,
+     "FOOD": 50
+    },
+    "station": {
+     "station_idx": 217,
+     "name": "태화강역",
+     "latitude": 35.5397714,
+     "longitude": 129.3538491,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 41,
+    "centroid": [
+     37.34412824123485,
+     127.44408181143515
+    ],
+    "total": 25,
+    "theme_counts": {
+     "NATURE": 9,
+     "CITY": 1,
+     "OCEAN": 1,
+     "HISTORY": 3,
+     "CULTURE": 1,
+     "FOOD": 10
+    },
+    "station": {
+     "station_idx": 75,
+     "name": "부발역",
+     "latitude": 37.2604,
+     "longitude": 127.49033,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 41,
+    "centroid": [
+     37.763221509805504,
+     127.30398313971506
+    ],
+    "total": 34,
+    "theme_counts": {
+     "NATURE": 11,
+     "CITY": 2,
+     "HISTORY": 4,
+     "OCEAN": 1,
+     "HEALING": 1,
+     "FOOD": 16
+    },
+    "station": {
+     "station_idx": 45,
+     "name": "덕소역",
+     "latitude": 37.587005,
+     "longitude": 127.208644,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 41,
+    "centroid": [
+     37.462404849295794,
+     126.86976225021455
+    ],
+    "total": 37,
+    "theme_counts": {
+     "THEME_PARK": 1,
+     "NATURE": 8,
+     "CITY": 3,
+     "OCEAN": 1,
+     "FOOD": 24
+    },
+    "station": {
+     "station_idx": 15,
+     "name": "광명역",
+     "latitude": 37.420592,
+     "longitude": 126.881594,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 43,
+    "centroid": [
+     36.58579022356913,
+     127.59121911073086
+    ],
+    "total": 53,
+    "theme_counts": {
+     "HISTORY": 12,
+     "NATURE": 5,
+     "THEME_PARK": 1,
+     "CITY": 1,
+     "FOOD": 34
+    },
+    "station": {
+     "station_idx": 149,
+     "name": "오송역",
+     "latitude": 36.621521,
+     "longitude": 127.328793,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 43,
+    "centroid": [
+     36.91584878286272,
+     127.97958502845182
+    ],
+    "total": 47,
+    "theme_counts": {
+     "HISTORY": 17,
+     "NATURE": 11,
+     "HEALING": 1,
+     "CITY": 3,
+     "FOOD": 16
+    },
+    "station": {
+     "station_idx": 83,
+     "name": "살미역",
+     "latitude": 36.90222,
+     "longitude": 127.96028,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 44,
+    "centroid": [
+     36.301892005165286,
+     127.14262629039511
+    ],
+    "total": 43,
+    "theme_counts": {
+     "CITY": 2,
+     "NATURE": 7,
+     "HISTORY": 16,
+     "FOOD": 18
+    },
+    "station": {
+     "station_idx": 14,
+     "name": "공주역",
+     "latitude": 36.3325,
+     "longitude": 127.0968,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 44,
+    "centroid": [
+     36.81401740607559,
+     127.07149065833809
+    ],
+    "total": 23,
+    "theme_counts": {
+     "HISTORY": 3,
+     "NATURE": 3,
+     "FOOD": 17
+    },
+    "station": {
+     "station_idx": 203,
+     "name": "천안아산역",
+     "latitude": 36.794613,
+     "longitude": 127.104529,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 44,
+    "centroid": [
+     36.56901678177303,
+     126.46393584616477
+    ],
+    "total": 34,
+    "theme_counts": {
+     "NATURE": 8,
+     "OCEAN": 4,
+     "CITY": 2,
+     "HISTORY": 5,
+     "FOOD": 15
+    },
+    "station": {
+     "station_idx": 14,
+     "name": "공주역",
+     "latitude": 36.3325,
+     "longitude": 127.0968,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 47,
+    "centroid": [
+     35.91699672157399,
+     128.4349300904054
+    ],
+    "total": 32,
+    "theme_counts": {
+     "NATURE": 15,
+     "HISTORY": 7,
+     "CITY": 2,
+     "HEALING": 1,
+     "FOOD": 8
+    },
+    "station": {
+     "station_idx": 96,
+     "name": "서대구역",
+     "latitude": 35.881304,
+     "longitude": 128.539901,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 47,
+    "centroid": [
+     36.05995654677815,
+     129.35297393494682
+    ],
+    "total": 49,
+    "theme_counts": {
+     "NATURE": 9,
+     "OCEAN": 3,
+     "THEME_PARK": 1,
+     "CITY": 2,
+     "HISTORY": 2,
+     "FOOD": 32
+    },
+    "station": {
+     "station_idx": 224,
+     "name": "포항역",
+     "latitude": 36.03619,
+     "longitude": 129.359715,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 47,
+    "centroid": [
+     36.58681699549556,
+     128.39960383052764
+    ],
+    "total": 17,
+    "theme_counts": {
+     "NATURE": 3,
+     "HISTORY": 4,
+     "FOOD": 10
+    },
+    "station": {
+     "station_idx": 140,
+     "name": "영주역",
+     "latitude": 36.785543,
+     "longitude": 128.623836,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 48,
+    "centroid": [
+     34.958829046100945,
+     128.58397921297527
+    ],
+    "total": 57,
+    "theme_counts": {
+     "CITY": 5,
+     "HISTORY": 5,
+     "OCEAN": 5,
+     "NATURE": 12,
+     "FOOD": 30
+    },
+    "station": {
+     "station_idx": 54,
+     "name": "마산역",
+     "latitude": 35.235919,
+     "longitude": 128.577026,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 48,
+    "centroid": [
+     35.4360415724643,
+     127.99389406769089
+    ],
+    "total": 23,
+    "theme_counts": {
+     "NATURE": 12,
+     "HEALING": 1,
+     "HISTORY": 3,
+     "FOOD": 7
+    },
+    "station": {
+     "station_idx": 200,
+     "name": "진주역",
+     "latitude": 35.183267,
+     "longitude": 128.087144,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 48,
+    "centroid": [
+     35.36043903044093,
+     128.86423892732023
+    ],
+    "total": 20,
+    "theme_counts": {
+     "NATURE": 4,
+     "THEME_PARK": 1,
+     "CITY": 1,
+     "HISTORY": 1,
+     "FOOD": 13
+    },
+    "station": {
+     "station_idx": 64,
+     "name": "물금역",
+     "latitude": 35.307264,
+     "longitude": 128.984321,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 50,
+    "centroid": [
+     33.40154896168267,
+     126.53986982028738
+    ],
+    "total": 100,
+    "theme_counts": {
+     "NATURE": 32,
+     "CULTURE": 2,
+     "OCEAN": 8,
+     "CITY": 3,
+     "HISTORY": 4,
+     "THEME_PARK": 1,
+     "HEALING": 1,
+     "FOOD": 50
+    },
+    "station": {
+     "station_idx": 59,
+     "name": "목포역",
+     "latitude": 34.791165,
+     "longitude": 126.386415,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 51,
+    "centroid": [
+     37.41531794323123,
+     128.41896985288477
+    ],
+    "total": 16,
+    "theme_counts": {
+     "NATURE": 4,
+     "CITY": 1,
+     "HISTORY": 1,
+     "FOOD": 10
+    },
+    "station": {
+     "station_idx": 220,
+     "name": "평창역",
+     "latitude": 37.5620242,
+     "longitude": 128.4292237,
+     "province": "강원본부"
+    }
+   },
+   {
+    "area_code": 51,
+    "centroid": [
+     37.83026096271096,
+     127.75577593285446
+    ],
+    "total": 13,
+    "theme_counts": {
+     "CITY": 2,
+     "NATURE": 2,
+     "THEME_PARK": 1,
+     "FOOD": 8
+    },
+    "station": {
+     "station_idx": 131,
+     "name": "양평역",
+     "latitude": 37.496011,
+     "longitude": 127.49178,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 51,
+    "centroid": [
+     37.76361495346592,
+     128.8946988971663
+    ],
+    "total": 70,
+    "theme_counts": {
+     "HEALING": 2,
+     "NATURE": 14,
+     "OCEAN": 6,
+     "HISTORY": 10,
+     "CITY": 5,
+     "CULTURE": 2,
+     "FOOD": 32
+    },
+    "station": {
+     "station_idx": 6,
+     "name": "강릉역",
+     "latitude": 37.763401,
+     "longitude": 128.898856,
+     "province": "강원본부"
+    }
+   },
+   {
+    "area_code": 52,
+    "centroid": [
+     35.51122453944572,
+     126.6243084615058
+    ],
+    "total": 35,
+    "theme_counts": {
+     "OCEAN": 4,
+     "NATURE": 6,
+     "HISTORY": 12,
+     "CITY": 3,
+     "CULTURE": 2,
+     "FOOD": 8
+    },
+    "station": {
+     "station_idx": 186,
+     "name": "정읍역",
+     "latitude": 35.575371,
+     "longitude": 126.842753,
+     "province": "전북본부"
+    }
+   },
+   {
+    "area_code": 52,
+    "centroid": [
+     36.016031775572124,
+     126.69813835334695
+    ],
+    "total": 21,
+    "theme_counts": {
+     "HISTORY": 1,
+     "NATURE": 3,
+     "OCEAN": 1,
+     "CITY": 2,
+     "HEALING": 1,
+     "FOOD": 14
+    },
+    "station": {
+     "station_idx": 170,
+     "name": "익산역",
+     "latitude": 35.940719,
+     "longitude": 126.946551,
+     "province": "전북본부"
+    }
+   },
+   {
+    "area_code": 52,
+    "centroid": [
+     35.73574244861596,
+     127.24776674658251
+    ],
+    "total": 44,
+    "theme_counts": {
+     "HISTORY": 5,
+     "NATURE": 9,
+     "CULTURE": 1,
+     "CITY": 1,
+     "HEALING": 1,
+     "FOOD": 28
+    },
+    "station": {
+     "station_idx": 182,
+     "name": "전주역",
+     "latitude": 35.849552,
+     "longitude": 127.161439,
+     "province": "전북본부"
+    }
+   },
+   {
+    "area_code": 36110,
+    "centroid": [
+     36.543223427702905,
+     127.26356153886384
+    ],
+    "total": 98,
+    "theme_counts": {
+     "NATURE": 19,
+     "HISTORY": 15,
+     "CITY": 9,
+     "THEME_PARK": 2,
+     "CULTURE": 3,
+     "FOOD": 50
+    },
+    "station": {
+     "station_idx": 149,
+     "name": "오송역",
+     "latitude": 36.621521,
+     "longitude": 127.328793,
+     "province": "대전충청본부"
+    }
+   }
+  ]
+ },
+ {
+  "themes": [
+   "NATURE",
+   "HEALING",
+   "CULTURE"
+  ],
+  "profiles": [
+   {
+    "area_code": 11,
+    "centroid": [
+     19.69442748,
+     117.9925662504
+    ],
+    "total": 1,
+    "theme_counts": {
+     "NATURE": 1
+    },
+    "station": {
+     "station_idx": 59,
+     "name": "목포역",
+     "latitude": 34.791165,
+     "longitude": 126.386415,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 11,
+    "centroid": [
+     37.51464617012997,
+     126.89126598743955
+    ],
+    "total": 42,
+    "theme_counts": {
+     "NATURE": 14,
+     "CITY": 3,
+     "HISTORY": 4,
+     "CULTURE": 21
+    },
+    "station": {
+     "station_idx": 138,
+     "name": "영등포역",
+     "latitude": 37.517699,
+     "longitude": 126.912623,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 11,
+    "centroid": [
+     37.56102482883977,
+     127.02381911343889
+    ],
+    "total": 106,
+    "theme_counts": {
+     "HISTORY": 14,
+     "NATURE": 7,
+     "CITY": 5,
+     "HEALING": 1,
+     "CULTURE": 79
+    },
+    "station": {
+     "station_idx": 207,
+     "name": "청량리역",
+     "latitude": 37.579983,
+     "longitude": 127.047679,
+     "province": "서울본부"
+    }
+   },
+   {
+    "area_code": 12,
+    "centroid": [
+     34.378621352438955,
+     127.0862510316281
+    ],
+    "total": 25,
+    "theme_counts": {
+     "OCEAN": 8,
+     "CITY": 3,
+     "NATURE": 5,
+     "HISTORY": 1,
+     "CULTURE": 8
+    },
+    "station": {
+     "station_idx": 133,
+     "name": "여천역",
+     "latitude": 34.768147,
+     "longitude": 127.659479,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 12,
+    "centroid": [
+     35.01590771264595,
+     127.50303238537147
+    ],
+    "total": 30,
+    "theme_counts": {
+     "OCEAN": 1,
+     "NATURE": 3,
+     "CITY": 1,
+     "HISTORY": 1,
+     "CULTURE": 24
+    },
+    "station": {
+     "station_idx": 111,
+     "name": "순천역",
+     "latitude": 34.946606,
+     "longitude": 127.500904,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 12,
+    "centroid": [
+     34.95442152692204,
+     126.72698585727626
+    ],
+    "total": 94,
+    "theme_counts": {
+     "OCEAN": 5,
+     "NATURE": 7,
+     "HISTORY": 11,
+     "THEME_PARK": 1,
+     "CITY": 2,
+     "CULTURE": 68
+    },
+    "station": {
+     "station_idx": 33,
+     "name": "나주역",
+     "latitude": 35.013988,
+     "longitude": 126.717214,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 26,
+    "centroid": [
+     35.165582234443086,
+     129.06986872953826
+    ],
+    "total": 149,
+    "theme_counts": {
+     "OCEAN": 3,
+     "CITY": 11,
+     "NATURE": 16,
+     "HISTORY": 16,
+     "THEME_PARK": 1,
+     "HEALING": 1,
+     "CULTURE": 102
+    },
+    "station": {
+     "station_idx": 77,
+     "name": "부전역",
+     "latitude": 35.164421,
+     "longitude": 129.060169,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 27,
+    "centroid": [
+     35.88849525760019,
+     128.5959884020934
+    ],
+    "total": 118,
+    "theme_counts": {
+     "CITY": 4,
+     "NATURE": 18,
+     "HISTORY": 24,
+     "THEME_PARK": 4,
+     "HEALING": 1,
+     "CULTURE": 68,
+     "OCEAN": 1
+    },
+    "station": {
+     "station_idx": 48,
+     "name": "동대구역",
+     "latitude": 35.879012,
+     "longitude": 128.626219,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 28,
+    "centroid": [
+     36.444261,
+     128.254792
+    ],
+    "total": 1,
+    "theme_counts": {
+     "CULTURE": 1
+    },
+    "station": {
+     "station_idx": 63,
+     "name": "문경역",
+     "latitude": 36.71972,
+     "longitude": 128.11083,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 28,
+    "centroid": [
+     37.46805412030708,
+     126.64170589247894
+    ],
+    "total": 76,
+    "theme_counts": {
+     "NATURE": 7,
+     "HISTORY": 1,
+     "OCEAN": 2,
+     "CULTURE": 66
+    },
+    "station": {
+     "station_idx": 15,
+     "name": "광명역",
+     "latitude": 37.420592,
+     "longitude": 126.881594,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 28,
+    "centroid": [
+     37.70855748701035,
+     126.38902996052857
+    ],
+    "total": 54,
+    "theme_counts": {
+     "HISTORY": 23,
+     "NATURE": 8,
+     "OCEAN": 1,
+     "CITY": 2,
+     "CULTURE": 18,
+     "HEALING": 2
+    },
+    "station": {
+     "station_idx": 234,
+     "name": "행신역",
+     "latitude": 37.615263,
+     "longitude": 126.843493,
+     "province": "서울본부"
+    }
+   },
+   {
+    "area_code": 30,
+    "centroid": [
+     36.355232320069135,
+     127.39766413827053
+    ],
+    "total": 115,
+    "theme_counts": {
+     "NATURE": 28,
+     "HISTORY": 10,
+     "HEALING": 1,
+     "CITY": 6,
+     "THEME_PARK": 6,
+     "CULTURE": 65,
+     "OCEAN": 1
+    },
+    "station": {
+     "station_idx": 97,
+     "name": "서대전역",
+     "latitude": 36.326388,
+     "longitude": 127.401657,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 31,
+    "centroid": [
+     35.526370150849374,
+     129.309935548129
+    ],
+    "total": 113,
+    "theme_counts": {
+     "NATURE": 22,
+     "OCEAN": 9,
+     "CITY": 8,
+     "HEALING": 4,
+     "HISTORY": 7,
+     "THEME_PARK": 1,
+     "CULTURE": 64
+    },
+    "station": {
+     "station_idx": 217,
+     "name": "태화강역",
+     "latitude": 35.5397714,
+     "longitude": 129.3538491,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 41,
+    "centroid": [
+     19.69442748,
+     117.9925662504
+    ],
+    "total": 1,
+    "theme_counts": {
+     "CULTURE": 1
+    },
+    "station": {
+     "station_idx": 59,
+     "name": "목포역",
+     "latitude": 34.791165,
+     "longitude": 126.386415,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 41,
+    "centroid": [
+     37.44156172979466,
+     126.93454994319224
+    ],
+    "total": 104,
+    "theme_counts": {
+     "NATURE": 11,
+     "THEME_PARK": 1,
+     "CITY": 5,
+     "OCEAN": 1,
+     "HISTORY": 1,
+     "CULTURE": 85
+    },
+    "station": {
+     "station_idx": 15,
+     "name": "광명역",
+     "latitude": 37.420592,
+     "longitude": 126.881594,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 41,
+    "centroid": [
+     37.58330634100407,
+     127.46248515415076
+    ],
+    "total": 41,
+    "theme_counts": {
+     "NATURE": 17,
+     "CITY": 1,
+     "HISTORY": 6,
+     "OCEAN": 2,
+     "HEALING": 1,
+     "CULTURE": 15
+    },
+    "station": {
+     "station_idx": 131,
+     "name": "양평역",
+     "latitude": 37.496011,
+     "longitude": 127.49178,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 43,
+    "centroid": [
+     36.30861886289703,
+     127.68394795238768
+    ],
+    "total": 26,
+    "theme_counts": {
+     "HISTORY": 2,
+     "NATURE": 1,
+     "THEME_PARK": 1,
+     "CULTURE": 22
+    },
+    "station": {
+     "station_idx": 43,
+     "name": "대전역",
+     "latitude": 36.332269,
+     "longitude": 127.434183,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 43,
+    "centroid": [
+     37.03045738295005,
+     128.1862089114952
+    ],
+    "total": 27,
+    "theme_counts": {
+     "HISTORY": 3,
+     "NATURE": 3,
+     "HEALING": 1,
+     "CULTURE": 20,
+     "OCEAN": 1,
+     "THEME_PARK": 1
+    },
+    "station": {
+     "station_idx": 187,
+     "name": "제천역",
+     "latitude": 37.128031,
+     "longitude": 128.204342,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 43,
+    "centroid": [
+     36.79912850722276,
+     127.6846561121477
+    ],
+    "total": 77,
+    "theme_counts": {
+     "HISTORY": 24,
+     "NATURE": 12,
+     "CITY": 4,
+     "CULTURE": 37
+    },
+    "station": {
+     "station_idx": 215,
+     "name": "충주역",
+     "latitude": 36.975797,
+     "longitude": 127.90958,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 44,
+    "centroid": [
+     19.694477084885456,
+     117.99260273191031
+    ],
+    "total": 1,
+    "theme_counts": {
+     "CULTURE": 1
+    },
+    "station": {
+     "station_idx": 59,
+     "name": "목포역",
+     "latitude": 34.791165,
+     "longitude": 126.386415,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 44,
+    "centroid": [
+     36.367123425118415,
+     127.10637769360636
+    ],
+    "total": 93,
+    "theme_counts": {
+     "CITY": 2,
+     "NATURE": 9,
+     "HISTORY": 19,
+     "CULTURE": 63
+    },
+    "station": {
+     "station_idx": 14,
+     "name": "공주역",
+     "latitude": 36.3325,
+     "longitude": 127.0968,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 44,
+    "centroid": [
+     36.59823739416872,
+     126.52317695656905
+    ],
+    "total": 56,
+    "theme_counts": {
+     "NATURE": 9,
+     "OCEAN": 4,
+     "CITY": 2,
+     "HISTORY": 5,
+     "CULTURE": 36
+    },
+    "station": {
+     "station_idx": 203,
+     "name": "천안아산역",
+     "latitude": 36.794613,
+     "longitude": 127.104529,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 47,
+    "centroid": [
+     35.880022841667504,
+     129.09431093988545
+    ],
+    "total": 48,
+    "theme_counts": {
+     "NATURE": 8,
+     "OCEAN": 1,
+     "THEME_PARK": 1,
+     "CITY": 3,
+     "HISTORY": 4,
+     "HEALING": 1,
+     "CULTURE": 31
+    },
+    "station": {
+     "station_idx": 9,
+     "name": "경주역",
+     "latitude": 35.84509,
+     "longitude": 129.217778,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 47,
+    "centroid": [
+     36.10269501105407,
+     128.26033634745565
+    ],
+    "total": 55,
+    "theme_counts": {
+     "NATURE": 14,
+     "HISTORY": 6,
+     "CITY": 1,
+     "CULTURE": 34
+    },
+    "station": {
+     "station_idx": 30,
+     "name": "김천(구미)",
+     "latitude": 36.113482,
+     "longitude": 128.180991,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 47,
+    "centroid": [
+     36.66988345895452,
+     128.96164366727055
+    ],
+    "total": 45,
+    "theme_counts": {
+     "OCEAN": 2,
+     "HISTORY": 3,
+     "NATURE": 5,
+     "CULTURE": 35
+    },
+    "station": {
+     "station_idx": 124,
+     "name": "안동역",
+     "latitude": 36.56205,
+     "longitude": 128.731023,
+     "province": "대구경북본부"
+    }
+   },
+   {
+    "area_code": 48,
+    "centroid": [
+     34.88143166323529,
+     128.5691095586498
+    ],
+    "total": 42,
+    "theme_counts": {
+     "HISTORY": 3,
+     "OCEAN": 5,
+     "CITY": 4,
+     "NATURE": 9,
+     "CULTURE": 21
+    },
+    "station": {
+     "station_idx": 54,
+     "name": "마산역",
+     "latitude": 35.235919,
+     "longitude": 128.577026,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 48,
+    "centroid": [
+     35.26072551064724,
+     127.99578777840321
+    ],
+    "total": 61,
+    "theme_counts": {
+     "NATURE": 12,
+     "HEALING": 1,
+     "HISTORY": 5,
+     "CULTURE": 43
+    },
+    "station": {
+     "station_idx": 200,
+     "name": "진주역",
+     "latitude": 35.183267,
+     "longitude": 128.087144,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 48,
+    "centroid": [
+     35.28706539151385,
+     128.7452848409517
+    ],
+    "total": 46,
+    "theme_counts": {
+     "CITY": 2,
+     "NATURE": 7,
+     "THEME_PARK": 1,
+     "HISTORY": 1,
+     "CULTURE": 35
+    },
+    "station": {
+     "station_idx": 199,
+     "name": "진영역",
+     "latitude": 35.303802,
+     "longitude": 128.730003,
+     "province": "부산경남본부"
+    }
+   },
+   {
+    "area_code": 50,
+    "centroid": [
+     33.38204514905243,
+     126.55312644707202
+    ],
+    "total": 126,
+    "theme_counts": {
+     "NATURE": 32,
+     "CULTURE": 77,
+     "OCEAN": 9,
+     "CITY": 3,
+     "HISTORY": 4,
+     "THEME_PARK": 2,
+     "HEALING": 1
+    },
+    "station": {
+     "station_idx": 59,
+     "name": "목포역",
+     "latitude": 34.791165,
+     "longitude": 126.386415,
+     "province": "광주전남본부"
+    }
+   },
+   {
+    "area_code": 51,
+    "centroid": [
+     37.28683900188221,
+     128.32353482571014
+    ],
+    "total": 33,
+    "theme_counts": {
+     "NATURE": 5,
+     "CITY": 1,
+     "HISTORY": 1,
+     "CULTURE": 26
+    },
+    "station": {
+     "station_idx": 187,
+     "name": "제천역",
+     "latitude": 37.128031,
+     "longitude": 128.204342,
+     "province": "대전충청본부"
+    }
+   },
+   {
+    "area_code": 51,
+    "centroid": [
+     37.92446807469401,
+     127.74215421291551
+    ],
+    "total": 20,
+    "theme_counts": {
+     "CITY": 2,
+     "NATURE": 1,
+     "THEME_PARK": 1,
+     "CULTURE": 16
+    },
+    "station": {
+     "station_idx": 131,
+     "name": "양평역",
+     "latitude": 37.496011,
+     "longitude": 127.49178,
+     "province": "수도권광역본부"
+    }
+   },
+   {
+    "area_code": 51,
+    "centroid": [
+     37.834536334670034,
+     128.81904495145287
+    ],
+    "total": 96,
+    "theme_counts": {
+     "HEALING": 2,
+     "NATURE": 14,
+     "OCEAN": 6,
+     "HISTORY": 10,
+     "CITY": 5,
+     "CULTURE": 60
+    },
+    "station": {
+     "station_idx": 6,
+     "name": "강릉역",
+     "latitude": 37.763401,
+     "longitude": 128.898856,
+     "province": "강원본부"
+    }
+   },
+   {
+    "area_code": 52,
+    "centroid": [
+     35.542486733016005,
+     126.63772700906168
+    ],
+    "total": 55,
+    "theme_counts": {
+     "OCEAN": 5,
+     "NATURE": 7,
+     "HISTORY": 13,
+     "CITY": 4,
+     "HEALING": 1,
+     "CULTURE": 26
+    },
+    "station": {
+     "station_idx": 186,
+     "name": "정읍역",
+     "latitude": 35.575371,
+     "longitude": 126.842753,
+     "province": "전북본부"
+    }
+   },
+   {
+    "area_code": 52,
+    "centroid": [
+     35.56923443904378,
+     127.36300671320471
+    ],
+    "total": 34,
+    "theme_counts": {
+     "HISTORY": 4,
+     "NATURE": 6,
+     "CULTURE": 24
+    },
+    "station": {
+     "station_idx": 35,
+     "name": "남원역",
+     "latitude": 35.410791,
+     "longitude": 127.360528,
+     "province": "전북본부"
+    }
+   },
+   {
+    "area_code": 52,
+    "centroid": [
+     35.917246028715816,
+     127.02157279498533
+    ],
+    "total": 61,
+    "theme_counts": {
+     "CITY": 2,
+     "NATURE": 5,
+     "HEALING": 1,
+     "HISTORY": 1,
+     "CULTURE": 53
+    },
+    "station": {
+     "station_idx": 170,
+     "name": "익산역",
+     "latitude": 35.940719,
+     "longitude": 126.946551,
+     "province": "전북본부"
+    }
+   },
+   {
+    "area_code": 36110,
+    "centroid": [
+     36.54755127634722,
+     127.26514223687869
+    ],
+    "total": 70,
+    "theme_counts": {
+     "NATURE": 19,
+     "HISTORY": 15,
+     "CITY": 9,
+     "THEME_PARK": 2,
+     "CULTURE": 25
+    },
+    "station": {
+     "station_idx": 149,
+     "name": "오송역",
+     "latitude": 36.621521,
+     "longitude": 127.328793,
+     "province": "대전충청본부"
+    }
+   }
+  ]
+ }
+]

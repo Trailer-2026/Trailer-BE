@@ -43,6 +43,18 @@ def create(
     return reels
 
 
+def list_pending(db: Session, pending_url: str) -> list[Reels]:
+    """렌더가 끝나지 않은 자리표 릴스 전체 (url 이 자리표 값인 행, soft-delete 제외).
+
+    부팅 스윕이 쓴다 — 렌더 스레드는 데몬이라 서버가 재시작되면 정리 없이 죽고,
+    영상 없는 자리표 행만 DB 에 남는다.
+    """
+    return db.query(Reels).filter(
+        Reels.url == pending_url,
+        Reels.deleted_at.is_(None),
+    ).all()
+
+
 def update_url(db: Session, reels: Reels, url: str, thumbnail_url: str | None) -> Reels:
     """릴스 영상·썸네일 URL 교체 (렌더 완료·편집본 갱신, flush만 — commit은 서비스가).
 

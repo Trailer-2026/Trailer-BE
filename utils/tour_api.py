@@ -52,6 +52,7 @@ def _get(operation: str, params: dict, timeout: int = 20) -> dict:
 def area_based_list(
     *,
     area_code: int | None = None,
+    ldong_regn_cd: str | None = None,
     content_type_id: int | None = None,
     page_no: int = 1,
     num_of_rows: int = 100,
@@ -60,11 +61,18 @@ def area_based_list(
     """지역기반 관광정보 조회(areaBasedList2). (items, totalCount) 반환.
 
     item 주요 필드: contentid, contenttypeid, title, addr1, areacode, sigungucode,
-    cat1/cat2/cat3, mapx(경도), mapy(위도), firstimage.
+    cat1/cat2/cat3, lDongRegnCd/lDongSignguCd, lclsSystm1/2/3, mapx(경도), mapy(위도), firstimage.
+
+    **area_code(옛 지역코드)가 아니라 ldong_regn_cd(법정동 시도 코드)로 불러라.** 2025년 개편 뒤
+    새 분류(lclsSystm)·법정동 코드로만 등록된 항목이 절반이 넘는데(부산 관광지 351건 중 212건 실측),
+    그 항목들은 areacode/cat 이 비어 있어 옛 코드 조회와 좌표 조회(locationBasedList2)에 안 잡힌다.
+    해운대해수욕장·경복궁·불국사가 그쪽이다. numOfRows 는 1000까지 받는다(실측).
     """
     params = {"numOfRows": num_of_rows, "pageNo": page_no, "arrange": arrange}
     if area_code is not None:
         params["areaCode"] = area_code
+    if ldong_regn_cd is not None:
+        params["lDongRegnCd"] = ldong_regn_cd
     if content_type_id is not None:
         params["contentTypeId"] = content_type_id
     body = _get("areaBasedList2", params)

@@ -18,6 +18,7 @@ from schemas.video_schema import (
     ReelsTitleUpdateResponse,
     ReelsUploadResponse,
     ReelsUrlResponse,
+    PromoRenderRequest,
     VideoEditResponse,
     VideoRenderStatusResponse,
 )
@@ -221,7 +222,15 @@ def render_video_photos_ordered(
                 "폴링). 직전 지점 "
                 "기준 1km 미만인 연속 일정은 별도 지점 없이 한 지점으로 묶여 사진만 이어서 "
                 "나오고, 기차 일정은 출발역 좌표가 경유 지점이 됩니다. 이미지 다운로드에 "
-                "실패한 이미지는 건너뜁니다. 본인 여행이 아니거나 없으면 404, 여행에 일정이 "
+                "실패한 이미지는 건너뜁니다.\n\n"
+                "**사진을 붙이지 않은 방문지·숙소 일정은 그 장소의 관광 대표 이미지 1장으로 "
+                "채웁니다** — 여행 전에 만들어도 지도만 도는 영상이 되지 않습니다. 사용자가 "
+                "올린 사진이 있는 일정에는 붙지 않고(내 사진 우선), 기차 일정에도 붙지 않습니다. "
+                "AI 추천 코스로 저장한 여행은 저장 시 받아둔 관광 이미지를 쓰고, 직접 만든 "
+                "여행은 일정 좌표 반경 300m 안의 관광 정보를 실시간 조회해 씁니다(없으면 사진 "
+                "없이 지나감). 영상에 들어가는 사진은 **일정(지점)당 최대 3장, 영상 전체 최대 "
+                "15장**이며 초과분은 모든 지점을 한 바퀴씩 돌며 고르게 채운 뒤 잘립니다"
+                "(지점 안 순서는 유지). 본인 여행이 아니거나 없으면 404, 여행에 일정이 "
                 "없거나 지점이 2개 미만이면 400을 반환합니다. 영상 앞뒤에는 TRAILER "
                 "인트로·아웃트로가 항상 붙습니다. 릴스 행은 렌더 시작 시점에 로그인 "
                 "사용자(user_idx)와 연결해 미리 만들어지고, 렌더가 끝나면 그 행의 url 에 GCS "
@@ -247,6 +256,39 @@ def render_video_from_travel(
         theme=theme,
         title=title,
     )
+    return CommonResponse.success_response("영상 렌더링 시작", data=job)
+
+
+@router.post(
+    "/render/promo",
+    summary="홍보 영상 렌더링 시작 (코스 지점만 등록, 30초)",
+    description="사진 업로드 없이 코스 지점 목록(2~6개, 순서대로)만 보내면 그 경로를 따라가는 "
+                "약 30초 홍보 영상 렌더링을 시작하고 reels_idx 를 즉시 반환합니다(진행률은 "
+                "GET /api/videos/render/{reels_idx} 로 폴링). 지자체·기관이 추천 코스를 영상으로 "
+                "만들어 배포하는 용도입니다 — 지점은 GET /api/places/search 결과의 "
+                "name/latitude/longitude 를 그대로 넣으면 됩니다.\n\n"
+                "지점마다 image_url 을 주면 그 사진을, 없으면 **좌표 반경 300m 의 관광 대표 "
+                "이미지를 실시간 조회**해 1장씩 보여줍니다(없거나 다운로드 실패면 그 지점은 "
+                "사진 없이 지나감). 직전 지점 1km 미만인 지점은 한 지점으로 묶입니다. "
+                "본편은 30초 상한이고(이동 구간을 압축해 맞춤) 앞뒤 TRAILER 인트로·아웃트로가 "
+                "붙어 완성본은 37초 정도입니다. 지점당 사진 시간이 고정이라 지점이 6개를 넘으면 "
+                "30초 안에 들어오지 않으므로 6개까지만 받습니다(초과 시 422).\n\n"
+                "결과는 요청자 소유의 보통 릴스라 완성 뒤 GET /api/videos/reels/{reels_idx}/share "
+                "로 배포용 링크를 받고, 다운로드·제목 수정·삭제도 같은 reels_idx 로 씁니다. "
+                "추천 피드에도 일반 릴스와 똑같이 노출됩니다. 별도 권한 없이 로그인 사용자면 "
+                "누구나 부를 수 있습니다.\n\n"
+                "- 400: 지점이 모두 같은 장소(1km 안)라 경로를 만들 수 없음, 테마 값 오류\n"
+                "- 404: bgm 을 찾을 수 없음\n"
+                "- 422: 지점 2개 미만/6개 초과, 좌표 범위 오류, 제목 없음\n"
+                "- 401: 인증 필요",
+    response_model=CommonResponse[VideoRenderStatusResponse],
+)
+def render_video_promo(
+    req: PromoRenderRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = video_service.start_render_promo(db, current_user.user_idx, req)
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
 
 
@@ -469,10 +511,16 @@ def insert_image_clip(
     "/render/{reels_idx}",
     summary="영상 렌더링 진행률 조회 (reels_idx)",
     description="렌더 시작 응답으로 받은 reels_idx 로 진행률(percent), 현재 단계, 경과/예상 "
-                "남은 시간을 조회합니다. status 가 done 이면 video_url(=reels_url)로 영상을 "
-                "받을 수 있고, failed 면 error 에 사유가 담기며 그 릴스 행은 삭제됩니다. "
-                "진행 정보는 서버 메모리에만 유지되므로 렌더 도중 서버가 재시작되면 "
-                "status=unknown 으로 응답합니다(완료된 릴스는 재시작 후에도 done). 본인 "
+                "남은 시간을 조회합니다. 서버가 한 번에 돌리는 렌더 편수에 상한이 있어, 앞선 "
+                "렌더가 밀려 있으면 status=running 인 채 phase 가 '대기 중'으로 머뭅니다"
+                "(요청이 거절되는 것이 아니라 순서가 오면 자동으로 시작하며, 경과·예상 "
+                "시간은 실제 렌더가 시작된 시점부터 셉니다). "
+                "status 가 done 이면 video_url(=reels_url)로 영상을 "
+                "받을 수 있고, failed 면 error 에 **그대로 보여줄 수 있는** 사유가 담기며 "
+                "그 릴스 행은 삭제됩니다(원인 로그는 서버에만 남습니다). "
+                "진행 정보는 서버 메모리에만 유지되므로 렌더 도중 서버가 재시작되면 그 작업은 "
+                "다음 부팅 때 failed(phase=중단됨)로 확정됩니다 — 그 사이에 조회하면 "
+                "status=unknown 입니다(완료된 릴스는 재시작 후에도 done). 본인 "
                 "릴스가 아니거나 없으면 404. JWT 인증이 필요하며 토큰이 없거나 유효하지 "
                 "않으면 401을 반환합니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],

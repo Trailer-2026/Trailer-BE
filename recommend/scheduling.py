@@ -4,7 +4,7 @@
 - 식당(content_type_id=39)은 '식사'로 보고 점심(~12시)·저녁(~18시) 앵커에만 놓는다(하루 최대 2끼).
   → 밥 먹고 또 밥 먹는(식당 연속) 일정을 막는다. 식당만 있어도 하루 2끼까지만.
   → 그 시간대 관광 동선 근처 식당을 우선 골라(점수−이탈거리 감점) 밥 먹으러 멀리 도는 걸 줄인다.
-- 관광지는 동선(지리 NN+2-opt) 순으로, 체류(_DWELL_H)와 장소 간 이동시간(_travel_h)을 반영해
+- 관광지는 동선(지리 NN+2-opt) 순으로, 유형별 체류(dwell_h)와 장소 간 이동시간(_travel_h)을 반영해
   채운다. 가까운 장소는 촘촘히, 먼 장소는 이동시간만큼 더 벌어져 하루에 덜 들어간다.
 - 운영시간(오픈/마감·휴무요일)은 소프트 제약: 개점 전이면 미루고, 마감/창을 넘으면 그 곳을
   건너뛰고 차순위로 대체한다.
@@ -13,12 +13,29 @@
 비결정 요소 없음(같은 입력 → 같은 스케줄).
 """
 
+from core.enums import Theme
 from recommend import routing
 from recommend.types import ScoredPlace
 
-# 장소 1곳 체류(관람/식사) 소요(h). 표시용 방문 종료시각(itinerary._DWELL_H)과 반드시 일치.
+# 장소 1곳 체류(관람/식사) 소요(h). 유형별 표(_DWELL_BY_CT)에 없는 유형의 기본값.
 # 예전엔 여기에 이동시간까지 뭉뚱그린 2.5였으나, 이제 이동은 _travel_h로 분리한다.
 _DWELL_H = 2.0
+# TourAPI contentTypeId별 체류 시간(h). 식당·쇼핑은 짧고 레포츠는 길다. 표에 없으면 _DWELL_H.
+# ponytail: 유형 단위 상수. 장소별 실제 체류 데이터가 생기면 그걸로 교체.
+_DWELL_BY_CT = {39: 1.0, 38: 1.0, 14: 1.5, 12: 2.0, 28: 3.0}
+# 테마파크는 contentTypeId가 아니라 테마(THEME_PARK)로만 구분되므로 따로 덮어쓴다(반나절).
+_DWELL_THEME_PARK_H = 4.0
+
+
+def dwell_h(content_type_id: int | None, themes: list[Theme] | None) -> float:
+    """장소 1곳 체류 시간(h). 스케줄링과 표시(itinerary 방문 종료시각)가 같은 값을 쓰는 단일 진입점."""
+    if themes and Theme.THEME_PARK in themes:
+        return _DWELL_THEME_PARK_H
+    return _DWELL_BY_CT.get(content_type_id, _DWELL_H)
+
+
+def _dwell(p: ScoredPlace) -> float:
+    return dwell_h(p.content_type_id, p.themes)
 # day_window가 없을 때의 기본 관광 가능 시간대(9~21시).
 _DAY_START = 9.0
 _DAY_END = 21.0
@@ -58,10 +75,11 @@ def schedule_day(
     origin: tuple[float, float] | None = None,
     is_last: bool = False,
 ) -> list[tuple[ScoredPlace, float]]:
-    """cap개 이하의 방문지를 식사 시간·운영시간에 맞춰 고르고 방문 시각을 배정한다.
+    """관광지 cap곳 이하 + 식사 최대 2끼를 운영시간에 맞춰 고르고 방문 시각을 배정한다.
 
     candidates: 그 날 클러스터 멤버(점수 내림차순). cap보다 많이 받아 대체 후보로 쓴다.
-    cap: 그 날 방문지 상한(열차 시각 기반 first/last cap 포함). 0이면 빈 일정.
+    cap: 그 날 **관광지(비식당)** 상한(열차 시각 기반 first/last cap 포함). 0이면 빈 일정(식사도 없음).
+         식사는 상한에 안 센다 — 세면 FOOD 테마에서 점심·저녁이 2자리를 먹고 관광지가 1곳만 남는다.
     window: (start_h, end_h) 그 날 관광 가능 시간대. None이면 기본(9~21).
     weekday: 그 날 요일(월0~일6) 또는 None. 후보의 휴무요일이면 그 날은 제외(하드).
     반환: [(ScoredPlace, arrive_hour)] 방문 순서(시각순)대로. 빈 리스트 가능.
@@ -87,7 +105,7 @@ def schedule_day(
 
     # 1) 식사: 점심·저녁 앵커에, 그 시간대 관광 동선 근처 + 점수 좋은 식당을 골라 배치(최대 2끼).
     for mi, (target, lo, hi) in enumerate(_MEALS):
-        if len(plan) >= cap or not meals:
+        if not meals:
             break
         ref = _meal_ref(attrs, mi)  # 점심=동선 앞쪽, 저녁=뒤쪽 무게중심(그때 있을 위치 추정)
         picked = _place_meal(meals, target, max(lo, start), min(hi, end), start, end, ref)
@@ -95,32 +113,34 @@ def schedule_day(
             continue
         m, arrive = picked
         plan.append((m, arrive))
-        busy.append((arrive, arrive + _DWELL_H))
+        busy.append((arrive, arrive + _dwell(m)))
         meals.remove(m)
 
     # 2) 관광지: 동선 순으로, 장소 사이 '이동시간'을 반영해 배치한다(가까울수록 촘촘, 멀수록 시간↑).
     cursor = start   # 다음 이동을 시작할 수 있는 시각(직전 장소 관람 종료 시각)
     prev = None      # 직전 배치 관광지(이동시간 기준). 식사 뒤엔 None으로 리셋(식사↔관광 이동은 별도).
     ai = 0
-    while len(plan) < cap and ai < len(attrs):
+    placed = 0       # 배치된 관광지 수(식사 제외) — cap은 이것만 센다
+    while placed < cap and ai < len(attrs):
         p = attrs[ai]
         ai += 1
         move = _travel_h(prev, p) if prev is not None else 0.0
         arrive = max(cursor + move, _open_of(p, start))
         # 도착~관람종료가 식사 점유와 겹치면 식사 끝으로 미루고 이 장소 재시도(이동 기준 리셋).
-        jump = _busy_end_after(arrive, busy)
+        jump = _busy_end_after(arrive, _dwell(p), busy)
         if jump is not None:
             cursor = jump
             prev = None
             ai -= 1
             continue
         # 마감/하루 끝 전에 관람이 끝나야 채택. 아니면 이 곳 건너뜀(cursor 유지).
-        if arrive + _DWELL_H > min(_close_of(p, end), end) + _EPS:
+        if arrive + _dwell(p) > min(_close_of(p, end), end) + _EPS:
             continue
         plan.append((p, arrive))
-        busy.append((arrive, arrive + _DWELL_H))
-        cursor = arrive + _DWELL_H
+        busy.append((arrive, arrive + _dwell(p)))
+        cursor = arrive + _dwell(p)
         prev = p
+        placed += 1
 
     plan.sort(key=lambda x: x[1])  # 시각순
     return plan
@@ -150,7 +170,7 @@ def _place_meal(meals, target, lo, hi, start, end, ref=None):
         arrive = max(target, start, _open_of(m, target))
         if arrive < lo - _EPS or arrive > hi + _EPS:
             continue
-        if arrive + _DWELL_H > min(_close_of(m, end), end) + _EPS:
+        if arrive + _dwell(m) > min(_close_of(m, end), end) + _EPS:
             continue
         detour = routing.haversine(m.lat, m.lng, ref[0], ref[1]) if ref else 0.0
         key = m.score - _MEAL_DIST_PENALTY * detour  # 점수 높고 가까울수록↑
@@ -159,9 +179,9 @@ def _place_meal(meals, target, lo, hi, start, end, ref=None):
     return best
 
 
-def _busy_end_after(t: float, busy: list) -> float | None:
-    """시각 t에서 시작하는 슬롯이 점유 구간과 겹치면 그 겹치는 구간의 끝을 반환, 없으면 None."""
-    ends = [e for (s, e) in busy if t < e - _EPS and s < t + _DWELL_H - _EPS]
+def _busy_end_after(t: float, dwell: float, busy: list) -> float | None:
+    """시각 t에서 dwell 시간 머무는 슬롯이 점유 구간과 겹치면 그 겹치는 구간의 끝을 반환, 없으면 None."""
+    ends = [e for (s, e) in busy if t < e - _EPS and s < t + dwell - _EPS]
     return max(ends) if ends else None
 
 
@@ -189,9 +209,11 @@ def _selfcheck() -> None:
     # 식당3 + 관광지3 → 식당은 2끼, 나머지는 관광지, 식당끼리 안 붙음.
     mixed = [place(i, 39, 1.0 - i * 0.01) for i in range(3)] + \
             [place(100 + i, 12, 0.9 - i * 0.01, lat=35.1 + i * 0.01) for i in range(3)]
-    r2 = schedule_day(mixed, cap=4, window=(9.0, 21.0), weekday=None)
+    r2 = schedule_day(mixed, cap=3, window=(9.0, 21.0), weekday=None)
     meal_count = sum(1 for p, _ in r2 if _is_meal(p))
-    assert meal_count <= 2, f"식당 최대 2끼: {meal_count}"
+    assert meal_count == 2, f"식당 최대 2끼: {meal_count}"
+    assert len(r2) - meal_count == 3, f"cap은 관광지만 센다(식사 2끼 + 관광지 3): {len(r2)}"
+    assert schedule_day(mixed, cap=0, window=(9.0, 21.0), weekday=None) == [], "cap 0이면 식사도 없음"
     kinds = [_is_meal(p) for p, _ in r2]  # 시각순
     assert not any(kinds[i] and kinds[i + 1] for i in range(len(kinds) - 1)), f"식당 연속 금지: {kinds}"
 
@@ -209,6 +231,15 @@ def _selfcheck() -> None:
     # 배치된 방문은 시각순이고 관람 구간이 안 겹친다(이동 간격 확보).
     ts = [t for _, t in rc]
     assert all(ts[i] + _DWELL_H <= ts[i + 1] + _EPS for i in range(len(ts) - 1)), ts
+
+    # 유형별 체류: 식당 1h(점심 12시면 13시에 다음 관광 가능), 테마파크는 테마로 4h.
+    assert dwell_h(39, []) == 1.0 and dwell_h(12, []) == 2.0 and dwell_h(99, None) == _DWELL_H
+    assert dwell_h(12, [Theme.THEME_PARK]) == _DWELL_THEME_PARK_H
+    lunch = place(700, 39, 1.0)
+    after = [place(701 + i, 12, 0.9, lat=35.0 + i * 0.001) for i in range(2)]
+    r5 = schedule_day([lunch] + after, cap=3, window=(11.5, 21.0), weekday=None)
+    by_idx = {p.place_idx: t for p, t in r5}
+    assert by_idx[700] == 12.0 and min(by_idx[701], by_idx[702]) < 14.0, by_idx  # 식사 2h면 14시 이후
 
     # 식당 위치 인식: 관광 동선 근처 식당(점수 0.9)이 멀지만 살짝 높은 식당(0.95)보다 우선 선택.
     near_food = place(500, 39, 0.90, lat=35.0, lng=129.0)     # 관광지 옆
