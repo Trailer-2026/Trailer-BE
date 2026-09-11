@@ -161,20 +161,15 @@ def _warmable(pairs: set, by_nat: dict) -> set:
     train_stop(매일 갱신되는 정차역 스냅샷)에 두 역을 잇는 열차가 아예 없으면 그 조회는
     빈손이 확정이라 미리 데울 이유가 없다.
 
-    **데우기 판정이라 틀려도 결과는 안 변한다** — 걸러낸 구간이 정말 필요하면 _journey가
-    그 자리에서 조회한다(느려질 뿐). 그래서 모르는 역(train_stop 미수록: SRT 동탄·판교,
-    관광열차 노선 등)과 인덱스가 비었을 때는 **보수적으로 남긴다**.
+    **환승 거점 다리에만 쓴다** — 걸러낸 구간은 _transfer_via_group도 같은 판정으로 건너뛰므로
+    조회가 아예 안 나간다. 경유 후보 다리(dep↔후보↔arr)에 쓰면 안 된다: 그건 _direct_missing이
+    판정 결과와 무관하게 반드시 조회하므로, 걸러봐야 병렬 데우기가 순차 조회로 바뀔 뿐이다
+    (실측: 부산→정읍 285콜 중 159콜이 그렇게 순차로 나갔다 — 운영 VM에선 콜당 0.7초).
+    모르는 역(train_stop 미수록: SRT 동탄·판교, 관광열차 노선 등)과 빈 인덱스는 남긴다.
     """
-    links = train_stop_service.direct_links()
-    if not links:
-        return pairs  # 인덱스 없음(최초 기동 등) → 예전과 똑같이 전부 데운다
-    known = {n for pair in links for n in pair}
-
     def keep(dep_nat: str, arr_nat: str) -> bool:
         a, b = by_nat.get(dep_nat), by_nat.get(arr_nat)
-        if a is None or b is None or a not in known or b not in known:
-            return True  # 판정 불가 → 남긴다
-        return (a, b) in links
+        return a is None or b is None or not train_stop_service.no_direct(a, b)
 
     return {p for p in pairs if keep(p[0], p[1])}
 
@@ -203,7 +198,7 @@ def _prefetch_segments(dep, arr, groups, stops, go_date, back_date, nail_pass: b
     with ThreadPoolExecutor(max_workers=2) as ex:
         list(ex.map(lambda p: _safe_fetch(*p), base))
 
-    pairs = set()
+    pairs, stop_pairs = set(), set()
     members = [  # 전 그룹 거점역 중복 제거 + 출발·도착역 자신 제외
         s for s in {s.station_idx: s for g in groups for s in g}.values()
         if s.nat_code and s.station_idx not in (dep.station_idx, arr.station_idx)
@@ -217,11 +212,12 @@ def _prefetch_segments(dep, arr, groups, stops, go_date, back_date, nail_pass: b
             pairs.add((m.nat_code, b.nat_code, ymd))
     for c in stops:
         # 관광 경유 후보 c: 가는편(dep→c→arr)·오는편(arr→c→dep) 양방향 경유를 모두 데운다.
-        pairs.add((dep.nat_code, c.nat_code, go_date))
-        pairs.add((c.nat_code, arr.nat_code, go_date))
-        pairs.add((arr.nat_code, c.nat_code, back_date))
-        pairs.add((c.nat_code, dep.nat_code, back_date))
-    pairs = _warmable(pairs, _nat_names(members, [dep, arr], stops))
+        # _warmable로 거르지 않는다 — _direct_missing이 어차피 전부 조회한다(_warmable 참고).
+        stop_pairs.add((dep.nat_code, c.nat_code, go_date))
+        stop_pairs.add((c.nat_code, arr.nat_code, go_date))
+        stop_pairs.add((arr.nat_code, c.nat_code, back_date))
+        stop_pairs.add((c.nat_code, dep.nat_code, back_date))
+    pairs = _warmable(pairs, _nat_names(members, [dep, arr])) | stop_pairs
     if not pairs:
         return
     with ThreadPoolExecutor(max_workers=min(16, len(pairs))) as ex:
@@ -323,10 +319,14 @@ def _transfer_via_group(dep, arr, group, ymd, start, nail_pass=False):
     members = [s for s in group if s.station_idx not in (dep.station_idx, arr.station_idx)]
     best = None
     for a in members:  # 하차역
+        if _no_direct(dep, a):
+            continue
         leg1 = _earliest(_legs(dep.nat_code, a.nat_code, ymd, nail_pass), start)
         if not leg1:
             continue
         for d in members:  # 승차역
+            if _no_direct(d, arr):
+                continue
             gap = TRANSFER_MIN if a.station_idx == d.station_idx else CLUSTER_MOVE
             leg2 = _earliest(_legs(d.nat_code, arr.nat_code, ymd, nail_pass), leg1["arr_time"] + gap)
             if not leg2:
@@ -338,6 +338,17 @@ def _transfer_via_group(dep, arr, group, ymd, start, nail_pass=False):
             if best is None or total < best[3]:  # 총 소요(승차+환승대기) 최소인 하차·승차 조합 채택
                 best = (leg1, leg2, label, total)
     return best
+
+
+def _no_direct(a: Station, b: Station) -> bool:
+    """train_stop이 a→b 직통이 없다고 확인한 환승 거점 다리 — TAGO에 묻지 않고 건너뛴다.
+
+    이 다리들이 추천 1회 열차 조회의 절반을 넘는데 전부 '0편'이고, 프리페치에서도 빠져 있어
+    _journey가 하나씩 순차로 조회했다(실측 부산→정읍 125콜 직렬 — 운영 VM 콜당 0.7초면 90초 가까이).
+    요일 한정 열차를 놓칠 수 있지만(train_stop_service.no_direct 참고) 거점 다리는 다른 거점이
+    대신하므로 여기서만 믿는다.
+    """
+    return train_stop_service.no_direct(a.station_name.removesuffix("역"), b.station_name.removesuffix("역"))
 
 
 def _journey(dep: Station, arr: Station, ymd: str, start: datetime, groups: list[list[Station]], nail_pass=False):
