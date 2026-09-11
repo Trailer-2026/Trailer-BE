@@ -518,7 +518,8 @@ def image_near(lat: float, lng: float, radius_m: int = _IMAGE_NEAR_RADIUS_M) -> 
             lat=lat, lng=lng, radius_m=radius_m, num_of_rows=10, arrange="E",
         )
     except Exception as e:
-        logger.warning("TourAPI 대표 이미지 조회(lat=%s, lng=%s) 실패: %s", lat, lng, e)
+        # 좌표는 남기지 않는다 — 사용자가 일정·홍보 요청에 넣은 지점이라 집 주소 같은 게 섞일 수 있다.
+        logger.warning("TourAPI 대표 이미지 조회 실패: %s", e)
         return None
     for it in items:  # 거리순이라 첫 매치가 가장 가깝다
         url = _image_url(it.get("firstimage"))
