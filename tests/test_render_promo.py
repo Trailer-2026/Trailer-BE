@@ -109,7 +109,52 @@ def main() -> None:
         for job in jobs:
             shutil.rmtree(job, ignore_errors=True)
 
+    _check_image_fetch_size_limit()
     print("OK: 홍보 영상 렌더 점검 통과")
+
+
+def _check_image_fetch_size_limit():
+    """외부 이미지는 상한까지만 받는다 — Content-Length가 크면 본문을 안 받고, 없거나 거짓이면 받다가 끊는다."""
+    pulled = []
+
+    class _Resp:
+        def __init__(self, length, chunks):
+            self.headers = {} if length is None else {"Content-Length": str(length)}
+            self._chunks = chunks
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, size):
+            for c in self._chunks:
+                pulled.append(len(c))
+                yield c
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+    cases = {
+        "https://x/declared-big": _Resp(11, [b"x" * 11]),
+        "https://x/undeclared-big": _Resp(None, [b"x" * 6] * 100),  # 끝없이 오는 본문
+        "https://x/ok": _Resp(None, [b"ab", b"cd"]),
+    }
+    originals = (video_service.requests.get, video_service.gcs.object_path_from_url,
+                 video_service.MAX_RENDER_PHOTO_BYTES)
+    video_service.requests.get = lambda url, **kw: cases[url]
+    video_service.gcs.object_path_from_url = lambda url: None
+    video_service.MAX_RENDER_PHOTO_BYTES = 10
+    try:
+        assert video_service._fetch_travel_image("https://x/declared-big") is None
+        assert not pulled, "Content-Length가 상한을 넘는데 본문을 받았다"
+        assert video_service._fetch_travel_image("https://x/undeclared-big") is None
+        assert sum(pulled) <= 12, f"상한을 넘긴 뒤에도 계속 받았다: {sum(pulled)}바이트"
+        assert video_service._fetch_travel_image("https://x/ok") == b"abcd"
+    finally:
+        (video_service.requests.get, video_service.gcs.object_path_from_url,
+         video_service.MAX_RENDER_PHOTO_BYTES) = originals
 
 
 if __name__ == "__main__":

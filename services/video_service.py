@@ -1483,9 +1483,22 @@ def _fetch_travel_image(url: str) -> bytes | None:
         object_path = gcs.object_path_from_url(url)
         if object_path is not None:
             return gcs.download_bytes(object_path)
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        return response.content
+        # 받으면서 센다 — response.content는 크기 상관없이 통째로 메모리에 올리고, timeout은 읽기 사이
+        # 간격이라 총량을 막지 못한다. 홍보 렌더는 image_url을 요청 본문으로 받으므로 수 GB 파일 주소
+        # 하나로 서버(e2-small, 2GB)가 죽을 수 있다. 상한은 업로드 사진과 같다(MAX_RENDER_PHOTO_BYTES).
+        with requests.get(url, timeout=10, stream=True) as response:
+            response.raise_for_status()
+            too_big = int(response.headers.get("Content-Length") or 0) > MAX_RENDER_PHOTO_BYTES
+            body = bytearray()
+            for chunk in [] if too_big else response.iter_content(64 * 1024):
+                body += chunk
+                if len(body) > MAX_RENDER_PHOTO_BYTES:  # Content-Length가 없거나 거짓이어도 여기서 끊긴다
+                    too_big = True
+                    break
+        if too_big:
+            logger.warning("여행 이미지가 %dMB를 넘어 건너뜀: %s", MAX_RENDER_PHOTO_BYTES // (1024 * 1024), url)
+            return None
+        return bytes(body)
     except Exception:
         logger.warning("여행 이미지 다운로드 실패(건너뜀): %s", url)
         return None
