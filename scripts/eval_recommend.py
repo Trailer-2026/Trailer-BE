@@ -293,6 +293,11 @@ def _profiles(rows: list[dict]) -> list[destination.AreaProfile]:
     out = []
     for r in rows:
         st = r["station"]
+        # 서비스 Phase A(recommend_service._recommend_auto_dest)와 같은 거름 — 역이 없거나 권역 중심이
+        # 역에서 MAX_STATION_GAP_KM 넘게 떨어진 후보는 뺀다. TourAPI 좌표 오류로 중심이 남중국해
+        # (19.69, 117.99)에 찍힌 1건짜리 권역이 스냅샷에 있다 — 운영에선 이 거름에 걸려 안 나온다.
+        if st is None or routing.haversine(*r["centroid"], st["latitude"], st["longitude"]) > destination.MAX_STATION_GAP_KM:
+            continue
         out.append(destination.AreaProfile(
             area_code=r["area_code"], centroid=tuple(r["centroid"]),
             theme_counts={Theme(t): n for t, n in r["theme_counts"].items()}, total=r["total"],
