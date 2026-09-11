@@ -14,6 +14,12 @@ _DT_FMT = "%Y%m%d%H%M%S"  # "20260703051300"
 # 열차 시각은 전부 한국 표준시(KST). 한국은 DST가 없어 고정 +09:00으로 둔다.
 # 파싱 시점에 붙여 출력 JSON이 '+09:00'을 달고 나가도록(naive라 프론트가 UTC로 오해하는 것 방지).
 KST = timezone(timedelta(hours=9))
+# 응답 대기(초). 정상 응답은 0.1~0.7초인데 TAGO가 가끔 요청을 받고 답을 안 준다(실측 783콜 중
+# 1콜, 한국에서도 난다). 병렬 데우기는 제일 늦은 한 건을 기다려야 끝나서 20초로 두면 그 한 건이
+# 추천 전체를 20초 끈다. **더 줄이지 마라** — TAGO가 느린 때는 정상 응답도 4.7초까지 봤고 운영 VM
+# (us-central1)은 왕복이 0.5초 더 붙는다. 여기서 끊기면 기본 왕복이 통째로 빠지고, 풍경 알림의
+# 열차번호 역추론(scenic_plan_service._infer_train_no)은 실패를 6시간 캐시해 그 탑승 알림이 끊긴다.
+_TIMEOUT = 10
 
 
 # 추천 1회가 (역,역,날짜) 100~190개를 조회하는데 512로는 검색 3~4번이면 다 밀려나, 방금 받은
@@ -36,7 +42,7 @@ def fetch_trains(dep_nat: str, arr_nat: str, ymd: str) -> tuple:
         "arrPlaceId": arr_nat,
         "depPlandTime": ymd,
     }
-    rows = dgo.items(dgo.get_body(_BASE, params, timeout=20))
+    rows = dgo.items(dgo.get_body(_BASE, params, timeout=_TIMEOUT))
     if not rows:
         return ()
 

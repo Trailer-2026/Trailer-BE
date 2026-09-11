@@ -113,6 +113,7 @@ def render(
     light_preset: str = "",
     intro: bool = False,
     outro: bool = False,
+    max_video_seconds: float | None = None,
 ):
     """travel_data JSON + 사진 바이트({상대경로: bytes})를 받아 렌더링한다.
 
@@ -162,6 +163,9 @@ def render(
         cmd.append("--intro")
     if outro:
         cmd.append("--outro")
+    # 영상 길이 상한(초). None 이면 render_video 기본(60).
+    if max_video_seconds is not None:
+        cmd += ["--max-video-seconds", str(max_video_seconds)]
 
     print(
         f"=== 렌더 시작 (mode={mode}, files={len(files or {})}, "

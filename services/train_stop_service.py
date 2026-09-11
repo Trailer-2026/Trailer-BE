@@ -7,6 +7,7 @@ scripts/sync_train_stops.py(수동)와 main.py의 일일 자동 갱신 루프가
 배치 컨텍스트라 요청 스코프가 아닌 자체 세션을 열고 직접 커밋한다.
 """
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from databases.daos import train_stop_dao
@@ -63,7 +64,14 @@ def refresh(ymd: str | None = None) -> int:
 # 락 없이도 버전과 내용이 어긋난 채로 읽히지 않는다. 동시에 두 번 만들어도 결과는 같다.
 # None = 아직 안 만듦. 빈 집합도 '만든 결과'라 그대로 재사용해야 한다(테이블이 비었을 때
 # 매 호출 전량 조회하는 걸 막는다) — 그래서 빈 집합 falsy가 아니라 None으로 미구축을 판별한다.
-_cache: tuple[datetime | None, frozenset[tuple[str, str]]] | None = None
+# 튜플 = (버전 확인 시각 monotonic, 적재 시각, 순서쌍, 인덱스에 등장하는 역).
+_cache: tuple[float, datetime | None, frozenset[tuple[str, str]], frozenset[str]] | None = None
+# 적재 시각을 DB에 다시 묻는 최소 간격(초). 환승 탐색이 구간마다 no_direct를 부르는데(추천 1회에
+# 수백 번) 매번 물으면 그만큼 DB 왕복이 붙는다 — 운영 VM(us-central1)에서 Cloud SQL(서울)까지
+# 왕복이 0.18초다. 갱신은 하루 1회라 1분 늦게 알아채도 잃는 게 없다.
+_VERSION_CHECK_SEC = 60
+# 인덱스를 한 번도 못 만든 채 실패했을 때의 버전 표식. None은 '빈 테이블'이라는 진짜 버전이라 못 쓴다.
+_FAILED = object()
 
 
 def _build_links(rows: list[tuple[str, int, str]]) -> frozenset[tuple[str, str]]:
@@ -79,32 +87,55 @@ def _build_links(rows: list[tuple[str, int, str]]) -> frozenset[tuple[str, str]]
     return frozenset(out)
 
 
-def direct_links() -> frozenset[tuple[str, str]]:
-    """직통 연결 (앞역, 뒷역) 순서쌍 집합. 역명은 train_stop 형식('역' 접미사 없음).
+def direct_links() -> tuple[frozenset[tuple[str, str]], frozenset[str]]:
+    """(직통 연결 (앞역, 뒷역) 순서쌍 집합, 인덱스에 등장하는 역 집합). 역명은 train_stop 형식('역' 접미사 없음).
 
     데이터가 없으면 빈 집합 — 호출부는 그 때 '판정 불가'로 보고 평소대로 조회해야 한다.
-    **어떤 이유로든 실패해도 빈 집합**이다(테이블 미생성·DB 장애 등). 이 인덱스는 조회를
+    **어떤 이유로든 실패해도 예외를 올리지 않는다**(테이블 미생성·DB 장애 등). 이 인덱스는 조회를
     줄이는 최적화일 뿐이라, 못 만들었다고 추천 자체가 죽으면 손해가 훨씬 크다.
+    **실패도 _VERSION_CHECK_SEC 동안 기억한다** — 직전 인덱스가 있으면 그걸 계속 쓰고, 없으면 빈
+    결과를 쓴다. 추천 1회가 수백 번 부르는 함수라, 안 그러면 DB가 잠깐 끊긴 사이 호출마다 연결을
+    새로 시도하고 경고를 찍는다(운영 Cloud SQL은 이틀에 한 번꼴로 연결이 끊겼다).
     """
     global _cache
+    cached = _cache  # 이름 하나만 읽어 버전·내용이 어긋나지 않게 한다
+    if cached is not None and time.monotonic() - cached[0] < _VERSION_CHECK_SEC:
+        return cached[2], cached[3]
     db = None  # 세션 생성 자체가 터져도(엔진 설정 오류 등) 아래 except로 떨어지게 try 안에서 연다
     try:
         db = SessionLocal()
         version = train_stop_dao.latest_created_at(db)
-        cached = _cache  # 이름 하나만 읽어 버전·내용이 어긋나지 않게 한다
-        if cached is not None and cached[0] == version:
-            return cached[1]
+        if cached is not None and cached[1] == version:
+            _cache = (time.monotonic(), *cached[1:])
+            return cached[2], cached[3]
         rows = train_stop_dao.all_sequences(db)
     except Exception as e:
-        logger.warning("train_stop 직통 인덱스 조회 실패(프리페치 필터 비활성): %s", e)
-        return frozenset()
+        logger.warning("train_stop 직통 인덱스 조회 실패(%d초간 %s): %s", _VERSION_CHECK_SEC,
+                       "직전 인덱스 사용" if cached else "필터 비활성", e)
+        kept = (time.monotonic(), *cached[1:]) if cached else (time.monotonic(), _FAILED, frozenset(), frozenset())
+        _cache = kept
+        return kept[2], kept[3]
     finally:
         if db is not None:
             db.close()
     links = _build_links(rows)
-    _cache = (version, links)
+    known = frozenset(n for pair in links for n in pair)
+    _cache = (time.monotonic(), version, links, known)
     logger.info("train_stop 직통 인덱스 구축: %d쌍", len(links))
-    return links
+    return links, known
+
+
+def no_direct(a: str, b: str) -> bool:
+    """a→b(train_stop 역명)를 잇는 열차가 **없다고 확인되는가**.
+
+    인덱스가 비었거나 한쪽이라도 train_stop에 없는 역(SRT 동탄·판교, 관광열차 노선 등)이면
+    판정 불가라 False다 — 호출부는 평소대로 조회해야 한다.
+    **한계**: 스냅샷이 '어제 하루치'라 그날 안 다닌 요일 한정 열차는 모른다(실측: 부산→마산·진주
+    금·일 1편이 목요일 스냅샷엔 없다). 그래서 이 판정을 믿어도 되는 곳은 대체 경로가 있는 환승
+    거점 다리뿐이다 — 사용자가 고른 구간의 직통 판정에 쓰면 그 1편이 조용히 사라진다.
+    """
+    links, known = direct_links()
+    return a in known and b in known and (a, b) not in links
 
 
 def refresh_if_stale(max_age_hours: int = _FRESH_WITHIN_HOURS) -> int | None:

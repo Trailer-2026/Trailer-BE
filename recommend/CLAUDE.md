@@ -48,11 +48,11 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 | 파일 | 역할 |
 |---|---|
 | `types.py` | 내부 값 객체: `ScoredPlace`(점수화된 장소), `Cluster`(Day 묶음) |
-| `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`) |
+| `scoring.py` | ① 가중 코사인 유사도로 테마 적합도 0~1점 (`score_places`). `party`를 주면 장소 테마 × `destination._AGE_SUIT`로 인원 구성 계수(`_party_factor`)를 곱한다 — **성인 기준 대비 비율**이라 성인만·미입력이면 1.0(순위 불변), 아이·청소년이 섞일 때만 테마파크·바다↑ 힐링·역사↓ |
 | `clustering.py` | ② k-means(결정적)로 중심 잡고 **용량 균형 재배정**으로 날짜 묶기 — 각 날 floor~ceil(n/k)개로 과밀·빈 날 없이 정확히 k일 보장 (`kmeans_by_geo`/`_balanced_assign`) |
 | `routing.py` | ③④ Nearest Neighbor + 2-opt + 순환 복귀, `haversine` (`nearest_neighbor`/`two_opt`/`close_cycle`) |
-| `scheduling.py` | ⑤ Day 내부 **시각 스케줄링**. 체류(`_DWELL_H`)+장소 간 이동시간(`_travel_h`) 반영해 동선 순 배치, 식당은 그 시간대 동선 근처 우선(점수−이탈거리 감점). 관광지 운영시간(오픈/마감·휴무요일) 소프트 제약, 밖이면 차순위 대체. 운영시간 정보 없는 날은 `routing` 동선 순서로 폴백 (`schedule_day`) |
-| `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 최대 3곳(첫/마지막날은 열차 시각 기반 `first_cap`/`last_cap`으로 축소), Day 순서는 `scheduling`이 운영시간 반영해 확정 |
+| `scheduling.py` | ⑤ Day 내부 **시각 스케줄링**. 유형별 체류(`dwell_h`: 식당 1h·관광지 2h·테마파크 4h)+장소 간 이동시간(`_travel_h`) 반영해 동선 순 배치, 식당은 그 시간대 동선 근처 우선(점수−이탈거리 감점). 관광지 운영시간(오픈/마감·휴무요일) 소프트 제약, 밖이면 차순위 대체. 운영시간 정보 없는 날은 `routing` 동선 순서로 폴백 (`schedule_day`) |
+| `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 **관광지 최대 3곳 + 식사 2끼**(첫/마지막날은 열차 시각 기반 `first_cap`/`last_cap`으로 축소). 작업셋은 관광지 몫(3×k×3)과 식당 몫(3×k×2)을 따로 뽑고, 날짜 묶기(k-means)는 관광지로만 해 식당은 가장 가까운 날에 붙인다, Day 순서는 `scheduling`이 운영시간 반영해 확정 |
 | `destination.py` | **도착지 선택**(코스 파이프라인과 별개). 도착역 미지정 시 `theme + party` 기준으로 시도 area 후보를 점수화·권역 다양성 필터 (`rank_and_diversify`, 값 객체 `AreaProfile`) |
 
 ## 도착지 선택 로직 (`destination.py`)
@@ -80,13 +80,26 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 
 ## 규칙·상수 (바꿀 때 주의)
 
-- `pipeline._NUM_COURSES = 3` — 사용자가 셋 중 하나 선택. `_MAX_PER_DAY = 3` — 하루 방문지 상한.
+- `pipeline._NUM_COURSES = 3` — 사용자가 셋 중 하나 선택. `_MAX_PER_DAY = 3` — 하루 **관광지** 상한(식사 제외). 식사는 `scheduling._MEALS`(2끼)만큼 따로 얹힌다 — 상한에 식사를 같이 세면 FOOD 테마에서 점심·저녁이 2자리를 먹고 관광지가 1곳만 남는다. 그래서 작업셋도 관광지·식당 몫을 따로 뽑는다(`working_set`) — 합쳐 뽑으면 관광지가 모자라 다른 코스 관광지를 빌려 와 코스끼리 겹친다. **대가**: FOOD 테마 검색은 detailIntro2 호출이 2박3일 기준 27→45건으로 는다.
 - 다중 테마: `_select_working`이 테마별 쿼터로 균형을 맞춘다(한 테마 쏠림 방지). 단일/0개 테마면 점수 상위 그대로.
 - **테마 미선택 방어**: 프론트가 테마 최소 1개 선택을 강제하지만, 백엔드도 빈 테마를 방어한다 — `SearchCriteria.themes`는 스키마상 빈 리스트를 허용하고, 빈 값이 들어오면 `utils/tour_place.py:_DEFAULT_CTYPES`(관광지12·문화14·음식39)로 기본 조회한다. 프론트 검증을 신뢰하되 잘못된/직접 호출로 조용히 빈 추천이 나가지 않도록 최후 방어선으로 남겨둔 것. 스키마에서 `min_length=1`을 강제하지 않는 이유가 이 폴백을 살리기 위함이니, 폴백을 지우려면 스키마 강제를 먼저 넣어라.
 - `destination.py` 가중치/휴리스틱 표(`WEIGHT_*`, `_AGE_SUIT`, `_GROUP_FRIENDLY`, `_IDEAL_KM`, `GROUP_LARGE`)는 전부 모듈 상수다. 값을 바꿔 튜닝하되, 연령/그룹 표는 **실데이터가 아니라 휴리스틱**임을 잊지 마라(데이터가 생기면 표를 교체).
 - `Theme`는 `core.enums`에서 import. 출력 타입(`Course`/`DayPlan`/`RecommendedPlace`)·`Party`는 `schemas.recommend_schema`.
 - 클러스터링(용량 균형 재배정 포함)·NN·도착지 점수화는 결정적이어야 한다(같은 입력 → 같은 추천). `_balanced_assign`은 정렬키 `(거리, 점idx, 중심idx)`로 완전 결정적 — `random`/`Date.now` 류 비결정 요소 넣지 마라.
 - 거리 계산은 `routing.haversine`로 통일.
+
+## TourAPI 데이터 소스 주의 (2025 개편 — 옛 코드만 보면 절반이 안 보인다)
+
+- **개편 뒤 등록·갱신된 항목은 옛 지역/분류 코드(areacode·cat1/2/3)가 비어 있다.** 해운대해수욕장·경복궁·불국사·하회마을이
+  그쪽이다. 실측(2026-09): 부산 관광지 351건 중 212건, 서울 종로 관광지 150건 중 84건. 좌표 조회(`locationBasedList2`)와
+  옛 `areaCode` 조회는 이 항목을 **아예 돌려주지 않는다** — 좌표 반경 3km 로 해운대해수욕장 자리에서 불러도 안 나온다.
+- 그래서 `tour_place.live_places`는 좌표 조회 뒤 **결과가 걸친 법정동 시도(`lDongRegnCd`)를 통째로 받아(1000행/콜) 반경
+  안만 골라 합친다**(`_ldong_items`). 부산역 바다 테마 후보가 6 → 27곳이 됐다. 콜은 시도 수 × 유형 수(보통 3~6).
+- 테마는 `tour_category.themes_for`가 **옛 cat 우선, 없으면 새 분류 `lclsSystm3`** 로 잡는다(`_LCLS1/2/3`, 코드표는
+  `lclsSystmCode2` 246행). 새 매핑을 추가할 땐 옛 `_CAT3/_CAT2`와 같은 테마로 맞춰라.
+- 도착지 스캔(`scan_area_profiles`)·홈 테마 섹션도 같은 이유로 법정동 시도 코드(`_LDONG_CODES`, 16개 — 전남·광주는
+  통합 '12')를 쓴다. `AreaProfile.area_code`는 이제 법정동 코드다(값을 해석하는 곳은 없다).
+- 관광 데이터를 프로세스에 캐시하지 않는 원칙은 그대로다 — 시도 목록도 매 요청 새로 받는다.
 
 ## 추천지 부족 폴백 (반경 확대 → 테마 완화)
 
@@ -129,6 +142,9 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
     `tour_place.fetch_hours`(detailIntro2 병렬)로 운영시간을 채운다. 장소당 1콜이라 코스 후보로만 제한(quota·속도 보호).
     조회 대상은 반드시 `build_courses`와 **같은 `working_set`**이어야 한다(다중 테마 시 테마 쿼터로 원점수 상위 N개와
     달라져, `scored[:상한]`으로 조회하면 차순위 후보가 미조회인 채 코스에 섞인다).
+  - **축제·공연(15)은 개최 기간(`eventstartdate`/`eventenddate`)도 같이 받아, 여행 기간(`go_date`~`back_date`)과
+    하루도 안 겹치면 `_attach_hours`가 후보에서 뺀다**(끝난 축제가 코스에 들어가던 문제). 빠진 자리에 올라온 차순위만
+    추가 조회해 '작업셋 = 조회 대상' 불변식을 지킨다. 기간 미상은 막지 않는다(`Hours.runs_between`).
   - 파싱은 자유텍스트라 방어적(`_parse_hours`/`_parse_closed_weekdays`): `HH:MM~HH:MM` 앞 구간, `24시간·상시·연중무휴`,
     `매주 X요일` 정도만 해석. 자정 넘김은 +24. 격주·첫째주 등 불규칙 휴무는 과제약을 피해 무시. **미상은 시간 제약 없음**으로 둔다.
 - **스케줄링 — `recommend/scheduling.py`** (순수 계산)
@@ -142,14 +158,14 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
     그 날 휴무인 곳은 제외. 채울 비식당이 부족하면 가짜 식사로 메우지 않고 그 시간을 비운다.
   - `ScoredPlace.open_hour/close_hour/closed_weekdays`(recommend_service가 채움)를 읽고, 결과 방문 시각은
     `RecommendedPlace.open_time/close_time/visit_time`(HH:MM)로 노출된다. 방문시각은 `reason`에도 표기.
-  - ⚠️ **시간 가정**: 관광지 1곳 = 체류 `_DWELL_H`=**2.0h**(관람) + **장소 간 이동시간 `_travel_h`**를 따로 더한다.
+  - ⚠️ **시간 가정**: 관광지 1곳 = **유형별 체류 `dwell_h`**(contentTypeId별 `_DWELL_BY_CT`: 식당·쇼핑 1h, 문화시설 1.5h, 관광지 2h, 레포츠 3h, 그 외 `_DWELL_H` 2h; 테마파크 테마면 `_DWELL_THEME_PARK_H` 4h) + **장소 간 이동시간 `_travel_h`**를 따로 더한다.
     `_travel_h` = Haversine 직선거리 × `_DETOUR`(1.3) ÷ `_SPEED_KMH`(30) — 인접해도 `_MIN_MOVE_H`(15분) 하한.
     → **가까운 장소는 촘촘, 먼 장소는 벌어져 하루에 덜 들어간다**(예전 고정 2.5h 슬롯을 체류+가변 이동으로 대체).
     Haversine는 이제 방문 *순서*(NN+2-opt) 최적화 **와** 이 이동시간 추정 **양쪽**에 쓰인다(예전엔 순서에만).
-    관광지 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 체류 2.0h+가변 이동시간 간격으로 찍히되
+    관광지 `visit_time`은 하루 시작(첫날=열차 도착, 그 외 09:00)부터 유형별 체류+가변 이동시간 간격으로 찍히되
     **식사(식당) 구간은 건너뛴다**. 식당은 점심(~12)·저녁(~18) 앵커 시각에 배정된다(균등 그리드가 아님).
-    체류 상수는 **`scheduling._DWELL_H`(2.0) = `itinerary._HOURS_PER_PLACE`(2.0)**로 반드시 일치해야 방문 종료시각
-    표기가 어긋나지 않는다(바꿀 땐 둘 다). `services/recommend_service._HOURS_PER_PLACE`(2.5)는 **별개** —
+    체류 시간은 **`scheduling.dwell_h` 하나만** 쓴다 — `itinerary._visit_seg`(방문 종료시각 표기)도 같은 함수를 부르므로
+    표기와 스케줄이 어긋나지 않는다(`RecommendedPlace.content_type_id`가 그 연결이다). `services/recommend_service._HOURS_PER_PLACE`(2.5)는 **별개** —
     `_day_caps`(하루 방문 개수 상한)를 열차 시각에서 뽑는 '평균 슬롯' 근사치일 뿐 실제 시각 배치엔 안 쓴다.
     정밀 도로 이동시간 API 연동은 추후.
 
