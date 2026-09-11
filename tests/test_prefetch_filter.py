@@ -11,6 +11,7 @@
 """
 import os
 import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -68,7 +69,9 @@ def test_direct_links_skips_version_check_within_ttl():
         latest_created_at = staticmethod(lambda db: None)
         all_sequences = staticmethod(lambda db: [("001", 1, "서울"), ("001", 2, "부산")])
 
-    with patch.object(train_stop_service, "SessionLocal", lambda: sessions.append(1) or _Db()),             patch.object(train_stop_service, "train_stop_dao", _Dao),             patch.object(train_stop_service, "_cache", None):
+    with patch.object(train_stop_service, "SessionLocal", lambda: sessions.append(1) or _Db()), \
+            patch.object(train_stop_service, "train_stop_dao", _Dao), \
+            patch.object(train_stop_service, "_cache", None):
         for _ in range(50):
             assert train_stop_service.no_direct("부산", "서울")
         assert len(sessions) == 1, f"DB 세션을 {len(sessions)}번 열었다"
@@ -93,7 +96,10 @@ def test_direct_links_fails_open_when_session_broken():
 def test_direct_links_keeps_last_index_on_failure():
     """버전 확인이 실패하면 직전 인덱스를 계속 쓴다 — DB가 잠깐 끊겼다고 필터를 끄지 않는다."""
     links = frozenset({("서울", "부산")})
-    stale = (0.0, None, links, frozenset({"서울", "부산"}))  # 확인 시각 0 → TTL 만료 상태
+    # TTL 만료 상태. 0.0으로 두면 안 된다 — Linux monotonic은 부팅 후 초라, 막 뜬 CI 러너에선
+    # 60보다 작아 '아직 신선'으로 보고 실패 경로를 아예 안 탄다.
+    checked = time.monotonic() - train_stop_service._VERSION_CHECK_SEC - 1
+    stale = (checked, None, links, frozenset({"서울", "부산"}))
 
     def _boom():
         raise RuntimeError("SSL connection has been closed unexpectedly")
@@ -101,7 +107,7 @@ def test_direct_links_keeps_last_index_on_failure():
     with patch.object(train_stop_service, "SessionLocal", _boom), \
             patch.object(train_stop_service, "_cache", stale):
         assert train_stop_service.no_direct("부산", "서울"), "직전 인덱스를 버렸다"
-        assert train_stop_service._cache[0] > 0, "실패 후 확인 시각을 갱신하지 않았다"
+        assert train_stop_service._cache[0] > checked, "실패 후 확인 시각을 갱신하지 않았다"
 
 
 def test_warmable_filters_only_known_missing():
@@ -146,7 +152,8 @@ def test_transfer_skips_known_missing_hub_legs():
         asked.append((dep_nat, arr_nat))
         return ()
 
-    with patch.object(train_stop_service, "direct_links", lambda: (index, known)),             patch.object(route_service, "_legs", legs):
+    with patch.object(train_stop_service, "direct_links", lambda: (index, known)), \
+            patch.object(route_service, "_legs", legs):
         route_service._transfer_via_group(dep, arr, [hub, odd], "20260918", None)
     assert ("N_BS", "N_DJ") in asked, "직통 있는 다리는 물어야 한다"
     assert ("N_DJ", "N_JE") not in asked, "직통 없다고 확인된 다리를 물었다"
@@ -159,7 +166,9 @@ def test_prefetch_keeps_stopover_legs():
     index = frozenset({("부산", "정읍")})
     known = frozenset({"부산", "정읍", "마산"})  # 부산→마산은 '직통 없음'으로 판정되는 쌍
     warmed = []
-    with patch.object(train_stop_service, "direct_links", lambda: (index, known)),             patch.object(route_service, "_safe_fetch", lambda *p: warmed.append(p[:2])),             patch.object(route_service, "_direct_missing", lambda *a: False):
+    with patch.object(train_stop_service, "direct_links", lambda: (index, known)), \
+            patch.object(route_service, "_safe_fetch", lambda *p: warmed.append(p[:2])), \
+            patch.object(route_service, "_direct_missing", lambda *a: False):
         route_service._prefetch_segments(dep, arr, [], [stop], "20260918", "20260920")
     assert ("N_BS", "N_MS") in warmed, "경유 후보 다리가 프리페치에서 빠졌다"
 
