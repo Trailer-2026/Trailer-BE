@@ -64,7 +64,12 @@ def build_courses(
     # 점수 랭크 인터리브 → 서로 다른 3개 버킷 (A: 0,3,6.. / B: 1,4,7.. / C: 2,5,8..)
     # 슬라이스 스텝(::3)이라 한 장소는 정확히 한 버킷에만 들어가 코스 간 겹침 0.
     # 각 코스가 상위권을 번갈아 나눠 가져 셋 다 품질이 고르게 유지된다(상위권 한 코스 독식 방지).
-    buckets = [working[i::_NUM_COURSES] for i in range(_NUM_COURSES)]
+    # **관광지와 식당을 따로 인터리브한다** — 섞인 점수순을 한 번에 나누면 식당 랭크가 어디 걸리느냐에
+    # 따라 한 코스는 관광지가 모자라고 다른 코스는 남는다. 모자란 코스는 attraction_pool에서 남의
+    # 관광지를 빌려 와 코스끼리 겹친다(working_set이 몫을 나눈 이유가 그대로 되살아난다).
+    attrs_w = [p for p in working if p.content_type_id != scheduling._MEAL_CT]
+    meals_w = [p for p in working if p.content_type_id == scheduling._MEAL_CT]
+    buckets = [attrs_w[i::_NUM_COURSES] + meals_w[i::_NUM_COURSES] for i in range(_NUM_COURSES)]
 
     # 중간 날이 식당만이라 2끼(2곳)에 그칠 때 보충할 비-식당 관광지 풀. working(운영시간
     # 부착 작업셋)에서만 뽑아 hours 일관성을 유지한다. 코스 간 중복은 허용하되(관광지 희소)
