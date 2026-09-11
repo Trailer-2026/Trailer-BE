@@ -187,6 +187,12 @@ def live_places(lat: float, lng: float, themes: list[Theme], radius_m: int = _RA
 
     # 보강: 좌표 조회 결과가 걸친 시도들을 통째로 받아 반경 안만 남긴다(위 _ldong_items 주석).
     regns = sorted({str(it.get("lDongRegnCd")) for items in batches for it in items if it.get("lDongRegnCd")})
+    if not regns:
+        # 반경 안 선택 유형이 전부 새 분류(옛 코드 없음)면 좌표 조회가 비어 시도를 못 얻고, 그러면 보강도
+        # 안 돈다. 실측(3km = 경유역 스캔): 20역 중 5역이 그랬고 광명역은 반경 안 관광지 7곳을 통째로
+        # 놓쳤다. 유형 없이 한 번 더 물어(숙박·음식점 등 옛 코드 항목) 시도만 얻는다 — 빈 경우에만 1콜.
+        regns = sorted({str(it.get("lDongRegnCd")) for it in _location_items(lat, lng, radius_m, None, 20)
+                        if it.get("lDongRegnCd")})
     jobs = [(r, ct) for r in regns for ct in ctypes]
     if jobs:
         with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as ex:
