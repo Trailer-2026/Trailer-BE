@@ -526,11 +526,13 @@ def image_near(lat: float, lng: float, radius_m: int = _IMAGE_NEAR_RADIUS_M) -> 
 _HOURS_FIELDS = {
     12: ("usetime", "restdate"),            # 관광지
     14: ("usetimeculture", "restdateculture"),  # 문화시설
-    15: ("playtime", None),                 # 축제·공연·행사(행사 시간)
+    15: ("playtime", None),                 # 축제·공연·행사(행사 시간) — 기간은 _EVENT_FIELDS
     28: ("usetimeleports", "restdateleports"),  # 레포츠
     38: ("opentime", "restdateshopping"),   # 쇼핑
     39: ("opentimefood", "restdatefood"),   # 음식점
 }
+# 축제·공연(15)만 개최 기간이 있다(YYYYMMDD). 기간 밖이면 운영시간이 맞아도 갈 수 없는 곳이다.
+_EVENT_FIELDS = ("eventstartdate", "eventenddate")
 _TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
 _WEEKDAYS = {"월": 0, "화": 1, "수": 2, "목": 3, "금": 4, "토": 5, "일": 6}
 # 특정 주차만 쉬는 표현(격주/첫째주 등)은 요일 단위로 환원하면 과도하게 막으므로 무시한다.
@@ -545,6 +547,15 @@ class Hours:
     open_hour: float | None = None      # 예: 9.5 = 09:30
     close_hour: float | None = None     # 자정 넘김은 +24(예: 26.0 = 익일 02:00)
     closed_weekdays: tuple[int, ...] = field(default_factory=tuple)  # 월0~일6
+    # 축제·공연(15)의 개최 기간(YYYYMMDD). 그 외 유형·미상은 None(=기간 제약 없음).
+    event_start: str | None = None
+    event_end: str | None = None
+
+    def runs_between(self, go_date: str | None, back_date: str | None) -> bool:
+        """여행 기간(YYYYMMDD)과 개최 기간이 하루라도 겹치면 True. 기간 미상이면 True(막지 않음)."""
+        if not (self.event_start and self.event_end and go_date and back_date):
+            return True
+        return self.event_start <= back_date and go_date <= self.event_end
 
 
 def _to_hour(hm: tuple[str, str]) -> float:
@@ -603,7 +614,14 @@ def _fetch_hours_one(cid: str, ctype: int | None) -> tuple[str, Hours]:
         return cid, Hours()
     o, c = _parse_hours(item.get(tf))
     wd = _parse_closed_weekdays(item.get(rf)) if rf else ()
-    return cid, Hours(o, c, wd)
+    es, ee = (_ymd(item.get(f)) for f in _EVENT_FIELDS) if ctype == 15 else (None, None)
+    return cid, Hours(o, c, wd, es, ee)
+
+
+def _ymd(v) -> str | None:
+    """TourAPI 날짜값 → 'YYYYMMDD' 8자리만 통과, 그 외(빈 값·이상 포맷)는 None."""
+    v = str(v or "").strip()
+    return v if len(v) == 8 and v.isdigit() else None
 
 
 def fetch_hours(refs: list[tuple[str, int | None]]) -> dict[str, Hours]:

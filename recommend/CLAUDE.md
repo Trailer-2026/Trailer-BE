@@ -142,6 +142,9 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
     `tour_place.fetch_hours`(detailIntro2 병렬)로 운영시간을 채운다. 장소당 1콜이라 코스 후보로만 제한(quota·속도 보호).
     조회 대상은 반드시 `build_courses`와 **같은 `working_set`**이어야 한다(다중 테마 시 테마 쿼터로 원점수 상위 N개와
     달라져, `scored[:상한]`으로 조회하면 차순위 후보가 미조회인 채 코스에 섞인다).
+  - **축제·공연(15)은 개최 기간(`eventstartdate`/`eventenddate`)도 같이 받아, 여행 기간(`go_date`~`back_date`)과
+    하루도 안 겹치면 `_attach_hours`가 후보에서 뺀다**(끝난 축제가 코스에 들어가던 문제). 빠진 자리에 올라온 차순위만
+    추가 조회해 '작업셋 = 조회 대상' 불변식을 지킨다. 기간 미상은 막지 않는다(`Hours.runs_between`).
   - 파싱은 자유텍스트라 방어적(`_parse_hours`/`_parse_closed_weekdays`): `HH:MM~HH:MM` 앞 구간, `24시간·상시·연중무휴`,
     `매주 X요일` 정도만 해석. 자정 넘김은 +24. 격주·첫째주 등 불규칙 휴무는 과제약을 피해 무시. **미상은 시간 제약 없음**으로 둔다.
 - **스케줄링 — `recommend/scheduling.py`** (순수 계산)

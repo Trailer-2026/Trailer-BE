@@ -623,12 +623,22 @@ def _attach_hours(scored: list, criteria: SearchCriteria, k: int) -> None:
     조회해 호출 수를 제한한다(공모전 quota·응답속도 보호). 미상은 그대로 두어 시간 제약 없음으로 본다.
     조회 대상은 반드시 build_courses와 같은 working_set이어야 한다(다중 테마 시 원점수 상위 N개와
     달라 미조회 후보가 코스에 섞이는 것을 방지).
+
+    축제·공연(15)은 여행 기간과 개최 기간이 안 겹치면 **후보에서 뺀다**(끝난 축제를 코스에 넣지 않기
+    위해). 빼면 차순위가 작업셋에 올라오므로 새로 들어온 것만 추가 조회해 '작업셋 = 조회 대상'을 지킨다.
     """
-    pool = pipeline.working_set(scored, criteria.themes, k)
-    refs = [(str(sp.place_idx), sp.content_type_id) for sp in pool if sp.content_type_id]
-    if not refs:
-        return
-    hours = tour_place.fetch_hours(refs)
+    hours: dict = {}
+    while True:
+        pool = pipeline.working_set(scored, criteria.themes, k)
+        refs = [(str(sp.place_idx), sp.content_type_id)
+                for sp in pool if sp.content_type_id and str(sp.place_idx) not in hours]
+        if refs:
+            hours.update(tour_place.fetch_hours(refs))
+        over = {sp.place_idx for sp in pool
+                if (h := hours.get(str(sp.place_idx))) and not h.runs_between(criteria.go_date, criteria.back_date)}
+        if not over:
+            break
+        scored[:] = [sp for sp in scored if sp.place_idx not in over]
     for sp in pool:
         h = hours.get(str(sp.place_idx))
         if h is not None:
