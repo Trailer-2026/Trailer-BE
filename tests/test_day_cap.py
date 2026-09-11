@@ -16,7 +16,7 @@ os.environ.setdefault("OPENAPI_EXPORT", "1")
 
 from core.enums import Theme
 from recommend import pipeline, scheduling
-from recommend.types import ScoredPlace
+from recommend.types import Cluster, ScoredPlace
 from schemas.recommend_schema import SearchCriteria
 
 K = 3  # 2박3일
@@ -65,7 +65,32 @@ def test_middle_day_has_three_attractions_and_two_meals_no_overlap():
         assert len(meals) == pipeline._MEALS_PER_DAY, f"{c.label} 중간 날 식사 {len(meals)}끼"
 
 
+def test_middle_day_refills_when_hours_drop_a_place():
+    """휴무가 아니어도 운영시간 탓에 배치 못 한 관광지가 있으면 그만큼 보충한다.
+
+    예전엔 보충 수를 '휴무 아닌 관광지 수'로만 셌다. 10시에 닫는 곳(체류 2h라 못 들어감)을 가진
+    날은 3곳을 가진 것으로 쳐서 보충 없이 2곳으로 끝났다.
+    """
+    def attr(idx, lat, **kw):
+        return ScoredPlace(place_idx=idx, name=f"p{idx}", region=None, lat=lat, lng=129.0,
+                           themes=[Theme.HISTORY], score=0.9, content_type_id=12, **kw)
+
+    days = [[attr(i * 10 + j, 35.0 + i * 0.2 + j * 0.001) for j in range(3)] for i in range(K)]
+    days[1][0] = attr(10, 35.2, open_hour=9.0, close_hour=10.0)  # 중간 날: 휴무 아님, 그러나 배치 불가
+    extra = attr(99, 35.201)                                     # 중간 날 근처 보충 후보
+    clusters = [Cluster(day_no=i + 1, members=m, centroid=(m[0].lat, 129.0)) for i, m in enumerate(days)]
+    criteria = SearchCriteria(origin_station_idx=1, go_date="20260501", back_date="20260503",
+                              themes=[Theme.HISTORY])
+    pool = [p for m in days for p in m] + [extra]
+    course = pipeline._assemble("A", clusters, criteria, (35.0, 129.0), {Theme.HISTORY},
+                                attraction_pool=pool)
+    mid = [rp.place_idx for d in course.days if d.date == "20260502" for rp in d.places]
+    assert 10 not in mid, "10시에 닫는 곳이 배치됐다(전제가 깨짐)"
+    assert 99 in mid and len(mid) == pipeline._MAX_PER_DAY, f"보충이 안 됐다: {mid}"
+
+
 if __name__ == "__main__":
     test_working_set_splits_quota()
     test_middle_day_has_three_attractions_and_two_meals_no_overlap()
+    test_middle_day_refills_when_hours_drop_a_place()
     print("day cap OK")
