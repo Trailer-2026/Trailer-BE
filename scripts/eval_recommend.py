@@ -86,7 +86,7 @@ def _criteria(themes: list[Theme], nights: int) -> SearchCriteria:
 # --------------------------------------------------------------------------- #
 # 스냅샷 — 시나리오별 후보 + 운영시간을 한 번 받아 저장
 # --------------------------------------------------------------------------- #
-_POOL_MAX = pipeline._NUM_COURSES * _MAX_K * pipeline._MAX_PER_DAY  # 27
+_POOL_MAX = pipeline._NUM_COURSES * _MAX_K * (pipeline._MAX_PER_DAY + pipeline._MEALS_PER_DAY)  # 45 (식당 없는 테마는 27에서 찬다)
 
 
 def _snapshot_scenario(station: str, themes: list[Theme]) -> dict:
@@ -119,7 +119,8 @@ def snapshot(sparse_only: bool) -> None:
     existing = {(sc["station"], tuple(sc["themes"])): sc for sc in json.loads(SNAPSHOT.read_text(encoding="utf-8"))}         if sparse_only and SNAPSHOT.exists() else {}
     scenarios = [(s, ts) for s in _STATIONS for ts in _THEME_SETS]
     todo = [(s, ts) for s, ts in scenarios
-            if not sparse_only or len(existing.get((s, tuple(t.value for t in ts)), {}).get("places", [])) < _POOL_MAX]
+            if not sparse_only or len(existing.get((s, tuple(t.value for t in ts)), {}).get("places", []))
+            < (_POOL_MAX if Theme.FOOD in ts else pipeline._NUM_COURSES * _MAX_K * pipeline._MAX_PER_DAY)]
     print(f"시나리오 {len(todo)}개 — detailIntro2 최대 {len(todo) * _POOL_MAX}콜")
     if input("계속할까요? [y/N] ").strip().lower() != "y":
         return

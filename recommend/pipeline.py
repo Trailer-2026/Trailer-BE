@@ -9,22 +9,32 @@ from schemas.recommend_schema import Course, DayPlan, RecommendedPlace, SearchCr
 
 # 사용자가 셋 중 하나를 고르는 코스 후보 수
 _NUM_COURSES = 3
-# 하루 최대 방문지 수(그 이상은 현실적으로 소화 불가)
+# 하루 최대 관광지 수(식사 제외 — 식사는 scheduling._MEALS 만큼 따로 얹힌다)
 _MAX_PER_DAY = 3
+# 하루 식사 수(점심·저녁). 작업셋의 식당 몫을 정한다.
+_MEALS_PER_DAY = len(scheduling._MEALS)
 _LABELS = ["A", "B", "C"]  # 코스 수(_NUM_COURSES)와 zip이라 그만큼만 쓰인다
 
 
 def working_set(scored: list[ScoredPlace], themes: list[Theme] | None, k: int) -> list[ScoredPlace]:
     """코스 조립에 실제로 쓰이는 상위 후보 집합(작업셋).
 
-    상한 = _NUM_COURSES × k × _MAX_PER_DAY. recommend_service가 이 수만큼의 상위 후보에만
-    운영시간을 조회(detailIntro2)해 호출 수를 코스에 배정될 장소로 제한한다.
+    관광지 _NUM_COURSES × k × _MAX_PER_DAY + 식당 _NUM_COURSES × k × _MEALS_PER_DAY. 몫을 나누는
+    이유: 합쳐서 뽑으면 FOOD 테마에서 식당이 관광지 자리를 차지해 하루 관광지가 모자라고, 모자란
+    만큼 다른 코스 관광지를 빌려 와 코스끼리 겹친다. 식당이 없는 검색은 식당 몫이 0이라 예전과 같다.
+    recommend_service가 이 집합에만 운영시간을 조회(detailIntro2)해 호출 수를 코스에 배정될 장소로 제한한다.
     운영시간 조회(recommend_service._attach_hours)와 코스 생성(build_courses)이 **반드시
     같은 집합**을 쓰도록 하는 단일 진입점. 다중 테마면 테마 쿼터 때문에 원점수 상위 N개와
     달라질 수 있어(차순위가 코스에 섞임), 조회 대상을 이 함수로 통일해야 미조회 후보가 코스에
     들어가는 것을 막는다.
     """
-    return _select_working(scored, set(themes or []), _NUM_COURSES * k * _MAX_PER_DAY)
+    attrs = [p for p in scored if p.content_type_id != scheduling._MEAL_CT]
+    meals = [p for p in scored if p.content_type_id == scheduling._MEAL_CT]
+    # 관광지 쿼터에서 FOOD는 뺀다(FOOD는 식당(39)으로만 채워지는 테마라 관광지 쪽엔 몫이 없다).
+    picked = _select_working(attrs, set(themes or []) - {Theme.FOOD}, _NUM_COURSES * k * _MAX_PER_DAY)
+    picked += meals[:_NUM_COURSES * k * _MEALS_PER_DAY]  # scored는 점수순이라 상위 식당
+    picked.sort(key=lambda p: p.score, reverse=True)      # 버킷 인터리브는 점수 랭크 기준
+    return picked
 
 
 def build_courses(
@@ -40,7 +50,7 @@ def build_courses(
 
     다중 테마는 scoring 단계(가중 코사인)에서 이미 반영된 score 순위를 사용한다.
     코스 3개는 점수 랭크를 인터리브해 '겹치지 않는' 풀로 나눠 만든다(각 코스가 상위권을
-    고루 갖되 장소는 달라짐). 각 코스: kmeans(k=일수) → 하루 최대 3곳 캡
+    고루 갖되 장소는 달라짐). 각 코스: kmeans(k=일수, 관광지 기준) → 하루 관광지 3곳 + 식사 2끼 캡
     → NN+2-opt → 마지막 day 출발지 복귀. origin은 현지 기준점(도착지) 좌표.
     """
     if not scored or k < 1:
@@ -48,7 +58,7 @@ def build_courses(
 
     selected = set(criteria.themes or [])
 
-    # 코스 3개 × 일수 × 하루 3곳 만큼의 상위 후보를 작업셋으로 (다중 테마면 테마별 균형).
+    # 코스 3개 × 일수 × (관광지 3 + 식당 2) 만큼의 상위 후보를 작업셋으로 (다중 테마면 테마별 균형).
     # _attach_hours(운영시간 조회)와 동일 집합을 보장하려 working_set 단일 진입점 사용.
     working = working_set(scored, criteria.themes, k)
     # 점수 랭크 인터리브 → 서로 다른 3개 버킷 (A: 0,3,6.. / B: 1,4,7.. / C: 2,5,8..)
@@ -68,10 +78,18 @@ def build_courses(
     for label, bucket in zip(_LABELS, buckets):
         if not bucket:
             continue
-        clusters = clustering.kmeans_by_geo(bucket, k)
+        # 날짜 묶기는 관광지로만 한다. 식당까지 섞어 균형을 맞추면 관광지가 한 날에 4곳, 다른 날에
+        # 2곳으로 쏠려 모자란 날이 남의 코스 관광지를 빌려 온다(코스 간 겹침). 식당은 가장 가까운
+        # 날에 붙인다 — 한 날에 몰려도 scheduling이 2끼까지만 쓴다. 식당뿐이면(FOOD 단독) 식당으로 묶는다.
+        attrs = [p for p in bucket if p.content_type_id != scheduling._MEAL_CT]
+        clusters = clustering.kmeans_by_geo(attrs or bucket, k)
         clusters = [cl for cl in clusters if cl.members]
         if not clusters:
             continue
+        if attrs:
+            for m in bucket:
+                if m.content_type_id == scheduling._MEAL_CT:
+                    min(clusters, key=lambda c: routing.haversine(m.lat, m.lng, *c.centroid)).members.append(m)
         # 하루 방문지 상한은 _assemble이 날짜별로 적용(첫날/마지막날은 열차 시각 기반).
         course = _assemble(
             label, clusters, criteria, origin, selected,
@@ -153,8 +171,8 @@ def _assemble(
     구한 first_cap/last_cap으로 더 줄인다(오후 도착이면 덜, 오전 귀가면 거의 안 채움).
     day_windows(그 날 관광 가능 시간대)가 있으면 scheduling이 관광지 운영시간에 맞춰 순서를 정하고
     운영시간 밖인 곳은 차순위 후보로 대체한다. 운영시간 정보가 없는 날은 기존 동선(NN+2-opt) 순서.
-    attraction_pool(비-식당 관광지)이 있으면 중간 날이 식당만이라 2끼에 그칠 때 근처 관광지를
-    보충해 3곳까지 채운다(첫날/마지막날은 미적용).
+    attraction_pool(비-식당 관광지)이 있으면 중간 날 관광지가 cap에 못 미칠 때 근처 관광지를
+    보충한다(첫날/마지막날은 미적용). cap은 관광지만 세고 식사(최대 2끼)는 따로 얹힌다.
     """
     ordered = _order_days(clusters, origin)
     go = _parse_ymd(criteria.go_date)

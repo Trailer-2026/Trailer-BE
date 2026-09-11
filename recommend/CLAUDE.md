@@ -52,7 +52,7 @@ destination.rank_and_diversify(profiles, themes, party, origin, nights, max_trav
 | `clustering.py` | ② k-means(결정적)로 중심 잡고 **용량 균형 재배정**으로 날짜 묶기 — 각 날 floor~ceil(n/k)개로 과밀·빈 날 없이 정확히 k일 보장 (`kmeans_by_geo`/`_balanced_assign`) |
 | `routing.py` | ③④ Nearest Neighbor + 2-opt + 순환 복귀, `haversine` (`nearest_neighbor`/`two_opt`/`close_cycle`) |
 | `scheduling.py` | ⑤ Day 내부 **시각 스케줄링**. 유형별 체류(`dwell_h`: 식당 1h·관광지 2h·테마파크 4h)+장소 간 이동시간(`_travel_h`) 반영해 동선 순 배치, 식당은 그 시간대 동선 근처 우선(점수−이탈거리 감점). 관광지 운영시간(오픈/마감·휴무요일) 소프트 제약, 밖이면 차순위 대체. 운영시간 정보 없는 날은 `routing` 동선 순서로 폴백 (`schedule_day`) |
-| `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 최대 3곳(첫/마지막날은 열차 시각 기반 `first_cap`/`last_cap`으로 축소), Day 순서는 `scheduling`이 운영시간 반영해 확정 |
+| `pipeline.py` | 단계 조립 → 코스 3개(A/B/C). 점수 인터리브로 겹침 0, 다중 테마 쿼터 균형, 하루 **관광지 최대 3곳 + 식사 2끼**(첫/마지막날은 열차 시각 기반 `first_cap`/`last_cap`으로 축소). 작업셋은 관광지 몫(3×k×3)과 식당 몫(3×k×2)을 따로 뽑고, 날짜 묶기(k-means)는 관광지로만 해 식당은 가장 가까운 날에 붙인다, Day 순서는 `scheduling`이 운영시간 반영해 확정 |
 | `destination.py` | **도착지 선택**(코스 파이프라인과 별개). 도착역 미지정 시 `theme + party` 기준으로 시도 area 후보를 점수화·권역 다양성 필터 (`rank_and_diversify`, 값 객체 `AreaProfile`) |
 
 ## 도착지 선택 로직 (`destination.py`)
@@ -80,7 +80,7 @@ score = WEIGHT_THEME·theme_fit + wAge·age_fit + WEIGHT_ACCESS·access_fit − 
 
 ## 규칙·상수 (바꿀 때 주의)
 
-- `pipeline._NUM_COURSES = 3` — 사용자가 셋 중 하나 선택. `_MAX_PER_DAY = 3` — 하루 방문지 상한.
+- `pipeline._NUM_COURSES = 3` — 사용자가 셋 중 하나 선택. `_MAX_PER_DAY = 3` — 하루 **관광지** 상한(식사 제외). 식사는 `scheduling._MEALS`(2끼)만큼 따로 얹힌다 — 상한에 식사를 같이 세면 FOOD 테마에서 점심·저녁이 2자리를 먹고 관광지가 1곳만 남는다. 그래서 작업셋도 관광지·식당 몫을 따로 뽑는다(`working_set`) — 합쳐 뽑으면 관광지가 모자라 다른 코스 관광지를 빌려 와 코스끼리 겹친다. **대가**: FOOD 테마 검색은 detailIntro2 호출이 2박3일 기준 27→45건으로 는다.
 - 다중 테마: `_select_working`이 테마별 쿼터로 균형을 맞춘다(한 테마 쏠림 방지). 단일/0개 테마면 점수 상위 그대로.
 - **테마 미선택 방어**: 프론트가 테마 최소 1개 선택을 강제하지만, 백엔드도 빈 테마를 방어한다 — `SearchCriteria.themes`는 스키마상 빈 리스트를 허용하고, 빈 값이 들어오면 `utils/tour_place.py:_DEFAULT_CTYPES`(관광지12·문화14·음식39)로 기본 조회한다. 프론트 검증을 신뢰하되 잘못된/직접 호출로 조용히 빈 추천이 나가지 않도록 최후 방어선으로 남겨둔 것. 스키마에서 `min_length=1`을 강제하지 않는 이유가 이 폴백을 살리기 위함이니, 폴백을 지우려면 스키마 강제를 먼저 넣어라.
 - `destination.py` 가중치/휴리스틱 표(`WEIGHT_*`, `_AGE_SUIT`, `_GROUP_FRIENDLY`, `_IDEAL_KM`, `GROUP_LARGE`)는 전부 모듈 상수다. 값을 바꿔 튜닝하되, 연령/그룹 표는 **실데이터가 아니라 휴리스틱**임을 잊지 마라(데이터가 생기면 표를 교체).
