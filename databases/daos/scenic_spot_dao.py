@@ -1,7 +1,6 @@
 import logging
-from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
-from databases.daos import station_dao
+from databases.daos import station_dao, train_stop_dao
 from databases.models.scenic_spot import ScenicSpot
 from databases.models.scenic_spot_segment import ScenicSpotSegment
 from utils.scenic import (
@@ -12,6 +11,11 @@ from utils.scenic import (
 logger = logging.getLogger(__name__)
 
 
+def _suffix(name: str) -> str:
+    """'대전' → '대전역'. train_stop 은 접미사가 없고 scenic_spot_segment 는 붙어 있다."""
+    return name if name.endswith("역") else f"{name}역"
+
+
 def resolve_side(seg: ScenicSpotSegment, from_station: str, to_station: str) -> str | None:
     """진행 방향(출발역→도착역)에 맞춰 segment의 좌/우(left|right)를 하나로 확정한다.
 
@@ -20,6 +24,20 @@ def resolve_side(seg: ScenicSpotSegment, from_station: str, to_station: str) -> 
     if seg.from_station == from_station and seg.to_station == to_station:
         return seg.side_hint_forward
     return seg.side_hint_reverse  # 프론트에서 역쌍 매칭만 넘어온다 가정
+
+
+def _side_on_route(seg: ScenicSpotSegment, dist_from_dep: dict[str, float]) -> str | None:
+    """출발역에서 더 가까운 쪽이 segment 의 앞이면 정방향, 아니면 역방향.
+
+    resolve_side 는 탑승 구간의 양 끝(서울역→대전역)과 segment 의 역쌍이 같다는 전제라
+    경로를 펴서 찾은 segment(광명역→천안아산역 등)에는 쓸 수 없다. 정차역 목록은 여러
+    열차를 합친 것이라 순서(index)도 믿을 수 없어서, **출발역으로부터의 거리**로 앞뒤를
+    가른다 — 선로가 달라도 진행 방향은 같으므로 이 기준은 흔들리지 않는다.
+    """
+    a, b = dist_from_dep.get(seg.from_station), dist_from_dep.get(seg.to_station)
+    if a is None or b is None:
+        return seg.side_hint_forward
+    return seg.side_hint_forward if a <= b else seg.side_hint_reverse
 
 
 def segments_on_route(
@@ -68,19 +86,26 @@ def search_on_segment(
     좌/우는 노선과 무관한 기하 속성이라 노선 구분 없이 출발/도착역만으로 방향을 판별한다.
     """
     # segment = '관광지가 어느 역 구간에서 어느 쪽 창으로 보이는가'(정의: ScenicSpotSegment 모델 참조).
-    # (출발,도착)역 양방향 매칭 segment 조회 → 진행 방향 좌/우 확정
+    #
+    # **양끝 역쌍만으로 찾지 않는다.** segment 는 인접역 단위로 등록돼 있어서(서울역-광명역,
+    # 광명역-천안아산역 …) 탑승 구간의 양 끝인 (서울역, 대전역)으로 물으면 **한 건도 안 걸린다**
+    # — 중간에 스팟이 341곳 있어도 화면이 "알려드릴 관광지가 없어요"로 비었다.
+    # 그래서 경로를 정차역으로 펴서(train_stop) 양끝이 그 위에 있는 segment 를 다 본다.
+    # 풍경 알림 발송 경로(scenic_plan_service)가 segments_on_route 로 하던 것과 같은 방식이고,
+    # 조회만 그 교훈이 빠져 있어 "푸시는 가는데 화면엔 안 뜨는" 비대칭이 있었다.
+    route = [_suffix(n) for n in train_stop_dao.stops_between(db, from_station, to_station)]
+    if len(route) < 2:
+        route = [from_station, to_station]  # 미적재 열차 — 옛 동작(양끝 쌍)으로 폴백
+    # 좌/우 판정 기준: 출발역에서 각 역까지의 거리(정차 순서가 아니다 — 아래 _side_on_route).
+    origin = station_dao.coord_by_name(db, from_station)
+    dist_from_dep: dict[str, float] = {}
+    if origin is not None:
+        for name, coord in station_dao.coords_by_names(db, route).items():
+            dist_from_dep[name] = haversine_m(origin[0], origin[1], coord[0], coord[1])
     segs = db.query(ScenicSpotSegment).filter(
         ScenicSpotSegment.deleted_at.is_(None),
-        or_(
-            and_(
-                ScenicSpotSegment.from_station == from_station,
-                ScenicSpotSegment.to_station == to_station,
-            ),
-            and_(
-                ScenicSpotSegment.from_station == to_station,
-                ScenicSpotSegment.to_station == from_station,
-            ),
-        ),
+        ScenicSpotSegment.from_station.in_(route),
+        ScenicSpotSegment.to_station.in_(route),
     ).all()
     if not segs:
         return []
@@ -130,6 +155,6 @@ def search_on_segment(
             "name": spot.name,
             "category": spot.category,
             "distance_m": round(distance_m, 1),
-            "side": resolve_side(seg, from_station, to_station),
+            "side": _side_on_route(seg, dist_from_dep),
         })
     return results

@@ -88,3 +88,60 @@ def replace_all(db: Session, records: list[dict]) -> int:
     db.bulk_insert_mappings(TrainStop, records)
     db.flush()
     return len(records)
+
+
+def stops_between(db: Session, dep: str, arr: str) -> list[str]:
+    """두 역을 모두 서는 **모든** 열차의 사이 정차역을 합쳐 반환(양끝 포함, 중복 제거).
+
+    창밖 풍경 조회(`/api/scenic-spots/nearby`)가 쓴다. 그쪽은 탑승 구간의 **양 끝**만 알고
+    열차번호를 모르는데, 풍경 구간(scenic_spot_segment)은 인접역 쌍으로 등록돼 있어
+    (서울역, 대전역) 같은 양끝 쌍으로는 하나도 안 걸린다. 사이 역을 펴 줘야 매칭된다.
+
+    **열차 하나만 고르면 안 된다.** 같은 두 역을 잇는 선로가 여럿이라(서울~대전은 경부선
+    일반과 고속선이 나란히 간다) 어느 하나를 집으면 다른 선로의 풍경 구간을 통째로 놓친다
+    — 정차역이 가장 많은 열차를 골랐더니 일반선(수원·오산·평택)이 잡혀, 고속선(광명·
+    천안아산·오송)에 등록된 341곳이 전부 빠졌다. 그래서 합집합으로 낸다.
+
+    합집합이라 사용자가 안 타는 선로의 구간도 섞이지만, 호출측이 **현재 좌표에서 가시거리
+    1500m·진행 방향 ±100°**로 다시 거르므로 실제로 곁에 있는 것만 남는다.
+
+    역 표기는 train_stop 쪽(접미사 없음, '대전')이다 — 호출측이 '역'을 붙여 쓴다.
+    """
+    dep, arr = _strip(dep), _strip(arr)
+    if not dep or not arr or dep == arr:
+        return []
+    both = (
+        db.query(TrainStop.trn_no)
+        .filter(TrainStop.deleted_at.is_(None), TrainStop.stn_nm.in_((dep, arr)))
+        .group_by(TrainStop.trn_no)
+        .having(func.count(func.distinct(TrainStop.stn_nm)) == 2)
+        .subquery()
+    )
+    rows = (
+        db.query(TrainStop)
+        .filter(TrainStop.deleted_at.is_(None), TrainStop.trn_no.in_(db.query(both.c.trn_no)))
+        .order_by(TrainStop.trn_no, TrainStop.seq)
+        .all()
+    )
+    by_train: dict[str, list[str]] = {}
+    for r in rows:
+        by_train.setdefault(r.trn_no, []).append(r.stn_nm)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for names in by_train.values():
+        try:
+            i, j = names.index(dep), names.index(arr)
+        except ValueError:
+            continue
+        for name in (names[i:j + 1] if i <= j else names[j:i + 1][::-1]):
+            if name not in seen:
+                seen.add(name)
+                out.append(name)
+    return out
+
+
+def _strip(name: str) -> str:
+    """'대전역' → '대전' (train_stop 표기)."""
+    name = (name or "").strip()
+    return name[:-1] if len(name) > 1 and name.endswith("역") else name
