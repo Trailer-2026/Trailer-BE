@@ -26,18 +26,31 @@ def resolve_side(seg: ScenicSpotSegment, from_station: str, to_station: str) -> 
     return seg.side_hint_reverse  # 프론트에서 역쌍 매칭만 넘어온다 가정
 
 
-def _side_on_route(seg: ScenicSpotSegment, dist_from_dep: dict[str, float]) -> str | None:
+def _side_on_route(
+    seg: ScenicSpotSegment,
+    dist_from_dep: dict[str, float],
+    from_station: str,
+    to_station: str,
+) -> str | None:
     """출발역에서 더 가까운 쪽이 segment 의 앞이면 정방향, 아니면 역방향.
 
     resolve_side 는 탑승 구간의 양 끝(서울역→대전역)과 segment 의 역쌍이 같다는 전제라
     경로를 펴서 찾은 segment(광명역→천안아산역 등)에는 쓸 수 없다. 정차역 목록은 여러
     열차를 합친 것이라 순서(index)도 믿을 수 없어서, **출발역으로부터의 거리**로 앞뒤를
     가른다 — 선로가 달라도 진행 방향은 같으므로 이 기준은 흔들리지 않는다.
+
+    **거리를 모르면 방향을 지어내지 않는다.** 좌/우는 둘 중 하나라 찍으면 절반은 맞지만,
+    틀린 절반은 '반대쪽 창을 보라'고 말하는 것이라 아무 말도 안 하는 것보다 나쁘다
+    (side=None 이면 앱이 방향 없이 이름만 띄운다). 역쌍이 탑승 구간과 그대로 맞는
+    경우만은 좌표 없이도 판정할 수 있어 옛 경로(resolve_side)로 답한다 — 정차역이
+    미적재라 route 를 못 펴고 양끝 쌍으로 폴백한 때가 그렇다.
     """
     a, b = dist_from_dep.get(seg.from_station), dist_from_dep.get(seg.to_station)
-    if a is None or b is None:
-        return seg.side_hint_forward
-    return seg.side_hint_forward if a <= b else seg.side_hint_reverse
+    if a is not None and b is not None:
+        return seg.side_hint_forward if a <= b else seg.side_hint_reverse
+    if {seg.from_station, seg.to_station} == {from_station, to_station}:
+        return resolve_side(seg, from_station, to_station)
+    return None
 
 
 def segments_on_route(
@@ -155,6 +168,6 @@ def search_on_segment(
             "name": spot.name,
             "category": spot.category,
             "distance_m": round(distance_m, 1),
-            "side": _side_on_route(seg, dist_from_dep),
+            "side": _side_on_route(seg, dist_from_dep, from_station, to_station),
         })
     return results
