@@ -25,6 +25,12 @@ _FRESH_WITHIN_HOURS = 20
 _KST = timezone(timedelta(hours=9))
 
 
+# 한 번 갱신할 때 훑는 날짜 수(어제부터 거슬러). 하루치만 받으면 그날 안 다닌 열차가
+# 빠져 '정차역 N개'와 창밖 풍경이 조용히 비는데, 정차 패턴은 열차번호별로 안정적이라
+# 날짜를 넓혀도 결과가 나빠지지 않는다. 대가는 조회 호출이 날짜 수만큼 느는 것뿐이다.
+_REFRESH_DAYS = 3
+
+
 def _yesterday_ymd() -> str:
     return (datetime.now(_KST) - timedelta(days=1)).strftime("%Y%m%d")
 
@@ -35,16 +41,47 @@ def _ensure_table() -> None:
     TrainStop.__table__.create(bind=engine, checkfirst=True)
 
 
-def refresh(ymd: str | None = None) -> int:
-    """대상일(기본 어제) 정차역을 받아 train_stop을 전량 교체 적재하고 적재 행수를 반환.
+def refresh(ymd: str | None = None, days: int = _REFRESH_DAYS) -> int:
+    """최근 며칠치 정차역을 합쳐 train_stop을 전량 교체 적재하고 적재 행수를 반환.
+
+    **하루치만 받으면 그날 안 다닌 열차가 통째로 빠진다.** 주말·평일에만 다니는 편성,
+    격일 임시편이 그렇고, 그런 열차를 태운 여정은 '정차역 N개'가 비고 창밖 풍경 구간도
+    잡히지 않는다(추천 결과에 '개 역 이동'이 숫자 없이 뜨던 것이 이 경우다).
+
+    열차 하나의 정차 순서는 **한 날짜에서 통째로** 가져온다 — 날짜별 조각을 섞으면 같은
+    열차번호에 서로 다른 노선이 겹쳐 순서가 무너진다. 최근 날짜부터 훑어 그 열차가 처음
+    나온 날의 것만 취한다.
 
     빈 응답(그 날짜 미제공 등)이면 기존 데이터를 지우지 않고 0을 반환한다(good data 보존).
+    **하루라도 조회에 실패하면 적재 자체를 포기한다** — 적재가 전량 교체(하드 삭제)라,
+    실패한 날에만 다니던 열차가 그대로 사라지기 때문이다. 하루치만 받던 때 열차가 빠지던
+    바로 그 증상을 이번엔 조용히 되살리는 꼴이라, 반쯤 채운 결과로 덮느니 지난 스냅샷을
+    그대로 두고 다음 주기(24h)에 다시 받는다. 보존기간 밖 날짜는 예외가 아니라 빈 응답이라
+    이 조건에 걸리지 않는다(그래서 영영 갱신이 막히지는 않는다).
     """
-    ymd = ymd or _yesterday_ymd()
     _ensure_table()
-    records = train_stops.fetch_day(ymd)
+    base = datetime.strptime(ymd, "%Y%m%d") if ymd else datetime.now(_KST) - timedelta(days=1)
+    records: list[dict] = []
+    collected: set[str] = set()
+    for offset in range(max(1, days)):
+        target = (base - timedelta(days=offset)).strftime("%Y%m%d")
+        try:
+            day_records = train_stops.fetch_day(target)
+        except Exception as e:
+            logger.warning(
+                "train_stop: %s 조회 실패(%s) — 기존 데이터 유지, 갱신 건너뜀",
+                target, type(e).__name__,
+            )
+            return 0
+        fresh = {r["trn_no"] for r in day_records} - collected
+        if not fresh:
+            continue
+        records += [r for r in day_records if r["trn_no"] in fresh]
+        collected |= fresh
+        logger.info("train_stop: %s 에서 열차 %d편 추가 (누적 %d편)", target, len(fresh), len(collected))
+
     if not records:
-        logger.warning("train_stop: %s 정차역 0건 — 기존 데이터 유지, 갱신 건너뜀", ymd)
+        logger.warning("train_stop: 최근 %d일 정차역 0건 — 기존 데이터 유지, 갱신 건너뜀", days)
         return 0
     db = SessionLocal()
     try:

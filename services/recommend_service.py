@@ -467,6 +467,15 @@ def _itineraries_from(db, places, criteria: SearchCriteria, k: int, anchor, rout
         out.append(dup)
         i += 1
 
+    # 기차를 못 찾은 플랜은 **성립한 플랜이 하나라도 있을 때만** 뺀다. 멀쩡한 카드 옆에
+    # 이동시간 0분짜리가 끼면 그것만 고장난 것처럼 보이기 때문이다. 반대로 전부 못 찾은
+    # 경우(명절처럼 그 날짜 일반 시간표가 통째로 비는 때)는 그대로 남긴다 — 코스라도
+    # 보여주는 편이 빈 화면보다 낫고, 어차피 다른 날짜를 골라야 하는 상황이다.
+    with_train = [it for it in out if any(s.kind == "train" for s in it.segments)]
+    if with_train and len(with_train) < len(out):
+        logger.info("기차 없는 플랜 %d장 제외", len(out) - len(with_train))
+        out = with_train
+
     # page 창 잘라내고, 그 페이지의 카드에 A/B/C를 위치순으로 부여(각 페이지는 A부터 시작).
     sliced = out[page * target: page * target + target]
     for i, it in enumerate(sliced):

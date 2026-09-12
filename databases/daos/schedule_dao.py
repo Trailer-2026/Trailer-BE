@@ -1,6 +1,6 @@
 from datetime import date, time
 
-from sqlalchemy import func, tuple_
+from sqlalchemy import case, func, tuple_
 from sqlalchemy.orm import Session
 
 from databases.models.schedule import Schedule
@@ -158,8 +158,18 @@ def list_trains_covering(
     return query.order_by(Schedule.day_no, Schedule.sequence).all()
 
 
+# 대표 썸네일 후보의 우선순위 — **방문지 먼저, 그 외는 나중.**
+# 예전엔 (day_no, sequence) 첫 이미지를 그냥 집었는데, 기차엔 이미지가 없어 그다음이
+# 뽑히다 보니 숙소·식당이 여행의 얼굴이 됐다(홈 카드 "대전 1박 2일 여행"의 썸네일이
+# 호텔 건물 사진이었다). 방문지가 하나도 없는 여행은 예전처럼 아무거나 쓴다.
+_COVER_PRIORITY = case((Schedule.kind == "visit", 0), else_=1)
+
+
 def cover_image(db: Session, travel_idx: int) -> str | None:
-    """여행의 대표 썸네일 — 일정 순서(day_no, sequence)상 이미지가 있는 첫 항목의 image_url. 없으면 None."""
+    """여행의 대표 썸네일 — 이미지가 있는 **첫 방문지**의 image_url. 없으면 None.
+
+    방문지가 없으면 그 외 항목(숙소 등)에서 고른다(_COVER_PRIORITY 참조).
+    """
     row = (
         db.query(Schedule.image_url)
         .filter(
@@ -167,7 +177,7 @@ def cover_image(db: Session, travel_idx: int) -> str | None:
             Schedule.deleted_at.is_(None),
             Schedule.image_url.isnot(None),
         )
-        .order_by(Schedule.day_no, Schedule.sequence)
+        .order_by(_COVER_PRIORITY, Schedule.day_no, Schedule.sequence)
         .first()
     )
     return row[0] if row else None
@@ -176,8 +186,8 @@ def cover_image(db: Session, travel_idx: int) -> str | None:
 def cover_images(db: Session, travel_idxs: list[int]) -> dict[int, str]:
     """여행 여러 건의 대표 썸네일을 {travel_idx: image_url}로 일괄 조회 (목록 조회 N+1 회피).
 
-    여행별로 (day_no, sequence)상 이미지가 있는 첫 항목만 남긴다. 이미지가 하나도 없는
-    여행은 키 자체가 없다(호출부에서 .get()으로 None 처리).
+    여행별로 이미지가 있는 **첫 방문지**만 남긴다(cover_image 와 같은 규칙). 이미지가
+    하나도 없는 여행은 키 자체가 없다(호출부에서 .get()으로 None 처리).
     """
     if not travel_idxs:
         return {}
@@ -188,7 +198,7 @@ def cover_images(db: Session, travel_idxs: list[int]) -> dict[int, str]:
             Schedule.deleted_at.is_(None),
             Schedule.image_url.isnot(None),
         )
-        .order_by(Schedule.travel_idx, Schedule.day_no, Schedule.sequence)
+        .order_by(Schedule.travel_idx, _COVER_PRIORITY, Schedule.day_no, Schedule.sequence)
         .all()
     )
     covers: dict[int, str] = {}
