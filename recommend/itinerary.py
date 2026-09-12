@@ -79,15 +79,30 @@ def build_itinerary(route, course, go_date: str) -> Itinerary:
     # 카드 대표(제목·커버)는 목적지 코스 관광지에서만 뽑는다 — 경유역 관광지도 이제 선호도 점수가
     # 있어(recommend_service), 지나가는 경유지가 대표를 가로채 목적지 아닌 곳이 카드 얼굴이 되는 걸 막는다.
     faces = [p for day in course.days for p in day.places] if course is not None else visits
-    with_img = [v for v in faces if v.image_url]
-    headline = max(with_img or faces, key=lambda v: v.preference_score) if faces else None
+    # **식당은 카드 얼굴에서 뺀다.** 미식 테마를 고르면 음식점의 preference_score 가 제일
+    # 높게 나와서, 점수만으로 뽑으면 세 플랜이 전부 식당 간판·음식 그릇 사진이 된다 —
+    # 플랜을 구분하려고 대표를 뽑는데 오히려 다 같아 보인다("스완양분식 코스",
+    # "영동밀면&돼지국밥 코스"가 그렇게 나왔다). 관광지에서 뽑으면 플랜마다 갈린다.
+    # 식당뿐인 코스(미식만 고른 경우)는 폴백으로 원래대로 둔다 — 얼굴이 없는 것보다 낫다.
+    attractions = [p for p in faces if p.content_type_id != scheduling._MEAL_CT]
+    pool = attractions or faces
+    with_img = [v for v in pool if v.image_url]
+    headline = max(with_img or pool, key=lambda v: v.preference_score) if pool else None
     title = f"{headline.name} 코스" if headline is not None else None
     cover_image_url = headline.image_url if headline is not None else None
+
+    # **기차를 한 편도 못 찾았으면 '직통'이라고 하지 않는다.** route_service 는 결과를 꼭
+    # 하나 돌려주려고 열차가 비어도 후보를 만든다("무조건 리턴 보장의 바닥") — 그걸 그대로
+    # 실어 보내면 이동시간 0분짜리 '직통'이 내려가 앱이 기차 없는 코스를 직통이라 부른다.
+    # 사용자가 실제로 받는 건 기차 없는 여정이므로 '현지'가 사실에 맞다. 왜 없는지는
+    # route.note 가 이미 담고 있다(명절 기간엔 일반 시간표 조회가 비는 일이 있다).
+    has_train = any(s.kind == "train" for s in segs)
+    route_type = (route.route_type if has_train else "현지") if route is not None else "현지"
 
     return Itinerary(
         title=title,
         label=route.path if route is not None else "현지 여행",
-        route_type=route.route_type if route is not None else "현지",
+        route_type=route_type,
         via_station_idx=route.via_station_idx if route is not None else None,
         main_themes=main_themes,
         cover_image_url=cover_image_url,
@@ -216,6 +231,27 @@ def _selfcheck() -> None:
     assert it4.main_themes == [Theme.NATURE, Theme.OCEAN], it4.main_themes  # NATURE 2회 > OCEAN 1회
     assert it4.cover_image_url == "b.jpg", it4.cover_image_url            # 선호도 0.9 > 0.5
     assert it4.title == "p2 코스", it4.title                              # 대표 명소(p2)=커버와 동일 장소
+
+    # 식당은 점수가 제일 높아도 카드 얼굴이 되지 않는다. 미식 테마를 고르면 음식점 점수가
+    # 최상위로 올라와, 이걸 막지 않으면 플랜 A·B·C 가 전부 식당 사진으로 덮인다.
+    def meal(idx, score, img):
+        p = vp(idx, [Theme.FOOD], score, img)
+        p.content_type_id = scheduling._MEAL_CT
+        return p
+    mixed = Course(label="A", origin_station_idx=1, total_preference_score=1.4,
+                   is_round_trip_closed=False, days=[DayPlan(day_no=1, date="20260710", lodging=None,
+                   places=[vp(3, [Theme.OCEAN], 0.4, "sea.jpg"), meal(4, 0.95, "bap.jpg")])])
+    it5 = build_itinerary(None, mixed, "20260710")
+    assert it5.title == "p3 코스", it5.title                  # 점수 낮아도 관광지가 얼굴
+    assert it5.cover_image_url == "sea.jpg", it5.cover_image_url
+
+    # 식당뿐인 코스는 폴백 — 얼굴이 없는 것보다 식당이라도 있는 편이 낫다.
+    only = Course(label="B", origin_station_idx=1, total_preference_score=1.0,
+                  is_round_trip_closed=False, days=[DayPlan(day_no=1, date="20260710", lodging=None,
+                  places=[meal(5, 0.7, "m.jpg")])])
+    it6 = build_itinerary(None, only, "20260710")
+    assert it6.title == "p5 코스" and it6.cover_image_url == "m.jpg", (it6.title, it6.cover_image_url)
+
     print("itinerary selfcheck OK")
 
 
