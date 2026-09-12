@@ -53,6 +53,11 @@ def refresh(ymd: str | None = None, days: int = _REFRESH_DAYS) -> int:
     나온 날의 것만 취한다.
 
     빈 응답(그 날짜 미제공 등)이면 기존 데이터를 지우지 않고 0을 반환한다(good data 보존).
+    **하루라도 조회에 실패하면 적재 자체를 포기한다** — 적재가 전량 교체(하드 삭제)라,
+    실패한 날에만 다니던 열차가 그대로 사라지기 때문이다. 하루치만 받던 때 열차가 빠지던
+    바로 그 증상을 이번엔 조용히 되살리는 꼴이라, 반쯤 채운 결과로 덮느니 지난 스냅샷을
+    그대로 두고 다음 주기(24h)에 다시 받는다. 보존기간 밖 날짜는 예외가 아니라 빈 응답이라
+    이 조건에 걸리지 않는다(그래서 영영 갱신이 막히지는 않는다).
     """
     _ensure_table()
     base = datetime.strptime(ymd, "%Y%m%d") if ymd else datetime.now(_KST) - timedelta(days=1)
@@ -62,9 +67,12 @@ def refresh(ymd: str | None = None, days: int = _REFRESH_DAYS) -> int:
         target = (base - timedelta(days=offset)).strftime("%Y%m%d")
         try:
             day_records = train_stops.fetch_day(target)
-        except Exception as e:  # 하루가 실패해도 나머지 날짜로 계속 간다
-            logger.warning("train_stop: %s 조회 실패(%s) — 건너뜀", target, type(e).__name__)
-            continue
+        except Exception as e:
+            logger.warning(
+                "train_stop: %s 조회 실패(%s) — 기존 데이터 유지, 갱신 건너뜀",
+                target, type(e).__name__,
+            )
+            return 0
         fresh = {r["trn_no"] for r in day_records} - collected
         if not fresh:
             continue
