@@ -91,10 +91,18 @@ def build_itinerary(route, course, go_date: str) -> Itinerary:
     title = f"{headline.name} 코스" if headline is not None else None
     cover_image_url = headline.image_url if headline is not None else None
 
+    # **기차를 한 편도 못 찾았으면 '직통'이라고 하지 않는다.** route_service 는 결과를 꼭
+    # 하나 돌려주려고 열차가 비어도 후보를 만든다("무조건 리턴 보장의 바닥") — 그걸 그대로
+    # 실어 보내면 이동시간 0분짜리 '직통'이 내려가 앱이 기차 없는 코스를 직통이라 부른다.
+    # 사용자가 실제로 받는 건 기차 없는 여정이므로 '현지'가 사실에 맞다. 왜 없는지는
+    # route.note 가 이미 담고 있다(명절 기간엔 일반 시간표 조회가 비는 일이 있다).
+    has_train = any(s.kind == "train" for s in segs)
+    route_type = (route.route_type if has_train else "현지") if route is not None else "현지"
+
     return Itinerary(
         title=title,
         label=route.path if route is not None else "현지 여행",
-        route_type=route.route_type if route is not None else "현지",
+        route_type=route_type,
         via_station_idx=route.via_station_idx if route is not None else None,
         main_themes=main_themes,
         cover_image_url=cover_image_url,
