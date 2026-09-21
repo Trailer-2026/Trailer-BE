@@ -137,7 +137,10 @@ def split_travel_data(data: dict, max_chunks: int = MAX_CHUNKS) -> list[dict]:
                 chunk_media.append({"trackIndex": local, "name": media.get("name", ""), "photos": []})
             elif index != start or chunk_index == 0:
                 chunk_media.append({**media, "trackIndex": local})
-        chunks.append({"trackPoints": chunk_track, "mediaPoints": chunk_media})
+        chunk = {"trackPoints": chunk_track, "mediaPoints": chunk_media}
+        if data.get("photoLabels"):  # 사진별 장소명(경로 → 이름) — 조각마다 통째로 넘겨도 된다
+            chunk["photoLabels"] = data["photoLabels"]
+        chunks.append(chunk)
     return chunks
 
 

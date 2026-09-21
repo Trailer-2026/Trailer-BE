@@ -100,7 +100,7 @@ def main() -> None:
 
     # 1) 장수 상한 — 초과분은 **읽기 전에** 걸러야 하므로 스트림을 한 번도 안 읽는다.
     over = _photos(*[_jpeg(*seoul)] * (video_service.MAX_RENDER_PHOTOS + 1))
-    _rejects(over, "장까지 올릴 수 있습니다")
+    _rejects(over, "개까지 올릴 수 있습니다")
     assert all(not s.read_sizes for _, s in over), "상한 초과인데 사진을 읽었다"
 
     # 2) 장당 크기 상한 — 상한+1 바이트까지만 읽고 끊는다(초과분을 메모리에 안 올린다).
@@ -109,8 +109,8 @@ def main() -> None:
     assert huge[1][1].read_sizes == [video_service.MAX_RENDER_PHOTO_BYTES + 1], huge[1][1].read_sizes
 
     # 3) 2장 미만 / GPS 있는 사진 2장 미만
-    _rejects(_photos(_jpeg(*seoul)), "2장 이상 필요합니다")
-    _rejects(_photos(_jpeg(*seoul), _jpeg()), "GPS 정보가 있는 사진이 2장")
+    _rejects(_photos(_jpeg(*seoul)), "2개 이상 필요합니다")
+    _rejects(_photos(_jpeg(*seoul), _jpeg()), "GPS 정보가 있는 사진·영상이 2개")
 
     # 4) 사진이 모두 같은 장소면 이동 경로가 안 나온다(이 실패에서도 디렉터리는 안 남는다).
     _rejects(_photos(_jpeg(*seoul), _jpeg(*seoul)), "같은 장소라")

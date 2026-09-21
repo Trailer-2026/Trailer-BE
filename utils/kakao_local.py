@@ -73,6 +73,60 @@ def region_of(latitude: float, longitude: float, timeout: int = 5) -> str | None
     return None
 
 
+# 관광명소 카테고리 그룹 코드.
+_ATTRACTION_GROUP = "AT4"
+# 관광명소(AT4)에 섞여 오지만 '여기가 어디'라는 이름으론 못 쓰는 경로·거리형 분류(마지막 단계).
+# 코스 이름("서울도보관광코스 경복궁~효자동코스")이나 골목 상권이 진짜 명소보다 가까워 잡힌다.
+# 끝이 '길'인 분류(갈맷길·둘레길·트레킹숲길)도 같은 부류라 따로 뺀다.
+_ROUTE_CATEGORIES = {"도보여행", "테마거리", "먹자골목"}
+_ADMIN_SUFFIXES = ("시", "군", "구", "도", "읍", "면", "동")
+
+
+def _landmark_name(place_name: str) -> str:
+    """'큰 명소 + 안의 시설' 이름에서 큰 명소만 남긴다: "경복궁 연생전" → "경복궁".
+
+    카카오는 궁 안 전각·마을 안 전망대를 "부모 자식" 이름으로 따로 등록해 두는데, 좌표가
+    부모 한가운데여도 자식이 더 가까워 먼저 잡힌다. 앞 단어가 3글자 미만이거나 행정구역
+    ("경주 황리단길"의 경주)이면 부모가 아니라 지역 접두어라 그대로 둔다.
+    """
+    name = place_name.strip()
+    head = name.split(" ")[0]
+    if head == name or len(head) < 3 or head.endswith(_ADMIN_SUFFIXES):
+        return name
+    return head
+
+
+def place_name_of(
+    latitude: float, longitude: float, radius_m: int = 300, timeout: int = 5,
+) -> str | None:
+    """좌표를 사람이 알아볼 장소명으로 바꾼다. 못 찾으면 None.
+
+    radius_m 안에서 가장 가까운 관광명소를 먼저 보되 경로·거리형(_ROUTE_CATEGORIES)은
+    건너뛰고, 명소 안 시설 이름은 큰 명소로 올린다(_landmark_name). 없으면 동네 이름
+    ("해운대구 우동")으로 내려간다. 반경을 넓히면 옆 동네 명소가 붙어 오히려 틀리므로 좁게 둔다.
+    ponytail: 가장 가까운 것 1개라 더 작은 명소가 몇 m 가까우면 그게 이긴다(해운대 좌표에서
+    해수욕장 대신 온천족욕탕). 절은 AT4 가 아니라 못 찾는다(불국사). 정확도가 문제면 앱에서
+    이름을 받는 게 답이다.
+    HTTP/파싱 실패는 예외를 그대로 올린다(호출부에서 판단).
+    """
+    spots = _documents(_CATEGORY_URL, {
+        "category_group_code": _ATTRACTION_GROUP, "x": longitude, "y": latitude,
+        "radius": radius_m, "sort": "distance", "size": _SEARCH_SIZE,
+    }, timeout)
+    for spot in spots:
+        leaf = (spot.get("category_name") or "").split(" > ")[-1].strip()
+        name = (spot.get("place_name") or "").strip()
+        if name and leaf not in _ROUTE_CATEGORIES and not leaf.endswith("길"):
+            return _landmark_name(name)
+    for doc in _documents(_COORD2REGION_URL, {"x": longitude, "y": latitude}, timeout):
+        # 구가 있는 시는 2depth 가 "전주시 완산구"라 마지막 단어(구)만 쓴다 → "완산구 풍남동3가".
+        district = ((doc.get("region_2depth_name") or "").split() or [""])[-1]
+        town = (doc.get("region_3depth_name") or "").strip()
+        if town:  # 동이 비면(바다 등) 쓸 만한 이름이 아니다
+            return f"{district} {town}".strip()
+    return None
+
+
 # ── 최근접 역 ────────────────────────────────────────────────────────────────
 
 
