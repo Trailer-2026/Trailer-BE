@@ -56,6 +56,17 @@ def _title_form(extra: str = ""):
     )
 
 
+# photos-only·photos-ordered 공통 영상 클립 규칙 (description 뒤에 붙인다).
+_CLIP_RULES = (
+    "**영상도 photos 에 섞어 보낼 수 있습니다** (mp4/mov/m4v/webm). "
+    "**요청 전체(사진·영상 합계)가 100MB 이하**여야 하며 넘으면 서버 앞단에서 413 으로 "
+    "끊깁니다 — 폰 원본 영상은 금방 넘으니 기기에서 앞 5초만 잘라 보내세요. "
+    "영상은 앞 5초만, 소리 없이 쓰이며(BGM 은 끊기지 않음) 영상마다 쓰이는 길이의 합이 "
+    "15초를 넘으면 400입니다. 사진·영상은 합쳐서 30개까지이고, 읽을 수 없는 영상은 400입니다. "
+    "위치는 영상 파일의 GPS 태그(안드로이드·아이폰)로 잡고, "
+)
+
+
 def _photo_streams(photos: list[UploadFile]) -> list[tuple[str, BinaryIO]]:
     """업로드 사진을 (파일명, 스트림)으로 넘긴다 — **여기서 read() 하지 않는다**.
 
@@ -136,7 +147,10 @@ def download_reels_video(
                 "나오면 그 위치로 이동합니다. start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 "
                 "삼아 첫 사진 지점으로 이동하며 시작합니다. 조건을 못 채우면 400을 반환합니다. "
                 "영상 앞뒤에는 TRAILER 인트로·아웃트로가 항상 붙습니다. JWT 인증이 필요하며 "
-                "토큰이 없거나 유효하지 않으면 401을 반환합니다.",
+                "토큰이 없거나 유효하지 않으면 401을 반환합니다.\n\n"
+                + _CLIP_RULES
+                + "GPS 없는 영상은 **촬영 시각이 가장 가까운 사진의 지점**에서 그 사진 뒤에 "
+                "재생되고, 촬영 시각도 없으면 빠집니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
 def render_video_photos_only(
@@ -146,7 +160,7 @@ def render_video_photos_only(
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
     title: str = _title_form(),
-    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장·최대 30장, 장당 10MB 이하)"),
+    photos: list[UploadFile] = File(..., description="여행 사진·영상들 (GPS 필요, 합쳐서 최소 2개·최대 30개, 사진은 장당 10MB 이하, 요청 전체 100MB 이하)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -183,7 +197,10 @@ def render_video_photos_only(
                 "(실패 시 릴스 행 삭제). title 을 주면 그 값이 릴스 제목이 되고, 비우면 "
                 "제목 없는(null) 릴스가 됩니다. "
                 "JWT 인증이 필요하며 토큰이 없거나 유효하지 않으면 "
-                "401을 반환합니다.",
+                "401을 반환합니다.\n\n"
+                + _CLIP_RULES
+                + "GPS 없는 영상은 **바로 앞 파일의 지점**에서 재생됩니다(맨 앞에 놓인 영상은 "
+                "그 뒤 첫 사진 지점에서 사진보다 먼저 재생).",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
 def render_video_photos_ordered(
@@ -193,7 +210,7 @@ def render_video_photos_ordered(
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
     title: str = _title_form(),
-    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장·최대 30장, 장당 10MB 이하) — 보낸 순서가 곧 영상 순서"),
+    photos: list[UploadFile] = File(..., description="여행 사진·영상들 (합쳐서 최소 2개·최대 30개, 사진은 장당 10MB 이하, 요청 전체 100MB 이하) — 보낸 순서가 곧 영상 순서"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

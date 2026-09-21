@@ -66,6 +66,7 @@ from schemas.video_schema import (
     PromoRenderRequest,
 )
 from utils import gcs, kakao_local, tour_place
+from utils.timezone import KST
 
 logger = logging.getLogger(__name__)
 
@@ -547,8 +548,8 @@ EDIT_OBJECT_PREFIX = "reels/edited"
 THUMBNAIL_OBJECT_PREFIX = "reels/thumb"
 # 삽입 사진이 화면에 머무는 시간(초). 렌더러가 영상 안에서 사진 한 장을 보여주는
 # 시간과 같은 값이라 삽입 클립만 튀지 않는다 — render_video.QUALITY_FAST_CONFIG 의
-# photo_fade_in(0.4) + photo_hold(1.6) + photo_fade_out(0.4). 그쪽이 바뀌면 같이 고칠 것.
-INSERT_PHOTO_SECONDS = 2.4
+# photo_fade_in(0.4) + photo_hold(1.2) + photo_fade_out(0.4). 그쪽이 바뀌면 같이 고칠 것.
+INSERT_PHOTO_SECONDS = 2.0
 # 렌더러와 같은 계열의 인코딩 (정확한 컷을 위해 재인코딩 필수 — 스트림 카피는
 # 키프레임 단위로만 잘려 구간이 밀린다).
 _EDIT_VIDEO_ARGS = [
@@ -1242,6 +1243,127 @@ def _extract_photo_meta(content: bytes) -> dict[str, object] | None:
         return None
 
 
+# 사진과 섞어 올리는 짧은 영상(클립). 렌더러의 render_video.CLIP_EXTENSIONS·CLIP_MAX_SECONDS
+# 와 같은 값이어야 한다 — 그 모듈은 최상위에서 playwright 를 임포트해 서버가 가져다 쓸 수 없다.
+RENDER_CLIP_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm"}
+RENDER_CLIP_SECONDS = 5.0
+# 영상 한 편에 들어가는 클립 길이 합(클립마다 쓰이는 앞 5초 기준). 사진·클립 시간은 60초 상한에서
+# 줄지 않고 지도 이동만 줄어드니, 클립이 많으면 이동이 순간이동처럼 된다.
+MAX_RENDER_CLIP_TOTAL_SECONDS = 15.0
+# ISO 6709 "+37.5547+126.9706+012.345/" — 안드로이드 location·아이폰 quicktime 태그 공통 형식.
+_ISO6709_RE = re.compile(r"([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)")
+
+
+def _extract_clip_meta(path: Path, filename: str) -> dict[str, object]:
+    """영상 태그에서 GPS·촬영 시각·쓸 길이를 뽑는다. 영상으로 못 읽으면 400.
+
+    반환: {"latitude", "longitude" (GPS 없으면 둘 다 None), "taken", "seconds"}
+    taken 은 사진 EXIF 와 같은 축(한국 현지 시각, 시간대 없음)으로 맞춘다 — 안드로이드
+    creation_time 은 UTC 라 그대로 두면 촬영순 정렬에서 9시간 어긋난다.
+    seconds 는 렌더러가 실제로 쓰는 길이 = min(영상 길이, RENDER_CLIP_SECONDS).
+    """
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:  # 서버 설정 문제 — 아래 '못 읽는 파일' 400 에 섞이면 안 된다
+        raise ExternalServiceException("ffprobe를 찾을 수 없습니다 (PATH 확인).")
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error",
+             "-show_entries", "format=duration:format_tags:stream=codec_type",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+        )
+        info = json.loads(result.stdout or "{}")
+        duration = float(info.get("format", {}).get("duration") or 0)
+    except (ValueError, subprocess.TimeoutExpired):
+        duration, info = 0.0, {}
+    has_video = any(s.get("codec_type") == "video" for s in info.get("streams", []))
+    if duration <= 0 or not has_video:
+        raise BadRequestException(f"영상을 읽을 수 없습니다: {filename or '(파일명 없음)'}")
+
+    tags = info.get("format", {}).get("tags") or {}
+    latitude = longitude = None
+    match = _ISO6709_RE.match(
+        tags.get("com.apple.quicktime.location.ISO6709") or tags.get("location") or ""
+    )
+    if match:
+        lat, lon = float(match[1]), float(match[2])
+        if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat, lon) != (0.0, 0.0):
+            latitude, longitude = round(lat, 7), round(lon, 7)
+
+    taken = None
+    raw = tags.get("com.apple.quicktime.creationdate") or tags.get("creation_time")
+    if raw:
+        try:
+            parsed = datetime.fromisoformat(raw)
+            taken = parsed.astimezone(KST).replace(tzinfo=None) if parsed.tzinfo else parsed
+        except ValueError:
+            taken = None
+    return {
+        "latitude": latitude, "longitude": longitude, "taken": taken,
+        "seconds": min(duration, RENDER_CLIP_SECONDS),
+    }
+
+
+def _save_render_clip(
+    job_dir: Path, stem: str, filename: str, stream: BinaryIO
+) -> tuple[str, dict[str, object]]:
+    """클립을 job 디렉터리에 저장하고 (렌더러 기준 상대 경로, 메타)를 반환한다.
+
+    원본(최대 100MB)을 그대로 두지 않고 **앞 5초만, 소리 없이** 스트림 카피로 잘라 둔다 —
+    렌더 입력은 통째로 Modal 에 실려 가므로 안 쓰는 뒷부분까지 보낼 이유가 없다.
+    재인코딩이 아니라 몇 초 안 걸린다. 메타는 잘라내기 전 원본에서 읽는다.
+    """
+    suffix = Path(filename).suffix.lower()
+    source = job_dir / f"{stem}_src{suffix}"
+    _save_upload(stream, source)
+    meta = _extract_clip_meta(source, filename)
+    target = job_dir / f"{stem}{suffix}"
+    _run_ffmpeg([
+        "-i", str(source), "-t", f"{RENDER_CLIP_SECONDS:.3f}",
+        "-map", "0:v:0", "-c", "copy", str(target),
+    ])
+    source.unlink(missing_ok=True)
+    return target.relative_to(VIDEO_MAKER_DIR).as_posix(), meta
+
+
+def _group_render_items(
+    items: list[tuple[str, dict]], sort_by_time: bool
+) -> list[tuple[list[str], dict]]:
+    """GPS 있는 항목마다 (보여줄 파일 목록, meta)를 만들고, GPS 없는 영상은 이웃 지점에 붙인다.
+
+    GPS 없는 사진은 items 에 애초에 없다(기존 규칙대로 제외). 영상은 사용자가 골라 넣은
+    것이라 말없이 빼지 않고 붙일 곳을 찾는다:
+      - 순서 지정: 바로 앞 항목의 지점. 첫 GPS 항목보다 앞선 영상은 그 항목 앞에 붙는다.
+      - 촬영순: 촬영 시각이 가장 가까운 항목의 지점. 시각이 없으면 붙일 곳이 없어 뺀다.
+    """
+    if not sort_by_time:
+        stops: list[tuple[list[str], dict]] = []
+        pending: list[str] = []
+        for rel, meta in items:
+            if meta["latitude"] is not None:
+                stops.append(([*pending, rel], meta))
+                pending = []
+            elif stops:
+                stops[-1][0].append(rel)
+            else:
+                pending.append(rel)
+        return stops
+
+    # 촬영 시각 순 정렬 — 시각 없는 항목은 업로드 순서를 유지한 채 뒤로 보낸다.
+    stops = [([rel], meta) for rel, meta in items if meta["latitude"] is not None]
+    stops.sort(key=lambda stop: (stop[1]["taken"] is None, stop[1]["taken"] or datetime.min))
+    timed = [stop for stop in stops if stop[1]["taken"] is not None]
+    loose = sorted(
+        (item for item in items if item[1]["latitude"] is None and item[1]["taken"] is not None),
+        key=lambda item: item[1]["taken"],
+    )
+    for rel, meta in loose:
+        if timed:
+            # ponytail: 붙는 자리는 항상 그 지점 사진들 뒤다 — 사진보다 먼저 찍은 영상도 뒤에 나온다
+            min(timed, key=lambda stop: abs(stop[1]["taken"] - meta["taken"]))[0].append(rel)
+    return stops
+
+
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     radius = 6371.0
     d_lat = math.radians(lat2 - lat1)
@@ -1369,18 +1491,29 @@ def start_render_photos_only(
     # 장수 검증은 **읽기 전에** 끝낸다 — 초과분의 바이트를 아예 만지지 않으려고.
     if len(photos) > MAX_RENDER_PHOTOS:
         raise BadRequestException(
-            f"사진은 한 번에 {MAX_RENDER_PHOTOS}장까지 올릴 수 있습니다."
+            f"사진·영상은 합쳐서 한 번에 {MAX_RENDER_PHOTOS}개까지 올릴 수 있습니다."
         )
     if len(photos) < 2:
-        raise BadRequestException("사진이 2장 이상 필요합니다.")
+        raise BadRequestException("사진·영상이 2개 이상 필요합니다.")
 
     job_dir = _new_job_dir()
     try:
         # 한 장씩 읽어 바로 디스크로 넘긴다. 다음 회차에서 content 가 새로 묶이며 직전 장은
-        # 풀리므로 동시에 드는 건 1장뿐이다. 파일명의 순번은 업로드 순서(고유 이름을 만드는
-        # 용도)일 뿐, 영상의 이동 순서는 아래 tagged 정렬이 정한다.
-        tagged: list[tuple[str, dict]] = []
+        # 풀리므로 동시에 드는 건 1장뿐이다(영상은 청크로 흘려 저장한다). 파일명의 순번은
+        # 업로드 순서(고유 이름을 만드는 용도)일 뿐, 영상의 이동 순서는 _group_render_items 가 정한다.
+        items: list[tuple[str, dict]] = []
+        clip_seconds = 0.0
         for order, (filename, stream) in enumerate(photos):
+            if Path(filename or "").suffix.lower() in RENDER_CLIP_EXTENSIONS:
+                rel, meta = _save_render_clip(job_dir, f"clip_{order}", filename, stream)
+                clip_seconds += float(meta["seconds"])
+                if clip_seconds > MAX_RENDER_CLIP_TOTAL_SECONDS + 0.05:
+                    raise BadRequestException(
+                        f"영상은 합쳐서 {MAX_RENDER_CLIP_TOTAL_SECONDS:.0f}초까지 넣을 수 있습니다 "
+                        f"(영상마다 앞 {RENDER_CLIP_SECONDS:.0f}초만 쓰입니다)."
+                    )
+                items.append((rel, meta))
+                continue
             # 상한+1바이트까지만 읽어 초과분을 메모리에 올리지 않는다(대표 사진과 같은 방식).
             content = stream.read(MAX_RENDER_PHOTO_BYTES + 1)
             if len(content) > MAX_RENDER_PHOTO_BYTES:
@@ -1390,28 +1523,25 @@ def start_render_photos_only(
             meta = _extract_photo_meta(content)
             if meta is None:
                 continue  # GPS 없는 사진은 지점을 만들 수 없다 — 저장도 하지 않는다
-            tagged.append((_save_render_image(job_dir, f"photo_{order}", filename, content), meta))
-        if len(tagged) < 2:
-            raise BadRequestException(
-                "GPS 정보가 있는 사진이 2장 이상 필요합니다. "
-                "(메신저로 전송된 사진은 GPS가 제거되니 원본을 사용하세요)"
-            )
+            items.append((_save_render_image(job_dir, f"photo_{order}", filename, content), meta))
 
-        # 촬영 시각 순 정렬 — 시각 없는 사진은 업로드 순서를 유지한 채 뒤로 보낸다.
-        # (순서 지정 모드에서는 업로드 순서가 곧 사용자 지정 순서라 정렬하지 않는다.)
-        if sort_by_time:
-            tagged.sort(key=lambda item: (item[1]["taken"] is None, item[1]["taken"] or datetime.min))
+        stops = _group_render_items(items, sort_by_time)
+        if len(stops) < 2:
+            raise BadRequestException(
+                "GPS 정보가 있는 사진·영상이 2개 이상 필요합니다. "
+                "(메신저로 전송된 사진·영상은 GPS가 제거되니 원본을 사용하세요)"
+            )
 
         track_points: list[dict[str, object]] = []
         media_points: list[dict[str, object]] = []
-        for rel, meta in tagged:
+        for rels, meta in stops:
             # 순서 지정 모드에서는 촬영 시각이 이동 순서와 어긋날 수 있어 넣지 않는다.
             timestamp = (
                 meta["taken"].isoformat() if sort_by_time and meta["taken"] is not None else None
             )
             _append_stop(
                 track_points, media_points,
-                meta["latitude"], meta["longitude"], [rel], timestamp=timestamp,
+                meta["latitude"], meta["longitude"], rels, timestamp=timestamp,
             )
 
         # 지정된 출발지를 맨 앞에 끼워 넣는다 (첫 사진과 사실상 같은 장소면 생략).
@@ -1446,7 +1576,7 @@ def start_render_photos_only(
 # 여행(travel) 일정으로 렌더링 — 스케줄 좌표·첨부 이미지로 경로를 구성한다.
 # --------------------------------------------------------------------------- #
 # 여행 렌더 사진 상한. 관광 이미지가 빈 지점을 다 채우면 지점 수만큼 사진이 늘어 60초 상한
-# (이동 구간만 압축하고 사진 시간은 안 줄인다)을 넘기므로 여기서 자른다. 15장 = 사진 36초.
+# (이동 구간만 압축하고 사진 시간은 안 줄인다)을 넘기므로 여기서 자른다. 15장 = 사진 30초.
 # photos-only 렌더에는 안 건다 — 그쪽은 사용자가 장수를 직접 고른 것이라 말없이 빼면 안 된다.
 PHOTOS_PER_STOP = 3
 MAX_TRAVEL_RENDER_PHOTOS = 15
@@ -1615,8 +1745,8 @@ def start_render_travel(
 # 홍보 영상 — 지자체가 코스(지점 목록)만 등록하면 30초 영상을 만든다.
 # --------------------------------------------------------------------------- #
 # 본편 상한(초). 인트로·아웃트로(각 ~3.6초)는 이 밖에 붙어 완성본은 37초쯤 된다.
-# 상한은 이동 구간만 압축하므로 지점 수가 실제 길이를 정한다 — 지점당 사진 1장 3.2초 +
-# 이동 최소 1.2초라 6지점이면 25초쯤. 지점 수 상한(6)은 스키마(PromoRenderRequest)가 건다.
+# 상한은 이동 구간만 압축하므로 지점 수가 실제 길이를 정한다 — 지점당 사진 1장 2.8초 +
+# 이동 최소 1.2초라 6지점이면 24초쯤. 지점 수 상한(6)은 스키마(PromoRenderRequest)가 건다.
 PROMO_VIDEO_SECONDS = 30.0
 
 

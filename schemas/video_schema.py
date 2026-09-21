@@ -224,6 +224,6 @@ class PromoRenderRequest(BaseModel):
     bgm: str = Field("", description="BGM 파일명 또는 곡명 (GET /api/videos/bgm, 빈 값이면 무음)")
     points: list[PromoPoint] = Field(
         ..., min_length=2, max_length=6,
-        description="코스 지점 순서대로 2~6개. 지점당 사진 1장이 3.2초를 차지해 6개를 넘기면 30초 안에 들어오지 않는다",
+        description="코스 지점 순서대로 2~6개. 지점당 사진 1장이 2.8초를 차지한다. 6개면 이동까지 합쳐 24초쯤이라 30초 안에 여유 있게 들어간다",
     )
 
