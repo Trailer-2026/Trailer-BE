@@ -588,7 +588,8 @@ function labelForTrackIndex(trackIndex, fallbackName = "") {
   if (mediaPoint && mediaPoint.name) {
     return mediaPoint.name;
   }
-  return fallbackName || `Track ${trackIndex}`;
+  // 이름 없는 지점은 빈 라벨(=표시 안 함). "Track 3" 같은 자리표를 영상에 띄우지 않는다.
+  return fallbackName || "";
 }
 
 function mediaMarkerFeatures(activeTrackIndex = null) {

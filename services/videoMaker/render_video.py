@@ -180,6 +180,13 @@ class MediaPoint:
     track_index: int
     name: str
     photos: tuple[Path, ...]
+    # photos 와 같은 순서의 사진별 장소명. None 이면 지점 이름(name)을 쓴다. 1km 안의 일정이
+    # 한 지점으로 묶여도 사진마다 자기 장소 이름이 떠야 해서 따로 둔다(travel_data 의 photoLabels).
+    photo_labels: tuple[str | None, ...] = ()
+
+    def label_of(self, index: int) -> str:
+        label = self.photo_labels[index] if index < len(self.photo_labels) else None
+        return self.name if label is None else label
 
 
 @dataclass(frozen=True)
@@ -657,6 +664,10 @@ def validate_travel_data(
     if not isinstance(raw_media_points, list):
         raise RuntimeError("mediaPoints must be an array when provided.")
 
+    # 사진별 장소명 {photos 에 적힌 경로: 이름}. 빈 문자열이면 그 사진은 라벨을 숨긴다.
+    raw_labels = raw_data.get("photoLabels")
+    labels_by_photo = raw_labels if isinstance(raw_labels, dict) else {}
+
     media_by_index: dict[int, MediaPoint] = {}
     for media_index, raw_media_point in enumerate(raw_media_points):
         if not isinstance(raw_media_point, dict):
@@ -676,10 +687,9 @@ def validate_travel_data(
             )
             continue
 
-        raw_name = raw_media_point.get("name")
-        name = str(raw_name).strip() if raw_name is not None else f"Track {track_index}"
-        if not name:
-            name = f"Track {track_index}"
+        # 이름이 없으면 빈 이름으로 둔다 — 지도 라벨·사진 위 장소명이 뜨지 않는다
+        # ("Track 3" 같은 자리표는 사용자에게 보일 이름이 아니다).
+        name = str(raw_media_point.get("name") or "").strip()
 
         raw_photos = raw_media_point.get("photos", [])
         if raw_photos is None:
@@ -692,6 +702,7 @@ def validate_travel_data(
             raw_photos = []
 
         valid_photos: list[Path] = []
+        valid_labels: list[str | None] = []
         for photo_index, raw_photo in enumerate(raw_photos):
             if not isinstance(raw_photo, str) or not raw_photo.strip():
                 print(
@@ -709,6 +720,8 @@ def validate_travel_data(
                 continue
 
             valid_photos.append(photo_path)
+            label = labels_by_photo.get(raw_photo)
+            valid_labels.append(str(label).strip() if label is not None else None)
 
         existing = media_by_index.get(track_index)
         if existing is not None:
@@ -717,10 +730,15 @@ def validate_travel_data(
                     "[warn] "
                     f"duplicate mediaPoint trackIndex={track_index}; keeping name '{existing.name}'"
                 )
+            # 합쳐지는 쪽 사진은 제 지점 이름을 달고 간다 — 앞 지점 이름으로 뜨면 안 된다.
             media_by_index[track_index] = MediaPoint(
                 track_index=track_index,
                 name=existing.name,
                 photos=existing.photos + tuple(valid_photos),
+                photo_labels=(
+                    tuple(existing.label_of(i) for i in range(len(existing.photos)))
+                    + tuple(name if label is None else label for label in valid_labels)
+                ),
             )
             continue
 
@@ -728,6 +746,7 @@ def validate_travel_data(
             track_index=track_index,
             name=name,
             photos=tuple(valid_photos),
+            photo_labels=tuple(valid_labels),
         )
 
     return track_points, sorted(media_by_index.values(), key=lambda point: point.track_index)
@@ -973,12 +992,12 @@ def build_timeline_segments(
                 )
             )
 
-        for photo_path in media_point.photos:
+        for photo_index, photo_path in enumerate(media_point.photos):
             segments.append(
                 TimelineSegment(
                     type="clip" if is_clip(photo_path) else "photo",
                     track_index=media_point.track_index,
-                    name=media_point.name,
+                    name=media_point.label_of(photo_index),
                     photo_path=photo_path,
                     duration=media_segment_seconds(photo_path, config),
                     fade_in_seconds=config.photo_fade_in_seconds,
@@ -1343,6 +1362,55 @@ def fit_photo_cover(photo: Image.Image, config: RenderConfig) -> Image.Image:
     return background
 
 
+@functools.lru_cache(maxsize=32)
+def place_label_overlay(name: str, width: int, height: int) -> Image.Image | None:
+    """사진·클립 상단에 얹을 장소명 띠(RGBA, 폭 width × 화면 위 16%). 이름이 없으면 None.
+
+    화면 전체가 아니라 띠 크기만 만든다 — 클립은 프레임마다 합성하는데, 1080x1920 전체를
+    합성하면 5초 클립 하나에 2초가 더 걸린다(띠만 하면 거의 안 늘어난다).
+
+    위쪽을 어둡게 깐 그라데이션 위에 흰 글씨를 가운데 정렬로 그린다 — 밝은 하늘 사진에서도
+    읽히게 하려는 것이다. 사진 쪽에 미리 합성해 두므로 사진이 페이드되면 이름도 같이 페이드된다.
+    같은 지점의 사진·클립이 연달아 나오므로 이름·크기별로 캐시한다.
+    """
+    name = name.strip()
+    # 영상 위 글씨는 굵어야 읽힌다 — 굵은 한글 폰트를 먼저 보고, 없으면 일반 폰트.
+    bold = (Path("C:/Windows/Fonts/malgunbd.ttf"),
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"))
+    font_path = next((path for path in bold if path.exists()), None) or find_font()
+    if not name or font_path is None:  # 기본 비트맵 폰트는 한글을 못 그린다 — 라벨을 생략
+        return None
+    band = round(height * 0.16)
+    overlay = Image.new("RGBA", (width, band), (0, 0, 0, 0))
+    shade = Image.linear_gradient("L").resize((1, band)).point(lambda v: round((255 - v) * 0.55))
+    overlay.paste((0, 0, 0, 255), (0, 0, width, band), shade.resize((width, band)))
+
+    size = round(width * 0.058)  # 1080px 폭에서 63px
+    font = load_font(size, font_path)
+    draw = ImageDraw.Draw(overlay)
+    # 긴 이름은 화면 폭의 88% 안에 들어올 때까지 줄인다(너무 작아지면 그대로 둔다).
+    while size > round(width * 0.03) and draw.textlength(name, font=font) > width * 0.88:
+        size -= 2
+        font = load_font(size, font_path)
+    center = (width / 2, band * 0.42)
+    shadow = max(2, size // 24)
+    draw.text((center[0] + shadow, center[1] + shadow), name, font=font,
+              fill=(0, 0, 0, 150), anchor="mm")
+    draw.text(center, name, font=font, fill=(255, 255, 255, 255), anchor="mm")
+    return overlay
+
+
+def with_place_label(image: Image.Image, name: str | None) -> Image.Image:
+    """image(RGB, 프레임 크기)에 장소명 띠를 얹은 새 이미지. 이름이 없으면 그대로."""
+    overlay = place_label_overlay(name or "", image.width, image.height)
+    if overlay is None:
+        return image
+    box = (0, 0, overlay.width, overlay.height)
+    labeled = image.copy()
+    labeled.paste(Image.alpha_composite(image.crop(box).convert("RGBA"), overlay).convert("RGB"), box)
+    return labeled
+
+
 def cleanup_temp() -> None:
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
     temp_dir = TEMP_DIR.resolve()
@@ -1457,6 +1525,7 @@ def emit_photo_segment_frames(
     fade_in_seconds: float,
     hold_seconds: float,
     fade_out_seconds: float,
+    name: str | None = None,
 ) -> int:
     if not photo_path.exists():
         print(f"[warn] photo file disappeared, skipped: {photo_path}")
@@ -1466,7 +1535,7 @@ def emit_photo_segment_frames(
     try:
         map_image = Image.open(io.BytesIO(stop_map_png)).convert("RGB")
         with Image.open(photo_path) as raw_photo:
-            photo = fit_photo_cover(raw_photo, config)
+            photo = with_place_label(fit_photo_cover(raw_photo, config), name)
     except Exception as error:
         print(f"[warn] failed to read photo, skipped: {photo_path}: {error}")
         return start_index
@@ -1526,6 +1595,7 @@ def emit_clip_segment_frames(
     clip_seconds: float,
     fade_in_seconds: float,
     fade_out_seconds: float,
+    name: str | None = None,
 ) -> int:
     """클립을 정차 지도 프레임 위로 페이드인 → 재생 → 지도로 페이드아웃한다.
 
@@ -1555,7 +1625,7 @@ def emit_clip_segment_frames(
             for i in range(total):
                 raw = decoder.stdout.read(frame_size)
                 if len(raw) == frame_size:
-                    frame = Image.frombytes("RGB", (width, height), raw)
+                    frame = with_place_label(Image.frombytes("RGB", (width, height), raw), name)
                 alpha = min(1.0, (i + 1) / fade_in, (total - 1 - i) / fade_out)
                 image = frame if alpha >= 1.0 else Image.blend(map_image, frame, alpha)
                 frame_bytes = image_to_frame_bytes(image, capture_mode, jpeg_quality)
@@ -2407,6 +2477,7 @@ def render_timeline_frames(
                         clip_seconds=segment.duration,
                         fade_in_seconds=segment.fade_in_seconds,
                         fade_out_seconds=segment.fade_out_seconds,
+                        name=segment.name,
                     )
                     last_map_png = last_stop_map_png
                     continue
@@ -2423,6 +2494,7 @@ def render_timeline_frames(
                     fade_in_seconds=segment.fade_in_seconds,
                     hold_seconds=segment.hold_seconds,
                     fade_out_seconds=segment.fade_out_seconds,
+                    name=segment.name,
                 )
                 last_map_png = last_stop_map_png
                 continue

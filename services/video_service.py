@@ -1403,7 +1403,8 @@ def _append_stop(
 ) -> None:
     """지점을 추가하거나, 직전 지점에서 PHOTO_CLUSTER_KM 미만이면 사진만 합친다.
 
-    새 지점의 name 을 생략하면 "지점 N"(추가 후 순번)으로 채운다.
+    새 지점의 name 을 생략하면 빈 이름으로 둔다 — _name_stops 가 좌표로 채우고, 거기서도
+    못 찾으면 영상에 라벨이 뜨지 않는다("지점 3" 같은 이름은 보여줄 가치가 없다).
     """
     if track_points and _haversine_km(
         float(track_points[-1]["latitude"]), float(track_points[-1]["longitude"]),
@@ -1419,9 +1420,34 @@ def _append_stop(
     track_points.append(point)
     media_points.append({
         "trackIndex": len(track_points) - 1,
-        "name": name if name is not None else f"지점 {len(track_points)}",
+        "name": (name or "").strip(),
         "photos": photos,
     })
+
+
+def _name_stops(
+    track_points: list[dict[str, object]], media_points: list[dict[str, object]]
+) -> None:
+    """이름이 빈 지점에 좌표로 찾은 장소명(관광명소 → 동네)을 채운다(제자리 수정).
+
+    지점마다 카카오 호출이 1~2회라 병렬로 부른다 — 운영 VM 이 미국이라 순차면 지점당
+    0.7초씩 쌓인다. 장소명은 부가 정보라 실패(키 미설정·네트워크)를 흡수하고 렌더를
+    막지 않는다. 못 찾은 지점은 빈 이름 그대로 두어 라벨을 숨긴다.
+    """
+    targets = [media for media in media_points if not media["name"]]
+
+    def lookup(media: dict[str, object]) -> str | None:
+        point = track_points[int(media["trackIndex"])]
+        try:
+            return kakao_local.place_name_of(float(point["latitude"]), float(point["longitude"]))
+        except Exception as error:
+            # 좌표는 사용자 위치라 로그에 남기지 않는다(_region_of_trip 과 같은 이유).
+            logger.warning("지점 장소명 조회 실패(무시): %s", type(error).__name__)
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for media, name in zip(targets, pool.map(lookup, targets)):
+            media["name"] = name or ""
 
 
 def _write_travel_data(
@@ -1429,12 +1455,18 @@ def _write_travel_data(
     track_points: list[dict[str, object]],
     media_points: list[dict[str, object]],
     bgm: str,
+    photo_labels: dict[str, str] | None = None,
 ) -> tuple[Path, Path | None]:
-    """travel_data.json 을 job 디렉터리에 쓰고 (경로, BGM 경로|None)을 반환한다."""
+    """travel_data.json 을 job 디렉터리에 쓰고 (경로, BGM 경로|None)을 반환한다.
+
+    photo_labels 는 사진별 장소명 {사진 경로: 이름} — 없는 사진은 지점 이름을 쓴다.
+    """
     travel_data: dict[str, object] = {
         "trackPoints": track_points,
         "mediaPoints": media_points,
     }
+    if photo_labels:
+        travel_data["photoLabels"] = photo_labels
     bgm_path: Path | None = None
     if bgm.strip():
         bgm_path = get_bgm_path(bgm.strip())
@@ -1543,6 +1575,7 @@ def start_render_photos_only(
                 track_points, media_points,
                 meta["latitude"], meta["longitude"], rels, timestamp=timestamp,
             )
+        _name_stops(track_points, media_points)
 
         # 지정된 출발지를 맨 앞에 끼워 넣는다 (첫 사진과 사실상 같은 장소면 생략).
         if start_latitude is not None and _haversine_km(
@@ -1580,6 +1613,35 @@ def start_render_photos_only(
 # photos-only 렌더에는 안 건다 — 그쪽은 사용자가 장수를 직접 고른 것이라 말없이 빼면 안 된다.
 PHOTOS_PER_STOP = 3
 MAX_TRAVEL_RENDER_PHOTOS = 15
+# 일정에 붙은 사진이 그 일정에서 이만큼 넘게 떨어져 찍혔으면 '코스 밖에서 찍은 사진'으로 보고
+# 일정 다음에 경유 지점을 따로 만든다. 지점을 묶는 PHOTO_CLUSTER_KM(1km)보다 넓은 건 큰 명소
+# (해운대 해변 1.5km)의 반대편 끝에서 찍은 사진까지 떼어내지 않으려는 것이다.
+OFF_COURSE_KM = 2.0
+
+
+def _split_off_course(schedule, images: list, downloaded: dict[str, bytes | None]):
+    """일정에 붙은 사진을 (그 자리에서 찍은 것, 코스 밖에서 찍은 것[(image, meta)])으로 가른다.
+
+    업로드 때 사진은 **거리 상한 없이** 가장 가까운 일정에 붙는다(travel_service._snap_to_schedule).
+    그래서 코스에 없는 바다에 다녀온 사진이 15km 떨어진 일정에 붙어 그 일정 이름을 달고 나온다.
+    사진 GPS 는 DB 에 없지만 렌더가 이미 받아 둔 바이트의 EXIF 에서 다시 읽을 수 있다.
+    GPS 없는 사진·좌표 없는 일정은 판단할 수 없어 그 자리 사진으로 둔다.
+    코스 밖 사진은 촬영 시각 순(없으면 업로드 순)이다.
+    """
+    near, far = [], []
+    for image in images:
+        content = downloaded.get(image.url)
+        meta = _extract_photo_meta(content) if content else None
+        if (
+            meta is not None and schedule.latitude is not None
+            and _haversine_km(float(meta["latitude"]), float(meta["longitude"]),
+                              float(schedule.latitude), float(schedule.longitude)) > OFF_COURSE_KM
+        ):
+            far.append((image, meta))
+        else:
+            near.append(image)
+    far.sort(key=lambda item: (item[1]["taken"] is None, item[1]["taken"] or datetime.min))
+    return near, far
 
 
 def _trim_photos(
@@ -1698,6 +1760,9 @@ def start_render_travel(
     track_points: list[dict[str, object]] = []
     media_points: list[dict[str, object]] = []
     saved_count = 0
+    # 사진별 장소명. 1km 안의 일정은 한 지점으로 묶여 지점 이름이 첫 일정 것 하나뿐이라,
+    # 그대로 두면 "경복궁 → 국립민속박물관" 코스에서 박물관 사진 위에 "경복궁"이 뜬다.
+    photo_labels: dict[str, str] = {}
 
     def _save(urls_: list[str]) -> list[str]:
         """다운로드한 바이트를 job 디렉터리에 떨궈 렌더가 읽을 경로 목록으로. 실패분은 건너뛴다."""
@@ -1712,26 +1777,47 @@ def start_render_travel(
         return saved
 
     for schedule in schedules:
-        photos = _save([img.url for img in by_schedule.get(schedule.schedule_idx, [])])
+        near, far = _split_off_course(
+            schedule, by_schedule.get(schedule.schedule_idx, []), downloaded
+        )
+        photos = _save([img.url for img in near])
         if not photos and fallback.get(schedule.schedule_idx):
             photos = _save([fallback[schedule.schedule_idx]])
         # 폴백 판정은 일정 단위다 — 직전 지점 1km 안이라 병합되면 관광 이미지가 이웃 일정의
         # 내 사진 뒤에 이어 붙는다. 코스에 있는 장소라 그대로 둔다.
+        title = (schedule.title or "").strip()
+        if title:  # 제목 없는 일정은 적지 않는다 → 지점 이름(좌표로 채운 이름)을 쓴다
+            photo_labels.update(dict.fromkeys(photos, title))
         _append_stop(
             track_points, media_points,
             schedule.latitude, schedule.longitude, photos, name=schedule.title,
         )
+        # 코스 밖에서 찍은 사진은 그 일정 바로 다음에 경유 지점으로 — 지도가 실제로 간 곳으로
+        # 날아가고, 이름은 비워 두어 _name_stops 가 사진 위치로 채운다(일정 이름을 달면 안 된다).
+        # ponytail: 위치는 '가장 가까운 일정 다음'이다. 촬영 시각으로 일정 사이 순서를 정하려면
+        # 일정마다 시각이 있어야 하는데 직접 만든 여행은 비어 있을 수 있다.
+        for image, meta in far:
+            _append_stop(
+                track_points, media_points,
+                float(meta["latitude"]), float(meta["longitude"]), _save([image.url]),
+            )
 
     if len(track_points) < 2:
         raise BadRequestException("일정 지점이 2개 이상이어야 이동 경로를 만들 수 있습니다.")
+    _name_stops(track_points, media_points)  # 제목 없는 일정만 좌표로 채운다
 
     # 일정에 매핑되지 않은 사진(업로드 때 EXIF GPS가 없어 붙일 일정을 못 정했거나, 붙어
     # 있던 일정이 삭제된 사진)은 마지막 지점 뒤에 이어 붙인다 — 지도 위 어디에 둘지 알
     # 방법이 없어서다. ponytail: 좌표를 아는 사진만 제 위치에 뜨고 나머지는 끝에 몰린다.
-    media_points[-1]["photos"].extend(_save([img.url for img in unassigned]))
+    loose = _save([img.url for img in unassigned])
+    media_points[-1]["photos"].extend(loose)
+    # 어디서 찍었는지 모르는 사진이라 마지막 일정 이름을 달면 틀린 정보다 — 라벨을 숨긴다.
+    photo_labels.update(dict.fromkeys(loose, ""))
     _trim_photos(media_points)
 
-    travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
+    travel_data_path, bgm_path = _write_travel_data(
+        job_dir, track_points, media_points, bgm, photo_labels
+    )
     # 제목을 안 주면 여행 이름을 그대로 쓴다 — 이미 조회한 값이라 공짜다.
     # 지역도 마찬가지로 여행에 적힌 값을 먼저 쓰고, 없을 때만 좌표로 역지오코딩한다.
     return _spawn_render_job(
