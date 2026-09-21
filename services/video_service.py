@@ -1776,22 +1776,50 @@ def start_render_travel(
             saved_count += 1
         return saved
 
-    for schedule in schedules:
-        near, far = _split_off_course(
-            schedule, by_schedule.get(schedule.schedule_idx, []), downloaded
-        )
-        photos = _save([img.url for img in near])
-        if not photos and fallback.get(schedule.schedule_idx):
-            photos = _save([fallback[schedule.schedule_idx]])
-        # 폴백 판정은 일정 단위다 — 직전 지점 1km 안이라 병합되면 관광 이미지가 이웃 일정의
-        # 내 사진 뒤에 이어 붙는다. 코스에 있는 장소라 그대로 둔다.
-        title = (schedule.title or "").strip()
-        if title:  # 제목 없는 일정은 적지 않는다 → 지점 이름(좌표로 채운 이름)을 쓴다
-            photo_labels.update(dict.fromkeys(photos, title))
-        _append_stop(
-            track_points, media_points,
-            schedule.latitude, schedule.longitude, photos, name=schedule.title,
-        )
+    # 일정마다 붙은 사진을 그 자리에서 찍은 것 / 코스 밖에서 찍은 것으로 가른다. 기차 일정은
+    # 빼고 전부 그 자리 사진으로 둔다 — 달리는 기차 안에서 찍어 출발역에서 먼 게 정상이라,
+    # 떼어내면 "천안시 ○○동" 같은 경유지가 생기고 기차 일정은 '안 간 곳'으로 빠진다.
+    splits = [
+        (s, *(_split_off_course(s, by_schedule.get(s.schedule_idx, []), downloaded)
+              if s.kind != "train" else (by_schedule.get(s.schedule_idx, []), [])))
+        for s in schedules
+    ]
+    # 붙은 사진이 **전부** 다른 곳에서 찍힌 일정은 안 간 것으로 보고 경로에서 뺀다(코스 대신
+    # 바다에 간 경우). 한 장이라도 그 자리 사진이 있거나 사진이 아예 없는 일정은 남는다 —
+    # 여행 전에 만드는 영상은 전부 사진 없는 일정이라 영향이 없다.
+    unvisited = {s.schedule_idx for s, near, far in splits if far and not near}
+
+    def route_size(skip: set[int]) -> int:
+        """사진 없이 지점만 쌓아 본 경로 길이 — 일정을 빼도 경로가 남는지 미리 본다."""
+        points: list[dict[str, object]] = []
+        stops: list[dict[str, object]] = []
+        for schedule, _near, far in splits:
+            if schedule.schedule_idx not in skip:
+                _append_stop(points, stops, schedule.latitude, schedule.longitude, [])
+            for _image, meta in far:
+                _append_stop(points, stops, float(meta["latitude"]), float(meta["longitude"]), [])
+        return len(points)
+
+    if unvisited and route_size(unvisited) < 2:
+        unvisited = set()  # 빼고 나면 경로가 안 그려지면 원래 코스를 유지한다
+
+    course_ids: set[int] = set()  # 코스 일정이 들어간 지점(id) — 사진 배분에서 경유지보다 먼저
+    for schedule, near, far in splits:
+        if schedule.schedule_idx not in unvisited:
+            photos = _save([img.url for img in near])
+            if not photos and fallback.get(schedule.schedule_idx):
+                photos = _save([fallback[schedule.schedule_idx]])
+            # 폴백 판정은 일정 단위다 — 직전 지점 1km 안이라 병합되면 관광 이미지가 이웃 일정의
+            # 내 사진 뒤에 이어 붙는다. 코스에 있는 장소라 그대로 둔다.
+            # (변수 이름을 title 로 두면 릴스 제목 파라미터를 덮어쓴다 — 실제로 그랬다.)
+            stop_title = (schedule.title or "").strip()
+            if stop_title:  # 제목 없는 일정은 적지 않는다 → 지점 이름(좌표로 채운 이름)을 쓴다
+                photo_labels.update(dict.fromkeys(photos, stop_title))
+            _append_stop(
+                track_points, media_points,
+                schedule.latitude, schedule.longitude, photos, name=schedule.title,
+            )
+            course_ids.add(id(media_points[-1]))
         # 코스 밖에서 찍은 사진은 그 일정 바로 다음에 경유 지점으로 — 지도가 실제로 간 곳으로
         # 날아가고, 이름은 비워 두어 _name_stops 가 사진 위치로 채운다(일정 이름을 달면 안 된다).
         # ponytail: 위치는 '가장 가까운 일정 다음'이다. 촬영 시각으로 일정 사이 순서를 정하려면
@@ -1804,7 +1832,6 @@ def start_render_travel(
 
     if len(track_points) < 2:
         raise BadRequestException("일정 지점이 2개 이상이어야 이동 경로를 만들 수 있습니다.")
-    _name_stops(track_points, media_points)  # 제목 없는 일정만 좌표로 채운다
 
     # 일정에 매핑되지 않은 사진(업로드 때 EXIF GPS가 없어 붙일 일정을 못 정했거나, 붙어
     # 있던 일정이 삭제된 사진)은 마지막 지점 뒤에 이어 붙인다 — 지도 위 어디에 둘지 알
@@ -1813,7 +1840,24 @@ def start_render_travel(
     media_points[-1]["photos"].extend(loose)
     # 어디서 찍었는지 모르는 사진이라 마지막 일정 이름을 달면 틀린 정보다 — 라벨을 숨긴다.
     photo_labels.update(dict.fromkeys(loose, ""))
-    _trim_photos(media_points)
+
+    # 사진 상한은 코스 일정부터 채우고 경유지는 남는 몫만 받는다 — 경유지가 많으면 앞쪽
+    # 경유지가 몫을 다 가져가 뒤쪽 코스 일정 사진이 잘렸다.
+    course = [m for m in media_points if id(m) in course_ids]
+    _trim_photos(course)
+    _trim_photos(
+        [m for m in media_points if id(m) not in course_ids],
+        total=MAX_TRAVEL_RENDER_PHOTOS - sum(len(m["photos"]) for m in course),
+    )
+    # 사진이 다 잘린 경유지는 들를 이유가 없다(사진 때문에 생긴 지점) — 경로에서 뺀다.
+    keep = [m for m in media_points if id(m) in course_ids or m["photos"]]
+    if 2 <= len(keep) < len(media_points):
+        track_points = [track_points[int(m["trackIndex"])] for m in keep]
+        media_points = keep
+        for index, media in enumerate(media_points):
+            media["trackIndex"] = index
+    # 이름 조회는 경로가 확정된 뒤에 한다 — 빠질 경유지까지 카카오를 부르지 않게.
+    _name_stops(track_points, media_points)
 
     travel_data_path, bgm_path = _write_travel_data(
         job_dir, track_points, media_points, bgm, photo_labels

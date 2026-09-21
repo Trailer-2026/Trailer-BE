@@ -10,6 +10,10 @@ DB·TourAPI·카카오·이미지 다운로드·렌더 서브프로세스는 전
 - 제목 없는 일정의 사진은 표에 안 적혀 지점 이름(좌표로 채운 이름)을 쓴다
 - 일정에서 OFF_COURSE_KM 넘게 떨어져 찍은 사진(코스에 없는 바다)은 그 일정 이름을 달지 않고,
   일정 바로 다음 경유 지점이 되어 사진 위치로 찾은 이름을 쓴다
+- 붙은 사진이 전부 다른 곳에서 찍힌 일정은 안 간 것으로 보고 뺀다(사진 없는 일정은 남김).
+  빼면 경로가 안 그려질 때는 코스를 유지한다. 기차 일정은 코스 밖 판정에서 제외
+- 사진 상한은 코스 일정부터 채우고, 사진이 다 잘린 경유지는 경로에서 빠진다
+- 제목을 안 주면 릴스 제목은 여행 이름이다(일정 제목이 새면 안 된다)
 """
 import io
 import json
@@ -49,6 +53,7 @@ def _run(schedules, images, contents=None):
     def fake_spawn(db, travel_data_path, *args, **kwargs):
         captured["data"] = json.loads(Path(travel_data_path).read_text(encoding="utf-8"))
         captured["job_dir"] = Path(travel_data_path).parent
+        captured["title"] = args[3] if len(args) > 3 else kwargs.get("title")
         # job 디렉터리는 아래 finally 에서 지우므로 사진 바이트를 미리 읽어 둔다(순서 확인용).
         root = video_service.VIDEO_MAKER_DIR
         captured["bytes"] = {
@@ -82,12 +87,13 @@ def _run(schedules, images, contents=None):
          kakao_local.place_name_of) = originals
         shutil.rmtree(captured.get("job_dir", Path("/nonexistent")), ignore_errors=True)
     captured["data"]["_bytes"] = captured["bytes"]
+    captured["data"]["_title"] = captured["title"]
     return captured["data"]
 
 
 def main() -> None:
-    def schedule(idx, lat, lng, title):
-        return SimpleNamespace(schedule_idx=idx, kind="visit", title=title,
+    def schedule(idx, lat, lng, title, kind="visit"):
+        return SimpleNamespace(schedule_idx=idx, kind=kind, title=title,
                                latitude=lat, longitude=lng, image_url=None)
 
     def image(idx, schedule_idx):
@@ -136,6 +142,50 @@ def main() -> None:
     assert [labels.get(p) for p in points[1]["photos"]] == [None, None]
     sea_bytes = [data["_bytes"][p] for p in points[1]["photos"]]
     assert sea_bytes == [contents["https://x/3.jpg"], contents["https://x/2.jpg"]]
+    assert data["_title"] == "여행", data["_title"]   # 릴스 제목 = 여행 이름(마지막 일정 제목 아님)
+
+    # 안 간 일정 빼기: 경복궁 일정 사진이 전부 을왕리에서 찍힘 → 경복궁 빠지고 을왕리 경유지.
+    # 박물관은 사진이 없어 남는다(관광 이미지 폴백 자리). 부산은 그 자리 사진이 있어 남는다.
+    busan = (35.1152, 129.0423)
+    schedules = [schedule(1, 37.5796, 126.9770, "경복궁"), schedule(2, 36.35, 127.38, "대전 박물관"),
+                 schedule(3, *busan, "부산역")]
+    images = [image(1, 1), image(2, 1), image(3, 3)]
+    contents = {"https://x/1.jpg": _jpeg(*eulwang), "https://x/2.jpg": _jpeg(*eulwang),
+                "https://x/3.jpg": _jpeg(busan[0] + 0.001, busan[1])}
+    names = [p["name"] for p in _run(schedules, images, contents)["mediaPoints"]]
+    assert names == ["을왕리해수욕장", "대전 박물관", "부산역"], names
+
+    # 빼면 경로가 안 될 때: 일정 2개인데 둘 다 사진이 같은 곳(을왕리)에서 → 코스 유지
+    schedules = [schedule(1, 37.5796, 126.9770, "경복궁"), schedule(2, *busan, "부산역")]
+    images = [image(1, 1), image(2, 2)]
+    contents = {"https://x/1.jpg": _jpeg(*eulwang), "https://x/2.jpg": _jpeg(*eulwang)}
+    names = [p["name"] for p in _run(schedules, images, contents)["mediaPoints"]]
+    assert names[0] == "경복궁" and "부산역" in names, names
+
+    # 기차 일정: 달리는 기차 안 사진(출발역에서 60km)은 경유지가 되지 않고 기차 일정도 안 빠진다
+    schedules = [schedule(1, 37.5547, 126.9706, "KTX 101 서울→부산", kind="train"),
+                 schedule(2, *busan, "부산역")]
+    images = [image(1, 1)]
+    contents = {"https://x/1.jpg": _jpeg(37.02, 127.1)}
+    data = _run(schedules, images, contents)
+    assert [p["name"] for p in data["mediaPoints"]] == ["KTX 101 서울→부산", "부산역"]
+    assert len(data["mediaPoints"][0]["photos"]) == 1
+
+    # 경유지가 많을 때: 코스 밖 18곳(각 1장) + 경복궁 사진 1장 → 경복궁 사진은 남고,
+    # 경유지는 남는 14장만 받으며 사진이 잘린 경유지는 경로에서 빠진다
+    far_spots = [(37.40 + i * 0.03, 126.40) for i in range(18)]
+    schedules = [schedule(1, *airport, "인천국제공항"), schedule(2, 37.5796, 126.9770, "경복궁")]
+    images = [image(i, 1) for i in range(18)] + [image(99, 2)]
+    contents = {f"https://x/{i}.jpg": _jpeg(*c, f"2026:09:20 {6 + i // 2:02d}:{(i % 2) * 30:02d}:00")
+                for i, c in enumerate(far_spots)}
+    contents["https://x/99.jpg"] = _jpeg(37.5800, 126.9772)
+    data = _run(schedules, images, contents)
+    points = data["mediaPoints"]
+    assert points[-1]["name"] == "경복궁" and len(points[-1]["photos"]) == 1, points[-1]
+    assert all(p["photos"] for p in points), [len(p["photos"]) for p in points]   # 빈 경유지 없음
+    assert sum(len(p["photos"]) for p in points) == video_service.MAX_TRAVEL_RENDER_PHOTOS
+    assert [p["trackIndex"] for p in points] == list(range(len(points)))       # 번호 다시 매김
+    assert len(data["trackPoints"]) == len(points)
     print("OK: 여행 렌더 사진별 장소명 자체 점검 통과")
 
 
