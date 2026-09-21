@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import functools
 import io
 import json
 import math
@@ -124,7 +125,7 @@ DEFAULT_CONFIG = RenderConfig(
     stop_seconds=0.8,
     arrival_hold_seconds=0.7,
     photo_fade_in_seconds=0.4,
-    photo_hold_seconds=1.6,
+    photo_hold_seconds=1.2,
     photo_fade_out_seconds=0.4,
     stabilize_ms=80,
     mode_name="default",
@@ -142,7 +143,7 @@ QUALITY_FAST_CONFIG = RenderConfig(
     stop_seconds=0.8,
     arrival_hold_seconds=0.7,
     photo_fade_in_seconds=0.4,
-    photo_hold_seconds=1.6,
+    photo_hold_seconds=1.2,
     photo_fade_out_seconds=0.4,
     stabilize_ms=80,
     mode_name="quality-fast",
@@ -179,6 +180,13 @@ class MediaPoint:
     track_index: int
     name: str
     photos: tuple[Path, ...]
+    # photos 와 같은 순서의 사진별 장소명. None 이면 지점 이름(name)을 쓴다. 1km 안의 일정이
+    # 한 지점으로 묶여도 사진마다 자기 장소 이름이 떠야 해서 따로 둔다(travel_data 의 photoLabels).
+    photo_labels: tuple[str | None, ...] = ()
+
+    def label_of(self, index: int) -> str:
+        label = self.photo_labels[index] if index < len(self.photo_labels) else None
+        return self.name if label is None else label
 
 
 @dataclass(frozen=True)
@@ -656,6 +664,10 @@ def validate_travel_data(
     if not isinstance(raw_media_points, list):
         raise RuntimeError("mediaPoints must be an array when provided.")
 
+    # 사진별 장소명 {photos 에 적힌 경로: 이름}. 빈 문자열이면 그 사진은 라벨을 숨긴다.
+    raw_labels = raw_data.get("photoLabels")
+    labels_by_photo = raw_labels if isinstance(raw_labels, dict) else {}
+
     media_by_index: dict[int, MediaPoint] = {}
     for media_index, raw_media_point in enumerate(raw_media_points):
         if not isinstance(raw_media_point, dict):
@@ -675,10 +687,9 @@ def validate_travel_data(
             )
             continue
 
-        raw_name = raw_media_point.get("name")
-        name = str(raw_name).strip() if raw_name is not None else f"Track {track_index}"
-        if not name:
-            name = f"Track {track_index}"
+        # 이름이 없으면 빈 이름으로 둔다 — 지도 라벨·사진 위 장소명이 뜨지 않는다
+        # ("Track 3" 같은 자리표는 사용자에게 보일 이름이 아니다).
+        name = str(raw_media_point.get("name") or "").strip()
 
         raw_photos = raw_media_point.get("photos", [])
         if raw_photos is None:
@@ -691,6 +702,7 @@ def validate_travel_data(
             raw_photos = []
 
         valid_photos: list[Path] = []
+        valid_labels: list[str | None] = []
         for photo_index, raw_photo in enumerate(raw_photos):
             if not isinstance(raw_photo, str) or not raw_photo.strip():
                 print(
@@ -703,8 +715,13 @@ def validate_travel_data(
             if not photo_path.exists():
                 print(f"[warn] photo file not found, skipped: {raw_photo}")
                 continue
+            if is_clip(photo_path) and clip_play_seconds(photo_path) <= 0:
+                print(f"[warn] unreadable clip, skipped: {raw_photo}")
+                continue
 
             valid_photos.append(photo_path)
+            label = labels_by_photo.get(raw_photo)
+            valid_labels.append(str(label).strip() if label is not None else None)
 
         existing = media_by_index.get(track_index)
         if existing is not None:
@@ -713,10 +730,15 @@ def validate_travel_data(
                     "[warn] "
                     f"duplicate mediaPoint trackIndex={track_index}; keeping name '{existing.name}'"
                 )
+            # 합쳐지는 쪽 사진은 제 지점 이름을 달고 간다 — 앞 지점 이름으로 뜨면 안 된다.
             media_by_index[track_index] = MediaPoint(
                 track_index=track_index,
                 name=existing.name,
                 photos=existing.photos + tuple(valid_photos),
+                photo_labels=(
+                    tuple(existing.label_of(i) for i in range(len(existing.photos)))
+                    + tuple(name if label is None else label for label in valid_labels)
+                ),
             )
             continue
 
@@ -724,6 +746,7 @@ def validate_travel_data(
             track_index=track_index,
             name=name,
             photos=tuple(valid_photos),
+            photo_labels=tuple(valid_labels),
         )
 
     return track_points, sorted(media_by_index.values(), key=lambda point: point.track_index)
@@ -803,23 +826,63 @@ def move_seconds_for_km(distance_km: float) -> float:
     return min(MOVE_SECONDS_MAX, seconds)
 
 
-def stops_and_photos_seconds(
-    stop_points: list[MediaPoint],
-    config: RenderConfig,
-) -> float:
-    """Total non-move time: per-stop holds + per-photo fade/hold sequences.
+# 지점 사진 목록(photos)에 섞여 들어오는 짧은 영상(클립). 확장자로 사진과 가른다.
+# 소리는 버린다 — BGM 은 렌더 후 영상 전체에 합성되므로(mux_bgm_into_video) 클립
+# 구간에서도 끊기지 않는다.
+CLIP_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm"}
+# 클립은 앞에서부터 이 길이만 쓴다. 더 긴 영상은 뒤를 버린다.
+CLIP_MAX_SECONDS = 5.0
 
-    Must mirror exactly what build_timeline_segments emits for holds and photos.
+
+def is_clip(path: Path) -> bool:
+    return path.suffix.lower() in CLIP_EXTENSIONS
+
+
+@functools.lru_cache(maxsize=None)
+def clip_play_seconds(path: Path) -> float:
+    """클립에서 실제로 쓸 길이 = min(영상 길이, CLIP_MAX_SECONDS). 0 이면 못 읽는 파일."""
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        # ponytail: 길이를 모르면 상한으로 잡는다 — 짧은 클립은 마지막 프레임으로 채워진다
+        return CLIP_MAX_SECONDS
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        duration = float(result.stdout.strip())
+    except (ValueError, subprocess.TimeoutExpired):
+        return 0.0  # 못 읽는 클립은 건너뛴다 — 렌더 전체를 죽이지 않는다
+    return max(0.0, min(duration, CLIP_MAX_SECONDS))
+
+
+def media_segment_seconds(path: Path, config: RenderConfig) -> float:
+    """사진/클립 한 개가 타임라인에서 차지하는 시간.
+
+    사진은 페이드인 + hold + 페이드아웃, 클립은 재생 길이 그대로다(페이드가 재생과 겹친다).
     """
-    photo_seconds = (
+    if is_clip(path):
+        return clip_play_seconds(path)
+    return (
         config.photo_fade_in_seconds
         + config.photo_hold_seconds
         + config.photo_fade_out_seconds
     )
+
+
+def stops_and_photos_seconds(
+    stop_points: list[MediaPoint],
+    config: RenderConfig,
+) -> float:
+    """Total non-move time: per-stop holds + per-photo/clip sequences.
+
+    Must mirror exactly what build_timeline_segments emits for holds and photos.
+    """
     total = 0.0
     for point in stop_points:
         total += config.stop_seconds if point.photos else config.arrival_hold_seconds
-        total += photo_seconds * len(point.photos)
+        total += sum(media_segment_seconds(path, config) for path in point.photos)
     return total
 
 
@@ -929,18 +992,14 @@ def build_timeline_segments(
                 )
             )
 
-        for photo_path in media_point.photos:
+        for photo_index, photo_path in enumerate(media_point.photos):
             segments.append(
                 TimelineSegment(
-                    type="photo",
+                    type="clip" if is_clip(photo_path) else "photo",
                     track_index=media_point.track_index,
-                    name=media_point.name,
+                    name=media_point.label_of(photo_index),
                     photo_path=photo_path,
-                    duration=(
-                        config.photo_fade_in_seconds
-                        + config.photo_hold_seconds
-                        + config.photo_fade_out_seconds
-                    ),
+                    duration=media_segment_seconds(photo_path, config),
                     fade_in_seconds=config.photo_fade_in_seconds,
                     hold_seconds=config.photo_hold_seconds,
                     fade_out_seconds=config.photo_fade_out_seconds,
@@ -984,8 +1043,12 @@ def timeline_total_frames(segments: list[TimelineSegment], config: RenderConfig)
 
 
 def print_timeline_summary(segments: list[TimelineSegment], config: RenderConfig) -> None:
-    map_seconds = sum(segment.duration for segment in segments if segment.type != "photo")
-    photo_seconds = sum(segment.duration for segment in segments if segment.type == "photo")
+    map_seconds = sum(
+        segment.duration for segment in segments if segment.type not in ("photo", "clip")
+    )
+    photo_seconds = sum(
+        segment.duration for segment in segments if segment.type in ("photo", "clip")
+    )
     print(
         "[timeline] "
         f"segments={len(segments)} map_seconds={map_seconds:.2f} "
@@ -1299,6 +1362,55 @@ def fit_photo_cover(photo: Image.Image, config: RenderConfig) -> Image.Image:
     return background
 
 
+@functools.lru_cache(maxsize=32)
+def place_label_overlay(name: str, width: int, height: int) -> Image.Image | None:
+    """사진·클립 상단에 얹을 장소명 띠(RGBA, 폭 width × 화면 위 16%). 이름이 없으면 None.
+
+    화면 전체가 아니라 띠 크기만 만든다 — 클립은 프레임마다 합성하는데, 1080x1920 전체를
+    합성하면 5초 클립 하나에 2초가 더 걸린다(띠만 하면 거의 안 늘어난다).
+
+    위쪽을 어둡게 깐 그라데이션 위에 흰 글씨를 가운데 정렬로 그린다 — 밝은 하늘 사진에서도
+    읽히게 하려는 것이다. 사진 쪽에 미리 합성해 두므로 사진이 페이드되면 이름도 같이 페이드된다.
+    같은 지점의 사진·클립이 연달아 나오므로 이름·크기별로 캐시한다.
+    """
+    name = name.strip()
+    # 영상 위 글씨는 굵어야 읽힌다 — 굵은 한글 폰트를 먼저 보고, 없으면 일반 폰트.
+    bold = (Path("C:/Windows/Fonts/malgunbd.ttf"),
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"))
+    font_path = next((path for path in bold if path.exists()), None) or find_font()
+    if not name or font_path is None:  # 기본 비트맵 폰트는 한글을 못 그린다 — 라벨을 생략
+        return None
+    band = round(height * 0.16)
+    overlay = Image.new("RGBA", (width, band), (0, 0, 0, 0))
+    shade = Image.linear_gradient("L").resize((1, band)).point(lambda v: round((255 - v) * 0.55))
+    overlay.paste((0, 0, 0, 255), (0, 0, width, band), shade.resize((width, band)))
+
+    size = round(width * 0.058)  # 1080px 폭에서 63px
+    font = load_font(size, font_path)
+    draw = ImageDraw.Draw(overlay)
+    # 긴 이름은 화면 폭의 88% 안에 들어올 때까지 줄인다(너무 작아지면 그대로 둔다).
+    while size > round(width * 0.03) and draw.textlength(name, font=font) > width * 0.88:
+        size -= 2
+        font = load_font(size, font_path)
+    center = (width / 2, band * 0.42)
+    shadow = max(2, size // 24)
+    draw.text((center[0] + shadow, center[1] + shadow), name, font=font,
+              fill=(0, 0, 0, 150), anchor="mm")
+    draw.text(center, name, font=font, fill=(255, 255, 255, 255), anchor="mm")
+    return overlay
+
+
+def with_place_label(image: Image.Image, name: str | None) -> Image.Image:
+    """image(RGB, 프레임 크기)에 장소명 띠를 얹은 새 이미지. 이름이 없으면 그대로."""
+    overlay = place_label_overlay(name or "", image.width, image.height)
+    if overlay is None:
+        return image
+    box = (0, 0, overlay.width, overlay.height)
+    labeled = image.copy()
+    labeled.paste(Image.alpha_composite(image.crop(box).convert("RGBA"), overlay).convert("RGB"), box)
+    return labeled
+
+
 def cleanup_temp() -> None:
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
     temp_dir = TEMP_DIR.resolve()
@@ -1413,6 +1525,7 @@ def emit_photo_segment_frames(
     fade_in_seconds: float,
     hold_seconds: float,
     fade_out_seconds: float,
+    name: str | None = None,
 ) -> int:
     if not photo_path.exists():
         print(f"[warn] photo file disappeared, skipped: {photo_path}")
@@ -1422,7 +1535,7 @@ def emit_photo_segment_frames(
     try:
         map_image = Image.open(io.BytesIO(stop_map_png)).convert("RGB")
         with Image.open(photo_path) as raw_photo:
-            photo = fit_photo_cover(raw_photo, config)
+            photo = with_place_label(fit_photo_cover(raw_photo, config), name)
     except Exception as error:
         print(f"[warn] failed to read photo, skipped: {photo_path}: {error}")
         return start_index
@@ -1466,6 +1579,67 @@ def emit_photo_segment_frames(
         emit(Image.blend(photo, map_image, alpha))
 
     perf.add_stage("photo_fade_generation", time.perf_counter() - started)
+    return frame_index
+
+
+def emit_clip_segment_frames(
+    start_index: int,
+    config: RenderConfig,
+    stop_map_png: bytes,
+    clip_path: Path,
+    frame_writer: FfmpegPipeWriter,
+    save_frames: bool,
+    capture_mode: str,
+    jpeg_quality: int,
+    perf: PerfStats,
+    clip_seconds: float,
+    fade_in_seconds: float,
+    fade_out_seconds: float,
+    name: str | None = None,
+) -> int:
+    """클립을 정차 지도 프레임 위로 페이드인 → 재생 → 지도로 페이드아웃한다.
+
+    페이드는 재생과 겹친다(클립이 움직이는 채로 떠오른다). 프레임 수는 타임라인이
+    잡은 길이로 고정하고, 디코드가 모자라면 직전 프레임으로 채운다. 가로 영상은
+    크롭으로 꽉 채운다 — 사진의 블러 배경(fit_photo_cover)은 프레임마다
+    GaussianBlur 라 너무 느리다.
+    """
+    started = time.perf_counter()
+    width, height = config.width, config.height
+    frame_size = width * height * 3
+    total = frame_count_for_seconds(clip_seconds, config.fps)
+    fade_in = max(1, frame_count_for_seconds(fade_in_seconds, config.fps))
+    fade_out = max(1, frame_count_for_seconds(fade_out_seconds, config.fps))
+    map_image = Image.open(io.BytesIO(stop_map_png)).convert("RGB")
+    command = [
+        require_ffmpeg(), "-v", "error", "-i", str(clip_path), "-an",
+        "-vf",
+        f"fps={config.fps},scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},setsar=1",
+        "-frames:v", str(total), "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+    ]
+    frame = map_image
+    frame_index = start_index
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as decoder:
+        try:
+            for i in range(total):
+                raw = decoder.stdout.read(frame_size)
+                if len(raw) == frame_size:
+                    frame = with_place_label(Image.frombytes("RGB", (width, height), raw), name)
+                alpha = min(1.0, (i + 1) / fade_in, (total - 1 - i) / fade_out)
+                image = frame if alpha >= 1.0 else Image.blend(map_image, frame, alpha)
+                frame_bytes = image_to_frame_bytes(image, capture_mode, jpeg_quality)
+                write_optional_frame(
+                    FRAMES_DIR / f"frame_{frame_index:06d}.{frame_extension(capture_mode)}",
+                    frame_bytes,
+                    save_frames,
+                )
+                frame_writer.write_frame(frame_bytes)
+                frame_index += 1
+        finally:
+            decoder.kill()  # 정상이면 이미 끝났다 — 도중 예외일 때 남은 디코드를 끊는다
+
+    perf.add_stage("clip_frame_output", time.perf_counter() - started)
     return frame_index
 
 
@@ -2265,7 +2439,7 @@ def render_timeline_frames(
                         raise
                 continue
 
-            if segment.type == "photo":
+            if segment.type in ("photo", "clip"):
                 if benchmark_frames is not None:
                     continue
                 if not last_stop_map_png:
@@ -2289,6 +2463,24 @@ def render_timeline_frames(
                     )
                 if segment.photo_path is None:
                     continue
+                if segment.type == "clip":
+                    frame_index = emit_clip_segment_frames(
+                        start_index=frame_index,
+                        config=config,
+                        stop_map_png=last_stop_map_png,
+                        clip_path=segment.photo_path,
+                        frame_writer=frame_writer,
+                        save_frames=save_frames,
+                        capture_mode=capture_mode,
+                        jpeg_quality=jpeg_quality,
+                        perf=perf,
+                        clip_seconds=segment.duration,
+                        fade_in_seconds=segment.fade_in_seconds,
+                        fade_out_seconds=segment.fade_out_seconds,
+                        name=segment.name,
+                    )
+                    last_map_png = last_stop_map_png
+                    continue
                 frame_index = emit_photo_segment_frames(
                     start_index=frame_index,
                     config=config,
@@ -2302,6 +2494,7 @@ def render_timeline_frames(
                     fade_in_seconds=segment.fade_in_seconds,
                     hold_seconds=segment.hold_seconds,
                     fade_out_seconds=segment.fade_out_seconds,
+                    name=segment.name,
                 )
                 last_map_png = last_stop_map_png
                 continue

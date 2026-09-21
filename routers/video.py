@@ -56,6 +56,17 @@ def _title_form(extra: str = ""):
     )
 
 
+# photos-only·photos-ordered 공통 영상 클립 규칙 (description 뒤에 붙인다).
+_CLIP_RULES = (
+    "**영상도 photos 에 섞어 보낼 수 있습니다** (mp4/mov/m4v/webm). "
+    "**요청 전체(사진·영상 합계)가 100MB 이하**여야 하며 넘으면 서버 앞단에서 413 으로 "
+    "끊깁니다 — 폰 원본 영상은 금방 넘으니 기기에서 앞 5초만 잘라 보내세요. "
+    "영상은 앞 5초만, 소리 없이 쓰이며(BGM 은 끊기지 않음) 영상마다 쓰이는 길이의 합이 "
+    "15초를 넘으면 400입니다. 사진·영상은 합쳐서 30개까지이고, 읽을 수 없는 영상은 400입니다. "
+    "위치는 영상 파일의 GPS 태그(안드로이드·아이폰)로 잡고, "
+)
+
+
 def _photo_streams(photos: list[UploadFile]) -> list[tuple[str, BinaryIO]]:
     """업로드 사진을 (파일명, 스트림)으로 넘긴다 — **여기서 read() 하지 않는다**.
 
@@ -136,7 +147,10 @@ def download_reels_video(
                 "나오면 그 위치로 이동합니다. start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 "
                 "삼아 첫 사진 지점으로 이동하며 시작합니다. 조건을 못 채우면 400을 반환합니다. "
                 "영상 앞뒤에는 TRAILER 인트로·아웃트로가 항상 붙습니다. JWT 인증이 필요하며 "
-                "토큰이 없거나 유효하지 않으면 401을 반환합니다.",
+                "토큰이 없거나 유효하지 않으면 401을 반환합니다.\n\n"
+                + _CLIP_RULES
+                + "GPS 없는 영상은 **촬영 시각이 가장 가까운 사진의 지점**에서 그 사진 뒤에 "
+                "재생되고, 촬영 시각도 없으면 빠집니다.",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
 def render_video_photos_only(
@@ -146,7 +160,7 @@ def render_video_photos_only(
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
     title: str = _title_form(),
-    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장·최대 30장, 장당 10MB 이하)"),
+    photos: list[UploadFile] = File(..., description="여행 사진·영상들 (GPS 필요, 합쳐서 최소 2개·최대 30개, 사진은 장당 10MB 이하, 요청 전체 100MB 이하)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -183,7 +197,10 @@ def render_video_photos_only(
                 "(실패 시 릴스 행 삭제). title 을 주면 그 값이 릴스 제목이 되고, 비우면 "
                 "제목 없는(null) 릴스가 됩니다. "
                 "JWT 인증이 필요하며 토큰이 없거나 유효하지 않으면 "
-                "401을 반환합니다.",
+                "401을 반환합니다.\n\n"
+                + _CLIP_RULES
+                + "GPS 없는 영상은 **바로 앞 파일의 지점**에서 재생됩니다(맨 앞에 놓인 영상은 "
+                "그 뒤 첫 사진 지점에서 사진보다 먼저 재생).",
     response_model=CommonResponse[VideoRenderStatusResponse],
 )
 def render_video_photos_ordered(
@@ -193,7 +210,7 @@ def render_video_photos_ordered(
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
     title: str = _title_form(),
-    photos: list[UploadFile] = File(..., description="여행 사진들 (EXIF GPS 필요, 최소 2장·최대 30장, 장당 10MB 이하) — 보낸 순서가 곧 영상 순서"),
+    photos: list[UploadFile] = File(..., description="여행 사진·영상들 (합쳐서 최소 2개·최대 30개, 사진은 장당 10MB 이하, 요청 전체 100MB 이하) — 보낸 순서가 곧 영상 순서"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -222,7 +239,14 @@ def render_video_photos_ordered(
                 "폴링). 직전 지점 "
                 "기준 1km 미만인 연속 일정은 별도 지점 없이 한 지점으로 묶여 사진만 이어서 "
                 "나오고, 기차 일정은 출발역 좌표가 경유 지점이 됩니다. 이미지 다운로드에 "
-                "실패한 이미지는 건너뜁니다.\n\n"
+                "실패한 이미지는 건너뜁니다. 일정에 붙은 사진이라도 **그 일정에서 2km 넘게 "
+                "떨어진 곳에서 찍혔으면(사진 GPS 기준) 그 일정 바로 다음에 경유 지점으로** "
+                "들어가고, 이름은 사진 위치로 찾습니다(코스에 없던 곳에 다녀온 사진이 일정 "
+                "이름을 달고 나오지 않게). 붙은 사진이 **전부** 다른 곳에서 찍힌 일정은 안 간 "
+                "것으로 보고 경로에서 뺍니다(빼면 지점이 2개 미만이 될 때는 유지). 기차 일정의 "
+                "사진은 기차 안에서 찍힌 것으로 보고 이 판정에서 제외합니다. 사진 상한은 코스 "
+                "일정부터 채우고, 사진이 남지 않은 경유 지점은 경로에서 빠집니다. 사진 위에는 "
+                "그 사진이 속한 장소 이름이 뜹니다.\n\n"
                 "**사진을 붙이지 않은 방문지·숙소 일정은 그 장소의 관광 대표 이미지 1장으로 "
                 "채웁니다** — 여행 전에 만들어도 지도만 도는 영상이 되지 않습니다. 사용자가 "
                 "올린 사진이 있는 일정에는 붙지 않고(내 사진 우선), 기차 일정에도 붙지 않습니다. "
