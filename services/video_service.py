@@ -1430,6 +1430,12 @@ COVER_FILE_NAME = "cover.jpg"
 # 표지로 만든 인트로가 화면에 머무는 시간(초). TRAILER 인트로(~3.6초)를 대신하므로
 # 앞단이 오히려 짧아진다 — 제목 한 줄을 읽기엔 2초면 넉넉하다.
 INTRO_SECONDS = 2.0
+# 인트로 끝에서 본편 첫 프레임으로 넘어가는 크로스페이드 길이(초). INTRO_SECONDS 안에 든다.
+#
+# 이게 없으면 표지에서 지도로 **하드컷**이라 눈에 띄게 툭 끊긴다. 마지막을 본편 첫
+# 프레임으로 녹여 두면 인트로의 끝 프레임 == 본편의 첫 프레임이라 concat 자리가 안 보인다
+# (TRAILER 인트로가 검정을 거쳐 본편으로 페이드인하는 것과 같은 수법이다).
+INTRO_FADE_SECONDS = 0.4
 
 
 def _resolve_cover_index(cover_index: int | None, count: int) -> int:
@@ -1544,6 +1550,8 @@ def _prepend_cover_intro(video_path: Path, job: dict) -> None:
     대표가 **사진**이면 썸네일과 같은 보정·제목을 본편 해상도로 다시 그려 정지 2초로,
     **영상**이면 그 영상의 앞 2초에 제목만 얹어(보정 없음) 붙인다. 2초보다 짧은 영상은
     마지막 프레임을 늘려 채운다(tpad) — 클립이 5초로 잘려 있어 보통은 그냥 앞 2초다.
+
+    끝 INTRO_FADE_SECONDS 는 본편 첫 프레임으로 녹인다 — 이음매를 감추려는 것이다.
     """
     source_path = job.get("intro_source")
     if not source_path or not Path(source_path).exists():
@@ -1554,6 +1562,7 @@ def _prepend_cover_intro(video_path: Path, job: dict) -> None:
         intro_module = _intro_video()
         info = _ffprobe_video(video_path)
         width, height = int(info["width"]), int(info["height"])
+        fps = info["fps"]
         _, audio_spec, timescale = intro_module.probe_video(video_path)
 
         work = source.parent
@@ -1563,18 +1572,18 @@ def _prepend_cover_intro(video_path: Path, job: dict) -> None:
                 width, height, title, _first_frame_bytes(source)
             )
             scale = (f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
-                     f"crop={width}:{height},setsar=1,fps={info['fps']},"
+                     f"crop={width}:{height},setsar=1,fps={fps},"
                      f"tpad=stop_mode=clone:stop_duration={INTRO_SECONDS:.3f}")
             if overlay is None:  # 제목이 없거나 폰트를 못 찾은 경우 — 영상만 2초
                 args = ["-t", f"{INTRO_SECONDS:.3f}", "-i", str(source)]
-                filters = f"{scale},trim=duration={INTRO_SECONDS:.3f},setpts=PTS-STARTPTS[v]"
+                filters = f"{scale},trim=duration={INTRO_SECONDS:.3f},setpts=PTS-STARTPTS[head]"
             else:
                 overlay_path = work / "intro_title.png"
                 overlay_path.write_bytes(overlay)
                 args = ["-t", f"{INTRO_SECONDS:.3f}", "-i", str(source),
                         "-i", str(overlay_path)]
                 filters = (f"{scale}[base];[base][1:v]overlay=0:0,"
-                           f"trim=duration={INTRO_SECONDS:.3f},setpts=PTS-STARTPTS[v]")
+                           f"trim=duration={INTRO_SECONDS:.3f},setpts=PTS-STARTPTS[head]")
         else:
             still = cover_image.build_cover(source.read_bytes(), title, size=(width, height))
             if still is None:
@@ -1582,7 +1591,18 @@ def _prepend_cover_intro(video_path: Path, job: dict) -> None:
             still_path = work / "intro_still.jpg"
             still_path.write_bytes(still)
             args = ["-loop", "1", "-t", f"{INTRO_SECONDS:.3f}", "-i", str(still_path)]
-            filters = f"[0:v]setsar=1,fps={info['fps']}[v]"
+            filters = f"[0:v]setsar=1,fps={fps}[head]"
+
+        # 본편 첫 프레임을 뒤에 이어 크로스페이드로 녹인다 → 인트로 끝 == 본편 시작.
+        first_frame = work / "main_first.jpg"
+        _run_ffmpeg(["-i", str(video_path), "-frames:v", "1", "-q:v", "2", str(first_frame)])
+        args += ["-loop", "1", "-t", f"{INTRO_FADE_SECONDS:.3f}", "-i", str(first_frame)]
+        tail_index = args.count("-i") - 1
+        filters += (
+            f";[{tail_index}:v]scale={width}:{height},setsar=1,fps={fps}[tail];"
+            f"[head][tail]xfade=transition=fade:duration={INTRO_FADE_SECONDS:.3f}"
+            f":offset={INTRO_SECONDS - INTRO_FADE_SECONDS:.3f}[v]"
+        )
 
         _encode_intro_clip(args, filters, intro_path, info, timescale, audio_spec)
         intro_module.concat_replace(
