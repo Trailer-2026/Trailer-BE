@@ -40,9 +40,11 @@ def _run(schedules, images, *, near=None, dead=()):
     captured, near_calls = {}, []
     near = near or {}
 
-    def fake_spawn(db, travel_data_path, bgm_path, theme, user_idx, title=None, region=None):
+    # **extra 로 받는다 — _spawn_render_job 에 인자가 늘어도 이 스텁이 깨지지 않게.
+    def fake_spawn(db, travel_data_path, bgm_path, theme, user_idx, title=None, **extra):
         captured["data"] = json.loads(Path(travel_data_path).read_text(encoding="utf-8"))
         captured["job_dir"] = Path(travel_data_path).parent
+        captured.update(extra)
         return {"reels_idx": 1}
 
     def fake_near(lat, lng):

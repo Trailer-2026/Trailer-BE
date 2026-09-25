@@ -23,6 +23,7 @@ import logging
 import math
 import mimetypes
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -504,7 +505,10 @@ def _engine() -> str:
 
 
 def _build_command(
-    travel_data_path: Path, theme: str, max_video_seconds: float | None = None
+    travel_data_path: Path,
+    theme: str,
+    max_video_seconds: float | None = None,
+    trailer_intro: bool = True,
 ) -> list[str]:
     """렌더 명령을 만든다 (기본 Modal, VIDEO_ENGINE=local 이면 로컬 GPU).
 
@@ -531,8 +535,10 @@ def _build_command(
         command += ["--max-video-seconds", str(max_video_seconds)]
         if not local:
             command += ["--max-chunks", "1"]
-    # TRAILER 인트로는 항상 붙이고, 아웃트로는 붙이지 않는다.
-    command += ["--intro"]
+    # 아웃트로는 붙이지 않는다. TRAILER 인트로는 표지 인트로가 없을 때만 붙인다
+    # (표지가 있으면 렌더가 끝난 뒤 이 서버가 _prepend_cover_intro 로 대신 붙인다).
+    if trailer_intro:
+        command += ["--intro"]
     return command
 
 
@@ -1014,7 +1020,7 @@ _MAX_JOBS = 200
 PENDING_REELS_URL = ""
 
 # job dict 에만 두고 상태 응답(_job_snapshot)에서는 빼는 내부 필드.
-_INTERNAL_JOB_KEYS = ("started_at", "user_idx", "job_dir", "cover_path")
+_INTERNAL_JOB_KEYS = ("started_at", "user_idx", "job_dir", "cover_path", "intro_source", "title")
 
 # 사용자에게 내보내는 실패 문구. **렌더 stdout·예외 메시지를 그대로 실어 보내지 않는다** —
 # 서버 경로·Modal 내부 로그가 앱 화면까지 나간다. 원인은 서버 로그에만 남긴다.
@@ -1154,6 +1160,9 @@ def _new_job(reels_idx: int, user_idx: int | None, **overrides) -> dict:
         "job_dir": None,
         # 대표 사진으로 미리 만들어 둔 표지 JPEG (job_dir 안). 없으면 완성 영상에서 뽑는다.
         "cover_path": None,
+        # 인트로 2초를 그릴 원본 (사진 바이트 파일 또는 클립 경로). 제목은 여기 같이 쓴다.
+        "intro_source": None,
+        "title": None,
         "reels_idx": reels_idx,
         "reels_url": None,
         "status": "running",
@@ -1183,6 +1192,7 @@ def _spawn_render_job(
     region: str | None = None,
     max_video_seconds: float | None = None,
     cover_path: Path | None = None,
+    intro_source: Path | None = None,
 ) -> dict[str, object]:
     """릴스 행을 먼저 등록하고, 렌더 서브프로세스를 백그라운드 스레드로 띄운다.
 
@@ -1197,10 +1207,16 @@ def _spawn_render_job(
     )
     db.commit()
 
-    command = _build_command(travel_data_path, theme, max_video_seconds)
+    # 표지 인트로를 붙일 수 있으면 TRAILER 인트로는 빼고(둘 다 붙이지 않는다), 못 만들었으면
+    # 예전처럼 TRAILER 를 붙인다 — 인트로가 통째로 없는 영상이 나오지 않게.
+    command = _build_command(
+        travel_data_path, theme, max_video_seconds, trailer_intro=intro_source is None
+    )
     job = _new_job(
         reels.reels_idx,
         user_idx,
+        intro_source=str(intro_source) if intro_source else None,
+        title=_clean_title(title),
         # 렌더 입력(업로드 사진·travel_data.json)이 담긴 디렉터리 — 끝나면 지운다.
         job_dir=str(travel_data_path.parent),
         # 표지는 job_dir 안에 둔다 — 렌더가 실패하면 디렉터리째 지워져 고아 GCS 객체가
@@ -1411,6 +1427,9 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 # 않게(job_dir 이 통째로 지워진다).
 # --------------------------------------------------------------------------- #
 COVER_FILE_NAME = "cover.jpg"
+# 표지로 만든 인트로가 화면에 머무는 시간(초). TRAILER 인트로(~3.6초)를 대신하므로
+# 앞단이 오히려 짧아진다 — 제목 한 줄을 읽기엔 2초면 넉넉하다.
+INTRO_SECONDS = 2.0
 
 
 def _resolve_cover_index(cover_index: int | None, count: int) -> int:
@@ -1435,7 +1454,11 @@ def _first_frame_bytes(video_path: Path) -> bytes | None:
 
 
 def _write_cover(job_dir: Path, source: bytes | None, title: str | None) -> Path | None:
-    """대표 사진 바이트로 표지를 만들어 job_dir 에 저장한다. 못 만들면 None."""
+    """대표 사진 바이트로 표지를 만들어 job_dir 에 저장한다. 못 만들면 None.
+
+    **원본 바이트도 함께 남긴다**(cover_src.bin) — 인트로는 본편 해상도로 다시 그려야
+    하는데 그 해상도는 렌더가 끝나야 알 수 있고, 540x960 썸네일을 늘리면 글씨가 뭉갠다.
+    """
     if not source:
         return None
     cover = cover_image.build_cover(source, title)
@@ -1443,7 +1466,131 @@ def _write_cover(job_dir: Path, source: bytes | None, title: str | None) -> Path
         return None
     path = job_dir / COVER_FILE_NAME
     path.write_bytes(cover)
+    (job_dir / COVER_SOURCE_NAME).write_bytes(source)
     return path
+
+
+def _intro_source_path(
+    job_dir: Path, cover_path: Path | None, clip_path: Path | None = None
+) -> Path | None:
+    """인트로를 그릴 원본 — 대표가 영상이면 그 클립, 사진이면 표지가 쓴 원본 바이트.
+
+    표지를 못 만들었으면 None 이고, 그 렌더는 TRAILER 인트로가 붙는다.
+    """
+    if cover_path is None:
+        return None
+    return clip_path or (job_dir / COVER_SOURCE_NAME)
+
+
+# --------------------------------------------------------------------------- #
+# 인트로 — 표지를 2초짜리 클립으로 만들어 본편 앞에 붙인다.
+#
+# TRAILER 글자 마스크 인트로를 **대신한다**(표지를 못 만든 렌더만 TRAILER 가 붙는다).
+# 본편을 재인코딩하지 않으려고 본편과 같은 코덱 파라미터로 클립만 인코딩한 뒤 stream
+# copy concat 한다 — intro_video 의 검증된 함수를 그대로 쓴다. 그 모듈은 Pillow 와
+# subprocess 만 쓰므로(playwright 없음) 이 서버에서 바로 import 된다.
+# --------------------------------------------------------------------------- #
+COVER_SOURCE_NAME = "cover_src.bin"
+
+
+def _intro_video():
+    """services/videoMaker/intro_video.py 를 로드한다 (그 디렉터리는 패키지가 아니다).
+
+    Pillow·subprocess 만 쓰는 모듈이라 playwright 없이 이 서버에서 그대로 돈다.
+    sys.path 에는 **뒤에** 붙인다 — 앞에 끼우면 videoMaker 의 파일들이 같은 이름의
+    표준 모듈을 가려 버린다.
+    """
+    if str(VIDEO_MAKER_DIR) not in sys.path:
+        sys.path.append(str(VIDEO_MAKER_DIR))
+    import intro_video  # noqa: PLC0415
+
+    return intro_video
+
+
+def _encode_intro_clip(
+    source_args: list[str],
+    filters: str,
+    target: Path,
+    info: dict[str, object],
+    timescale: int | None,
+    audio_spec: tuple[int, int] | None,
+) -> None:
+    """본편과 같은 코덱 파라미터로 2초 인트로 클립을 인코딩한다 (stream copy concat 용).
+
+    타임스케일이 어긋나면 concat 뒤 **본편 재생 속도가 틀어진다**. 본편에 BGM 이 있으면
+    같은 스펙의 무음 트랙을 넣어야 concat 이 오디오까지 이어 붙는다.
+    """
+    args = list(source_args)
+    maps = ["-map", "[v]"]
+    audio_args: list[str] = []
+    if audio_spec is not None:
+        rate, channels = audio_spec
+        layout = "stereo" if channels >= 2 else "mono"
+        args += ["-f", "lavfi", "-t", f"{INTRO_SECONDS:.3f}",
+                 "-i", f"anullsrc=r={rate}:cl={layout}"]
+        maps += ["-map", f"{source_args.count('-i')}:a"]  # 무음 트랙은 마지막 입력
+        audio_args = ["-c:a", "aac", "-b:a", "128k", "-ar", str(rate), "-ac", str(channels)]
+    args += ["-filter_complex", filters, *maps,
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+             "-profile:v", "high", "-pix_fmt", "yuv420p", "-r", str(info["fps"])]
+    if timescale:
+        args += ["-video_track_timescale", str(timescale)]
+    _run_ffmpeg([*args, *audio_args, "-movflags", "+faststart", str(target)])
+
+
+def _prepend_cover_intro(video_path: Path, job: dict) -> None:
+    """완성 영상 앞에 표지 인트로 2초를 붙인다 (in place). 실패해도 본편은 그대로 둔다.
+
+    대표가 **사진**이면 썸네일과 같은 보정·제목을 본편 해상도로 다시 그려 정지 2초로,
+    **영상**이면 그 영상의 앞 2초에 제목만 얹어(보정 없음) 붙인다. 2초보다 짧은 영상은
+    마지막 프레임을 늘려 채운다(tpad) — 클립이 5초로 잘려 있어 보통은 그냥 앞 2초다.
+    """
+    source_path = job.get("intro_source")
+    if not source_path or not Path(source_path).exists():
+        return
+    source = Path(source_path)
+    title = job.get("title") or ""
+    try:
+        intro_module = _intro_video()
+        info = _ffprobe_video(video_path)
+        width, height = int(info["width"]), int(info["height"])
+        _, audio_spec, timescale = intro_module.probe_video(video_path)
+
+        work = source.parent
+        intro_path = work / "cover_intro.mp4"
+        if source.suffix.lower() in RENDER_CLIP_EXTENSIONS:
+            overlay = cover_image.build_title_overlay(
+                width, height, title, _first_frame_bytes(source)
+            )
+            scale = (f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+                     f"crop={width}:{height},setsar=1,fps={info['fps']},"
+                     f"tpad=stop_mode=clone:stop_duration={INTRO_SECONDS:.3f}")
+            if overlay is None:  # 제목이 없거나 폰트를 못 찾은 경우 — 영상만 2초
+                args = ["-t", f"{INTRO_SECONDS:.3f}", "-i", str(source)]
+                filters = f"{scale},trim=duration={INTRO_SECONDS:.3f},setpts=PTS-STARTPTS[v]"
+            else:
+                overlay_path = work / "intro_title.png"
+                overlay_path.write_bytes(overlay)
+                args = ["-t", f"{INTRO_SECONDS:.3f}", "-i", str(source),
+                        "-i", str(overlay_path)]
+                filters = (f"{scale}[base];[base][1:v]overlay=0:0,"
+                           f"trim=duration={INTRO_SECONDS:.3f},setpts=PTS-STARTPTS[v]")
+        else:
+            still = cover_image.build_cover(source.read_bytes(), title, size=(width, height))
+            if still is None:
+                return
+            still_path = work / "intro_still.jpg"
+            still_path.write_bytes(still)
+            args = ["-loop", "1", "-t", f"{INTRO_SECONDS:.3f}", "-i", str(still_path)]
+            filters = f"[0:v]setsar=1,fps={info['fps']}[v]"
+
+        _encode_intro_clip(args, filters, intro_path, info, timescale, audio_spec)
+        intro_module.concat_replace(
+            shutil.which("ffmpeg"), [intro_path, video_path], video_path, work, "cover_intro"
+        )
+    except Exception:
+        # 인트로는 부가 연출이라 여기서 실패해도 본편은 그대로 올라가야 한다.
+        logger.warning("표지 인트로 합성 실패(무시): reels_idx=%s", job.get("reels_idx"))
 
 
 def _publish_cover(cover_path: str | None) -> str | None:
@@ -1633,6 +1780,7 @@ def start_render_photos_only(
         items: list[tuple[str, dict]] = []
         clip_seconds = 0.0
         cover_source: bytes | None = None
+        cover_clip: Path | None = None
         for order, (filename, stream) in enumerate(photos):
             is_cover = order + 1 == cover_at
             if Path(filename or "").suffix.lower() in RENDER_CLIP_EXTENSIONS:
@@ -1644,7 +1792,9 @@ def start_render_photos_only(
                         f"(영상마다 앞 {RENDER_CLIP_SECONDS:.0f}초만 쓰입니다)."
                     )
                 if is_cover:
-                    cover_source = _first_frame_bytes(VIDEO_MAKER_DIR / rel)
+                    # 썸네일은 첫 프레임으로 만들고, 인트로는 이 클립 자체를 2초 쓴다.
+                    cover_clip = VIDEO_MAKER_DIR / rel
+                    cover_source = _first_frame_bytes(cover_clip)
                 items.append((rel, meta))
                 continue
             # 상한+1바이트까지만 읽어 초과분을 메모리에 올리지 않는다(대표 사진과 같은 방식).
@@ -1696,10 +1846,12 @@ def start_render_photos_only(
             raise BadRequestException("사진들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
 
         travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, bgm)
+        cover_path = _write_cover(job_dir, cover_source, title)
         return _spawn_render_job(
             db, travel_data_path, bgm_path, theme, user_idx, title,
             region=_region_of_trip(track_points),
-            cover_path=_write_cover(job_dir, cover_source, title),
+            cover_path=cover_path,
+            intro_source=_intro_source_path(job_dir, cover_path, cover_clip),
         )
     except Exception:
         # 여기까지 못 오면 렌더 job 이 없어 아무도 이 디렉터리를 치우지 않는다
@@ -1968,11 +2120,32 @@ def start_render_travel(
     )
     # 제목을 안 주면 여행 이름을 그대로 쓴다 — 이미 조회한 값이라 공짜다.
     # 지역도 마찬가지로 여행에 적힌 값을 먼저 쓰고, 없을 때만 좌표로 역지오코딩한다.
+    cover_title = _clean_title(title) or travel.title
+    cover_path = _write_cover(job_dir, _pick_travel_cover(images, fallback, downloaded), cover_title)
     return _spawn_render_job(
         db, travel_data_path, bgm_path, theme, user.user_idx,
-        _clean_title(title) or travel.title,
+        cover_title,
         region=(travel.region or "").strip() or _region_of_trip(track_points),
+        cover_path=cover_path,
+        intro_source=_intro_source_path(job_dir, cover_path),
     )
+
+
+def _pick_travel_cover(images: list, fallback: dict, downloaded: dict) -> bytes | None:
+    """여행 렌더의 표지로 쓸 사진 하나를 **무작위로** 고른다. 쓸 게 없으면 None.
+
+    이 경로엔 사용자가 파일을 고르는 화면이 없어(travel_idx 하나만 보낸다) 번호를 받을
+    입구가 없다. 그래서 서버가 고르는데, 앞에서부터 집으면 늘 첫날 첫 일정 사진이라
+    같은 여행을 다시 렌더해도 표지가 똑같다 — 무작위면 다시 눌러 다른 표지를 받을 수 있다.
+
+    **내가 올린 사진을 먼저 본다.** 사진이 하나도 없는 일정은 관광 대표 이미지(fallback)로
+    메워지는데, 그건 남이 찍은 홍보 사진이라 표지로는 내 사진이 낫다.
+    """
+    mine = [downloaded.get(image.url) for image in images]
+    pool = [content for content in mine if content] or [
+        downloaded.get(url) for url in fallback.values() if url and downloaded.get(url)
+    ]
+    return random.choice(pool) if pool else None
 
 
 # --------------------------------------------------------------------------- #
@@ -2024,11 +2197,13 @@ def start_render_promo(db: Session, user_idx: int, req: PromoRenderRequest) -> d
             raise BadRequestException("지점들이 모두 같은 장소라 이동 경로를 만들 수 없습니다.")
 
         travel_data_path, bgm_path = _write_travel_data(job_dir, track_points, media_points, req.bgm)
+        cover_path = _write_cover(job_dir, cover_source, req.title)
         return _spawn_render_job(
             db, travel_data_path, bgm_path, theme, user_idx, req.title,
             region=(req.region or "").strip() or _region_of_trip(track_points),
             max_video_seconds=PROMO_VIDEO_SECONDS,
-            cover_path=_write_cover(job_dir, cover_source, req.title),
+            cover_path=cover_path,
+            intro_source=_intro_source_path(job_dir, cover_path),
         )
     except Exception:
         shutil.rmtree(job_dir, ignore_errors=True)  # 렌더 job 이 안 떴으면 아무도 안 치운다
@@ -2247,6 +2422,7 @@ def _render_job(job: dict, command: list[str]) -> None:
     update(percent=99.0, phase="영상 업로드(버킷)")
     video_path = OUTPUT_DIR / output_name
     try:
+        _prepend_cover_intro(video_path, job)  # TRAILER 대신 표지 2초 (실패해도 본편은 그대로)
         video_url = _publish_reels_video(job["reels_idx"], video_path, job.get("cover_path"))
         # GCS 에 올라갔으므로 로컬 사본은 지운다. 안 지우면 output/ 이 무한히
         # 쌓여 디스크가 찬다(영상 1편이 수십 MB). 실패 시엔 남겨서 받을 수 있게 둔다.
