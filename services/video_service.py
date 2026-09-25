@@ -78,6 +78,8 @@ OUTPUT_DIR = VIDEO_MAKER_DIR / "output"
 MAP_THEMES_JS = VIDEO_MAKER_DIR / "map_themes.js"
 # 배포된 Modal 함수를 호출하는 러너 (사전 1회: modal deploy modal_render.py)
 MODAL_CALL_SCRIPT = VIDEO_MAKER_DIR / "modal_call.py"
+# 로컬 GPU 렌더러 — VIDEO_ENGINE=local 일 때만 쓴다 (_engine 참고).
+RENDER_SCRIPT = VIDEO_MAKER_DIR / "render_video.py"
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
@@ -490,10 +492,21 @@ def _render_python() -> str:
     return Config.read("videomaker", "python", default=sys.executable) or sys.executable
 
 
+def _engine() -> str:
+    """렌더 엔진 — 기본 "modal", VIDEO_ENGINE=local 이면 이 서버의 GPU 로 돌린다.
+
+    로컬은 **개발 기기에서 눈으로 확인하려고** 두는 경로다: render_video.py 를 직접
+    띄우면 --gpu-mode 기본값 auto(Windows 에서 --use-angle=d3d11)로 로컬 GPU 를 쓴다.
+    폼·스키마를 안 건드리고 환경변수 하나로만 갈리므로, 서버엔 이 값을 넣지 않는
+    한 배포 동작은 그대로 modal 이다.
+    """
+    return "local" if os.getenv("VIDEO_ENGINE", "").strip().lower() == "local" else "modal"
+
+
 def _build_command(
     travel_data_path: Path, theme: str, max_video_seconds: float | None = None
 ) -> list[str]:
-    """Modal 렌더 명령을 만든다.
+    """렌더 명령을 만든다 (기본 Modal, VIDEO_ENGINE=local 이면 로컬 GPU).
 
     화질은 항상 quality-fast(JPEG q95, 풀해상도) — 무손실 PNG 대비 최종 mp4
     화질 차이가 사실상 없고 렌더가 크게 빠르다(modal_call.py 의 기본 --mode).
@@ -501,17 +514,23 @@ def _build_command(
     max_video_seconds 를 주면 **조각을 나누지 않는다**(--max-chunks 1) — 길이 상한은
     render_video 가 조각 하나 안에서 걸어서, 2조각으로 나누면 상한이 조각마다 따로
     걸려 전체는 두 배가 된다. 정확한 길이가 중요한 홍보 영상만 이 값을 준다.
+    로컬은 애초에 한 프로세스가 통째로 렌더하므로 조각 옵션 자체가 없다.
     """
+    local = _engine() == "local"
     command = [
         _render_python(),
-        str(MODAL_CALL_SCRIPT),
+        str(RENDER_SCRIPT if local else MODAL_CALL_SCRIPT),
         "--travel-data",
         travel_data_path.relative_to(VIDEO_MAKER_DIR).as_posix(),
     ]
+    if local:
+        command += ["--quality-fast"]  # modal_call 은 이게 기본이라 로컬만 명시한다
     if theme != "default":
         command += ["--theme", theme]
     if max_video_seconds is not None:
-        command += ["--max-video-seconds", str(max_video_seconds), "--max-chunks", "1"]
+        command += ["--max-video-seconds", str(max_video_seconds)]
+        if not local:
+            command += ["--max-chunks", "1"]
     # TRAILER 인트로는 항상 붙이고, 아웃트로는 붙이지 않는다.
     command += ["--intro"]
     return command
@@ -520,10 +539,13 @@ def _build_command(
 def _parse_output_name(stdout: str) -> str | None:
     """렌더 서브프로세스 stdout 에서 완성 파일명을 뽑는다.
 
-    modal_call.py 가 조각을 합친 뒤 "저장 위치: <path>" 를 출력한다
-    (컨테이너가 찍는 "출력 예정 파일" 은 /app 경로라 로컬 파일이 아니다).
+    modal_call.py 가 조각을 합친 뒤 "저장 위치: <path>" 를 출력한다. 로컬 엔진
+    (render_video.py 직접 실행)은 그 줄이 없고 "출력 예정 파일: <path>" 만 찍는다 —
+    Modal 경로에서는 그게 컨테이너 안 /app 경로라 쓸 수 없어 "저장 위치" 를 먼저 본다.
     """
     match = re.search(r"저장 위치:\s*(.+)", stdout)
+    if match is None and _engine() == "local":
+        match = re.search(r"출력 예정 파일:\s*(.+)", stdout)
     if match:
         return Path(match.group(1).strip()).name
     # 폴백: output/ 의 가장 최근 mp4.
@@ -1142,7 +1164,7 @@ def _new_job(reels_idx: int, user_idx: int | None, **overrides) -> dict:
         "started_at": time.time(),
         "elapsed_seconds": 0.0,
         "eta_seconds": None,
-        "engine": "modal",
+        "engine": _engine(),
         "theme": "default",
         "bgm": None,
         "video_url": None,
@@ -2043,7 +2065,7 @@ def _status_from_reels(reels) -> dict[str, object]:
         "total_frames": None,
         "elapsed_seconds": 0.0,
         "eta_seconds": 0.0 if done else None,
-        "engine": "modal",
+        "engine": _engine(),
         "theme": "",
         "bgm": None,
         "video_url": reels.url or None,

@@ -188,7 +188,11 @@ class VideoRenderStatusResponse(BaseModel):
     total_frames: int | None = Field(None, description="전체 프레임 수 (프레임 단계 진입 전엔 null)")
     elapsed_seconds: float = Field(..., description="경과 시간(초)")
     eta_seconds: float | None = Field(None, description="예상 남은 시간(초) — 초반·완료 후엔 null 또는 0")
-    engine: str = Field(..., description='렌더 엔진 — 항상 "modal" (Modal T4 클라우드 전용)')
+    engine: str = Field(
+        ...,
+        description='렌더 엔진 — 배포 서버는 항상 "modal"(Modal T4 클라우드). 개발 기기에서 '
+                    'VIDEO_ENGINE=local 로 띄우면 "local"(그 기기의 GPU)이 나온다',
+    )
     theme: str = Field(..., description="지도 계절 테마 (진행 정보가 없는 unknown 상태면 빈 문자열)")
     bgm: str | None = Field(None, description="BGM 파일명 (없으면 null)")
     video_url: str | None = Field(
