@@ -1544,6 +1544,39 @@ def _encode_intro_clip(
     _run_ffmpeg([*args, *audio_args, "-movflags", "+faststart", str(target)])
 
 
+def _remux_bgm(video_path: Path, bgm_name: str | None) -> None:
+    """인트로까지 포함한 전체 길이에 BGM 을 다시 얹는다 (in place).
+
+    인트로 클립의 오디오는 concat 을 위해 넣은 **무음** 트랙이라, 그대로 두면 앞 2초가
+    조용하다. 본편의 BGM 을 앞으로 당길 방법은 없으니(렌더가 이미 구워 보냈다) 합쳐진
+    영상에 처음부터 다시 깐다 — 영상은 stream copy 라 화질 손실도 재인코딩 비용도 없고,
+    페이드아웃도 늘어난 길이에 맞춰 다시 걸린다.
+
+    render_video.mux_bgm_into_video 와 같은 동작이지만 그 모듈은 playwright 를 끌어오므로
+    (이 서버엔 없을 수 있다) 여기 같은 명령을 둔다.
+    """
+    if not bgm_name:
+        return  # 무음 렌더 — 인트로도 무음인 게 맞다
+    bgm_path = BGM_DIR / bgm_name
+    if not bgm_path.is_file():
+        logger.warning("BGM 파일이 없어 인트로 구간이 무음으로 남습니다: %s", bgm_name)
+        return
+
+    duration = float(_ffprobe_video(video_path)["duration"])
+    fade_out = 2.0
+    audio_filters = (
+        ["-af", f"afade=t=out:st={max(0.0, duration - fade_out):.3f}:d={fade_out:.3f}"]
+        if duration > fade_out else []
+    )
+    muxed = video_path.with_name(f"{video_path.stem}.bgm{video_path.suffix}")
+    _run_ffmpeg([
+        "-i", str(video_path), "-stream_loop", "-1", "-i", str(bgm_path),
+        "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        *audio_filters, "-shortest", "-movflags", "+faststart", str(muxed),
+    ])
+    muxed.replace(video_path)
+
+
 def _prepend_cover_intro(video_path: Path, job: dict) -> None:
     """완성 영상 앞에 표지 인트로 2초를 붙인다 (in place). 실패해도 본편은 그대로 둔다.
 
@@ -1556,7 +1589,10 @@ def _prepend_cover_intro(video_path: Path, job: dict) -> None:
     source_path = job.get("intro_source")
     if not source_path or not Path(source_path).exists():
         return
-    source = Path(source_path)
+    # concat 목록 파일은 상대 경로를 **목록 파일이 있는 디렉터리 기준**으로 푼다 —
+    # 상대 경로로 들어오면 본편을 못 찾고 인트로만 남는다. 절대 경로로 못 박고 간다.
+    video_path = video_path.resolve()
+    source = Path(source_path).resolve()
     title = job.get("title") or ""
     try:
         intro_module = _intro_video()
@@ -1605,9 +1641,13 @@ def _prepend_cover_intro(video_path: Path, job: dict) -> None:
         )
 
         _encode_intro_clip(args, filters, intro_path, info, timescale, audio_spec)
+        # 합치는 자리는 job_dir 이 아니라 **영상 옆**이다 — concat_replace 는 결과를
+        # os.replace 로 덮어쓰는데, 두 경로가 다른 볼륨이면 그건 실패한다(WinError 17).
         intro_module.concat_replace(
-            shutil.which("ffmpeg"), [intro_path, video_path], video_path, work, "cover_intro"
+            shutil.which("ffmpeg"), [intro_path, video_path], video_path,
+            video_path.parent, "cover_intro",
         )
+        _remux_bgm(video_path, job.get("bgm"))  # 인트로 2초도 BGM 이 나오게
     except Exception:
         # 인트로는 부가 연출이라 여기서 실패해도 본편은 그대로 올라가야 한다.
         logger.warning("표지 인트로 합성 실패(무시): reels_idx=%s", job.get("reels_idx"))
