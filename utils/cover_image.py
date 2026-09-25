@@ -125,48 +125,103 @@ def _draw_tracked(draw: ImageDraw.ImageDraw, xy, text: str, font, fill, tracking
         x += draw.textlength(char, font=font) + tracking
 
 
-def _draw_title(image: Image.Image, title: str) -> None:
-    """상단에 흰 제목을 얹는다(제자리 수정). 폰트를 못 찾으면 아무것도 안 그린다."""
+def _title_layer(width: int, height: int, title: str, luma: float) -> Image.Image | None:
+    """제목 띠(RGBA, width × 상단 TITLE_BAND)를 따로 그린다. 폰트가 없으면 None.
+
+    luma 는 이 띠가 덮을 바탕의 평균 밝기다 — 밝을수록 어두운 그라데이션을 진하게 깐다.
+    사진 위에 직접 그리지 않고 층으로 떼어 둔 건 **영상 인트로가 같은 글씨를 ffmpeg
+    overlay 로 얹어야** 해서다. 글씨를 그리는 코드가 둘로 갈라지면 표지와 인트로의
+    제목 모양이 서로 어긋난다.
+    """
     font_path = _find_font_path()
     if font_path is None:
         logger.warning("표지 제목용 한글 폰트를 찾지 못해 제목을 생략합니다.")
-        return
+        return None
 
-    band = round(image.height * TITLE_BAND)
-    strength = _scrim_strength(_band_luma(image, band))
+    band = round(height * TITLE_BAND)
+    layer = Image.new("RGBA", (width, band), (0, 0, 0, 0))
+    strength = _scrim_strength(luma)
     if strength > 0:
-        shade = _gradient(image.width, band, strength, top_dark=True)
-        image.paste(Image.new("RGB", (image.width, band), (8, 14, 24)), (0, 0), shade)
+        shade = _gradient(width, band, strength, top_dark=True)
+        layer.paste(Image.new("RGB", (width, band), (8, 14, 24)), (0, 0), shade)
 
-    size = round(image.width * TITLE_SIZE)
-    draw = ImageDraw.Draw(image)
+    size = round(width * TITLE_SIZE)
+    draw = ImageDraw.Draw(layer)
     font = ImageFont.truetype(font_path, size)
     # 긴 제목은 폭 84% 안에 들어올 때까지 줄인다(너무 작아지면 포기하고 그대로 둔다).
-    while size > round(image.width * 0.045) and _text_width(
+    while size > round(width * 0.045) and _text_width(
         draw, title, font, size * TITLE_TRACKING
-    ) > image.width * 0.84:
+    ) > width * 0.84:
         size -= 2
         font = ImageFont.truetype(font_path, size)
 
-    center = (image.width / 2, band * 0.52)
+    center = (width / 2, band * 0.52)
     tracking = size * TITLE_TRACKING
     # 그림자는 그라데이션이 0일 때(어두운 사진)도 글자 경계를 살려 준다.
     _draw_tracked(draw, (center[0] + 2, center[1] + 2), title, font, (0, 0, 0, 120), tracking)
-    _draw_tracked(draw, center, title, font, (255, 255, 255), tracking)
+    _draw_tracked(draw, center, title, font, (255, 255, 255, 255), tracking)
+    return layer
 
 
-def build_cover(image_bytes: bytes, title: str | None = None) -> bytes | None:
+def _draw_title(image: Image.Image, title: str) -> None:
+    """상단에 흰 제목을 얹는다(제자리 수정). 폰트를 못 찾으면 아무것도 안 그린다."""
+    band = round(image.height * TITLE_BAND)
+    layer = _title_layer(image.width, image.height, title, _band_luma(image, band))
+    if layer is None:
+        return
+    box = (0, 0, layer.width, layer.height)
+    merged = Image.alpha_composite(image.crop(box).convert("RGBA"), layer)
+    image.paste(merged.convert("RGB"), box)
+
+
+def build_title_overlay(
+    width: int, height: int, title: str, base_bytes: bytes | None = None
+) -> bytes | None:
+    """영상 위에 얹을 제목 층을 **투명 PNG 바이트**로 만든다. 못 만들면 None.
+
+    base_bytes(보통 영상 첫 프레임)를 주면 그 밝기로 그라데이션 세기를 정한다 —
+    밝은 하늘로 시작하는 영상에서 흰 제목이 묻히지 않게. 없으면 중간 밝기로 본다.
+    """
+    name = (title or "").strip()
+    if not name:
+        return None
+    try:
+        luma = 160.0
+        if base_bytes:
+            with Image.open(io.BytesIO(base_bytes)) as base:
+                frame = base.convert("RGB").resize((width, height), Image.Resampling.BILINEAR)
+                luma = _band_luma(frame, round(height * TITLE_BAND))
+        layer = _title_layer(width, height, name, luma)
+        if layer is None:
+            return None
+        # 영상 프레임 전체에 그대로 겹치도록 위쪽에만 띠가 있는 전체 크기 캔버스로 만든다.
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        canvas.paste(layer, (0, 0))
+        buffer = io.BytesIO()
+        canvas.save(buffer, format="PNG")
+        return buffer.getvalue()
+    except Exception:
+        logger.warning("인트로 제목 오버레이 생성 실패(무시)", exc_info=True)
+        return None
+
+
+def build_cover(
+    image_bytes: bytes, title: str | None = None, size: tuple[int, int] | None = None
+) -> bytes | None:
     """대표 사진 바이트 → 보정·제목을 얹은 표지 JPEG 바이트. 실패하면 None.
 
     title 이 비어 있으면 사진만 보정해 돌려준다(제목 없는 릴스가 있다).
+    size 를 주면 그 크기로 만든다 — 썸네일은 기본(540x960)이고 영상 인트로는 본편
+    해상도를 준다(썸네일을 2배로 늘리면 글씨가 뭉개진다).
     표지는 부가 정보라 여기서 죽으면 안 된다 — 예외를 삼키고 None 을 주면
     호출 측이 완성 영상에서 프레임을 뽑는 기존 경로로 돌아간다.
     """
+    width, height = size or (WIDTH, HEIGHT)
     try:
         with Image.open(io.BytesIO(image_bytes)) as raw:
             image = (ImageOps.exif_transpose(raw) or raw).convert("RGB")
             image = ImageOps.fit(
-                image, (WIDTH, HEIGHT), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5)
+                image, (width, height), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5)
             )
         image = _cool_filter(image)
 
@@ -175,9 +230,9 @@ def build_cover(image_bytes: bytes, title: str | None = None) -> bytes | None:
             _draw_title(image, name)
         else:
             # 제목이 없으면 어둡게 깔 이유가 없다 — 상단을 살짝 밝혀 청량함만 더한다.
-            band = round(HEIGHT * 0.22)
-            glow = _gradient(WIDTH, band, TOP_GLOW, top_dark=True)
-            image.paste(Image.new("RGB", (WIDTH, band), (255, 255, 255)), (0, 0), glow)
+            band = round(height * 0.22)
+            glow = _gradient(width, band, TOP_GLOW, top_dark=True)
+            image.paste(Image.new("RGB", (width, band), (255, 255, 255)), (0, 0), glow)
 
         buffer = io.BytesIO()
         image.save(buffer, format="JPEG", quality=88, optimize=True)
