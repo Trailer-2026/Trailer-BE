@@ -6,6 +6,7 @@
 """
 import io
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -39,6 +40,27 @@ def _make_video(path: Path, seconds: float, with_audio: bool) -> None:
 
 def _duration(path: Path) -> float:
     return float(video_service._ffprobe_video(path)["duration"])
+
+
+def _make_bgm(path: Path, seconds: float = 6.0) -> None:
+    """테스트용 BGM — 들리는 소리가 있어야 '인트로가 무음인지'를 판별할 수 있다."""
+    video_service._run_ffmpeg([
+        "-f", "lavfi", "-t", f"{seconds:.3f}", "-i", "sine=frequency=440:sample_rate=44100",
+        "-c:a", "libmp3lame", "-b:a", "128k", str(path),
+    ])
+
+
+def _peak_db(video: Path, start: float, end: float) -> float:
+    """구간 [start, end) 의 최대 음량(dBFS). 무음이면 -91 쯤 나온다."""
+    result = subprocess.run(
+        [shutil.which("ffmpeg"), "-hide_banner", "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
+         "-i", str(video), "-af", "volumedetect", "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    for line in (result.stderr or "").splitlines():
+        if "max_volume:" in line:
+            return float(line.split("max_volume:")[1].strip().split()[0])
+    return -91.0
 
 
 def _run_case(label: str, cover_is_video: bool, with_audio: bool, title: str | None) -> None:
@@ -100,6 +122,53 @@ def test_missing_source_is_noop():
         )
         assert abs(_duration(main) - before) < 0.01, "원본이 없는데 본편이 바뀌었다"
         print("  ok  원본 없음 → 무동작")
+
+
+def test_bgm_plays_during_intro():
+    """BGM 이 있는 렌더는 **인트로 2초에도 소리가 나야** 한다 (무음 트랙으로 남으면 안 된다)."""
+    with tempfile.TemporaryDirectory() as temp:
+        work = Path(temp)
+        bgm_dir = work / "bgm"
+        bgm_dir.mkdir()
+        bgm = bgm_dir / "test.mp3"
+        _make_bgm(bgm)
+
+        main = work / "main.mp4"
+        _make_video(main, MAIN_SECONDS, with_audio=True)  # 무음 AAC 트랙(렌더 직후 상태)
+        source = work / video_service.COVER_SOURCE_NAME
+        _make_photo(source)
+
+        original = video_service.BGM_DIR
+        video_service.BGM_DIR = bgm_dir
+        try:
+            video_service._prepend_cover_intro(
+                main, {"intro_source": str(source), "title": "동해",
+                       "bgm": "test.mp3", "reels_idx": 1}
+            )
+        finally:
+            video_service.BGM_DIR = original
+
+        intro_peak = _peak_db(main, 0.2, 1.8)
+        body_peak = _peak_db(main, 2.5, 4.0)
+        assert intro_peak > -40, f"인트로 구간이 무음이다 (max {intro_peak}dB)"
+        assert body_peak > -40, f"본편 구간이 무음이다 (max {body_peak}dB)"
+        print(f"  ok  인트로 BGM (인트로 {intro_peak:.1f}dB / 본편 {body_peak:.1f}dB)")
+
+
+def test_no_bgm_stays_silent():
+    """BGM 이 없는 렌더는 그대로 둔다 — 없는 파일을 찾다 깨지면 안 된다."""
+    with tempfile.TemporaryDirectory() as temp:
+        work = Path(temp)
+        main = work / "main.mp4"
+        _make_video(main, MAIN_SECONDS, with_audio=False)
+        source = work / video_service.COVER_SOURCE_NAME
+        _make_photo(source)
+        video_service._prepend_cover_intro(
+            main, {"intro_source": str(source), "title": "동해",
+                   "bgm": "없는곡.mp3", "reels_idx": 1}
+        )
+        assert abs(_duration(main) - (MAIN_SECONDS + video_service.INTRO_SECONDS)) < TOLERANCE
+        print("  ok  BGM 없음 → 인트로는 붙고 무음 유지")
 
 
 def test_title_overlay_is_transparent_png():
