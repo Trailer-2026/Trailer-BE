@@ -188,7 +188,11 @@ class VideoRenderStatusResponse(BaseModel):
     total_frames: int | None = Field(None, description="전체 프레임 수 (프레임 단계 진입 전엔 null)")
     elapsed_seconds: float = Field(..., description="경과 시간(초)")
     eta_seconds: float | None = Field(None, description="예상 남은 시간(초) — 초반·완료 후엔 null 또는 0")
-    engine: str = Field(..., description='렌더 엔진 — 항상 "modal" (Modal T4 클라우드 전용)')
+    engine: str = Field(
+        ...,
+        description='렌더 엔진 — 배포 서버는 항상 "modal"(Modal T4 클라우드). 개발 기기에서 '
+                    'VIDEO_ENGINE=local 로 띄우면 "local"(그 기기의 GPU)이 나온다',
+    )
     theme: str = Field(..., description="지도 계절 테마 (진행 정보가 없는 unknown 상태면 빈 문자열)")
     bgm: str | None = Field(None, description="BGM 파일명 (없으면 null)")
     video_url: str | None = Field(
@@ -225,5 +229,12 @@ class PromoRenderRequest(BaseModel):
     points: list[PromoPoint] = Field(
         ..., min_length=2, max_length=6,
         description="코스 지점 순서대로 2~6개. 지점당 사진 1장이 2.8초를 차지한다. 6개면 이동까지 합쳐 24초쯤이라 30초 안에 여유 있게 들어간다",
+    )
+    cover_index: int | None = Field(
+        None, ge=1,
+        description="릴스 표지(썸네일)로 쓸 지점 번호 (1부터, 생략하면 1번). 그 지점 이미지에 "
+                    "청량한 보정과 제목을 얹어 썸네일로 씁니다. 이미지가 없는 지점이면 완성 "
+                    "영상에서 프레임을 뽑습니다",
+        examples=[1],
     )
 
