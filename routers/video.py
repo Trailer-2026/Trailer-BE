@@ -56,6 +56,18 @@ def _title_form(extra: str = ""):
     )
 
 
+def _cover_index_form():
+    return Form(
+        None,
+        ge=1,
+        description="릴스 표지(썸네일)로 쓸 파일 번호 — **보낸 순서대로 1부터**, 생략하면 1번. "
+                    "그 사진에 청량한 보정과 제목(title)을 얹어 썸네일로 씁니다. "
+                    "GPS 가 없어 영상에서 빠지는 사진이어도 표지로는 쓸 수 있고, "
+                    "영상을 가리키면 그 영상의 첫 프레임을 씁니다. title 이 비어 있으면 "
+                    "글씨 없이 보정만 합니다",
+    )
+
+
 # photos-only·photos-ordered 공통 영상 클립 규칙 (description 뒤에 붙인다).
 _CLIP_RULES = (
     "**영상도 photos 에 섞어 보낼 수 있습니다** (mp4/mov/m4v/webm). "
@@ -160,6 +172,7 @@ def render_video_photos_only(
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
     title: str = _title_form(),
+    cover_index: int | None = _cover_index_form(),
     photos: list[UploadFile] = File(..., description="여행 사진·영상들 (GPS 필요, 합쳐서 최소 2개·최대 30개, 사진은 장당 10MB 이하, 요청 전체 100MB 이하)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -174,6 +187,7 @@ def render_video_photos_only(
         start_name=start_name,
         start_latitude=start_latitude,
         start_longitude=start_longitude,
+        cover_index=cover_index,
     )
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
 
@@ -210,6 +224,7 @@ def render_video_photos_ordered(
     bgm: str = _bgm_form(),
     theme: str = _theme_form(),
     title: str = _title_form(),
+    cover_index: int | None = _cover_index_form(),
     photos: list[UploadFile] = File(..., description="여행 사진·영상들 (합쳐서 최소 2개·최대 30개, 사진은 장당 10MB 이하, 요청 전체 100MB 이하) — 보낸 순서가 곧 영상 순서"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -225,6 +240,7 @@ def render_video_photos_ordered(
         start_latitude=start_latitude,
         start_longitude=start_longitude,
         sort_by_time=False,
+        cover_index=cover_index,
     )
     return CommonResponse.success_response("영상 렌더링 시작", data=job)
 

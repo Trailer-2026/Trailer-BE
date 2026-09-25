@@ -190,6 +190,36 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 - **매칭 전제**: TAGO `trainno` == 운행정보 `trn_no`(동일 코레일 번호 체계, 검증됨). 역명도 양쪽 "서울/부산"처럼 접미사 없는 동일 형식이라 바로 조인(단 DB `station.station_name`은 "서울역"이라 그쪽 매칭엔 접미사 처리 필요 — `train_stop.stn_nm`은 접미사 없음).
 - **전량 교체(하드 삭제)**: `replace_all`은 참조 데이터 스냅샷 갱신이라 소프트 삭제가 아닌 `delete()` 후 재적재다(`station`과 같은 성격 — 소프트삭제 불변식의 의도적 예외). 읽기 DAO는 관례상 `deleted_at.is_(None)`을 유지한다.
 
+## 릴스 표지 — 썸네일과 인트로는 사진 한 장에서 나온다
+
+사용자가 고른 **대표 사진** 하나로 두 가지를 만든다: 홈 카드용 썸네일(`reels.thumbnail_url`)과 영상 맨 앞 **2초 인트로**. 둘 다 `utils/cover_image.py` 가 같은 글씨·보정을 그리므로 카드와 영상 첫 장면이 어긋나지 않는다.
+
+| | 썸네일 | 인트로 |
+|---|---|---|
+| 크기 | 540×960 | 본편 해상도(보통 1080×1920) |
+| 대표가 사진 | 청량 보정 + 제목 | 같은 그림 정지 2초 |
+| 대표가 영상 | 첫 프레임에 보정 + 제목 | 그 영상 앞 2초 + **제목만**(보정·소리 없음) |
+| 못 만들면 | 완성 영상 3.5초 프레임(기존 경로) | 안 붙임 → TRAILER 인트로가 대신 붙음 |
+
+**입력**: `cover_index` — photos-only·photos-ordered 는 폼 필드, promo 는 요청 본문. **1부터**, 안 주면 1번. travel 은 파일을 고르는 화면이 없어 **서버가 무작위로** 뽑는다(관광 대표 이미지보다 내가 올린 사진 우선). 범위 밖이면 400.
+
+**유의할 점**
+
+- **TRAILER 인트로를 대신한다.** 표지를 만든 렌더는 렌더 명령에서 `--intro` 를 빼고(`_build_command(trailer_intro=...)`), 못 만든 렌더만 예전처럼 TRAILER 가 붙는다 — 인트로가 통째로 없는 영상이 나오지 않게. **브랜드 노출이 사라진 것은 의도한 선택**이다. 되돌리려면 `_spawn_render_job` 의 `trailer_intro=intro_source is None` 를 `True` 로 두면 `TRAILER → 표지 → 본편` 이 된다.
+- **합성은 Modal 이 아니라 이 서버가 한다.** `intro_video.py` 는 Pillow·subprocess 만 쓰므로 playwright 없이 import 된다(`_intro_video()`). 본편과 같은 코덱 파라미터로 2초 클립만 인코딩해 stream copy concat 하므로 **본편은 재인코딩하지 않고**, 렌더 코드가 그대로라 `modal deploy` 도 필요 없다. 타임스케일을 본편에서 probe 해 맞추지 않으면 concat 뒤 본편 재생 속도가 틀어진다.
+- **본편으로는 하드컷이다.** 전환 효과를 넣었다가 뺐다(`480291f` 에 크로스페이드 구현이 있다).
+- **BGM 은 합친 뒤 다시 깐다**(`_remux_bgm`). 인트로 클립의 오디오는 concat 용 무음 트랙이라 그냥 두면 앞 2초가 조용하다. 본편 BGM 을 앞으로 당길 방법이 없어(렌더가 이미 구워 보낸다) 전체에 새로 얹는다 — 영상은 stream copy 라 화질 손실이 없고 끝 페이드아웃도 늘어난 길이에 맞춰 다시 걸린다.
+- **표지는 요청 시점에 만들고 올리는 건 렌더가 끝난 뒤다.** 원본 바이트를 `job_dir/cover_src.bin` 에 남겨 두는 건 인트로를 본편 해상도로 다시 그려야 해서다(540 썸네일을 늘리면 글씨가 뭉갠다). 렌더가 실패하면 `job_dir` 째 지워져 **고아 GCS 객체가 안 생긴다**.
+- **대표가 GPS 없는 사진이어도 표지로 쓴다** — 사용자가 고른 건 '예쁜 사진'이지 '좌표 있는 사진'이 아니다. 그 사진은 영상 경로에는 안 들어간다.
+- **폰트는 레포에 들어 있다**(`assets/fonts/`, 기본 `Handwriting.ttf` = 이서윤체). 시스템 폰트에 기대면 개발 기기·서버·Modal 이 서로 다른 글씨를 쓰고, 서버에 한글 폰트가 없으면 제목이 통째로 빠진다(경고 로그만 남는다). 글씨체는 `cover_image.TITLE_FONT` 한 줄로 바꾼다. **공개 저장소라 재배포 허용 서체만** 넣는다 — 출처·라이선스는 `assets/fonts/README.md`.
+- **영상 도중 사진 위 장소명도 같은 글씨체다.** 첫 장면 제목과 본편 라벨이 다른 글씨면 한 영상으로 안 보인다. 다만 렌더러(`services/videoMaker/render_video.py`)는 Modal 컨테이너에서 **단독으로** 돌아가 `utils` 를 import 할 수 없어 상수가 둘로 나뉘어 있다(`cover_image.TITLE_FONT` ↔ `render_video.LABEL_FONT`) — **한쪽만 고치면 조용히 갈린다**(`tests/test_label_font.py` 가 잡는다). 폰트 파일도 렌더러 디렉터리 밖이라 `modal_render.py` 가 따로 `/app/assets/fonts` 로 올리고, **바꾸면 `modal deploy` 를 다시 해야** 한다 — 안 하면 컨테이너의 Noto 고딕으로 에러 없이 떨어져 배포 영상의 라벨만 글씨가 다르다.
+- **흰 제목이 묻히는지는 상수가 아니라 실제 픽셀로 판단한다** — 상단 띠의 평균 휘도를 재서 밝을수록 어두운 그라데이션을 진하게 깐다(`_scrim_strength`). 어두운 사진엔 아무것도 깔지 않는다.
+- **인트로 합성은 실패해도 조용하다**(경고 로그 + 본편 그대로 업로드). 그래서 경로 문제가 눈에 안 띈다 — concat 목록 파일은 상대 경로를 목록 파일 기준으로 풀고, 결과를 `os.replace` 로 덮어쓰므로 **절대 경로 · 같은 볼륨**이어야 한다(둘 다 방어해 뒀다).
+
+## 로컬 GPU 렌더 (`VIDEO_ENGINE=local`)
+
+기본은 Modal T4 지만 `VIDEO_ENGINE=local` 이면 `render_video.py` 를 직접 띄운다 — `--gpu-mode` 기본값 auto 가 Windows 에서 `--use-angle=d3d11` 이라 그 기기 GPU 를 쓴다. 개발 기기에서 결과를 눈으로 확인하는 용도다. 폼·스키마를 안 건드리고 환경변수 하나로만 갈리므로 **서버에 이 값을 넣지 않는 한 배포 동작은 그대로 Modal** 이다. 조각 분할(`--max-chunks`)은 Modal 전용이라 로컬에선 빼고, 완성 파일명도 로컬이 찍는 `"출력 예정 파일"` 마커를 읽는다.
+
 ## Conventions
 
 - Commits: `<emoji> [Type] 제목` (Feat/Fix/Docs/Refactor/Chore… see README). `.githooks/prepare-commit-msg` auto-prepends `[TRA-NNN]` from branch. Imperative, ≤50 chars, no trailing period.

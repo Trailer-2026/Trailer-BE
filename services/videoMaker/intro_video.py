@@ -416,7 +416,9 @@ def concat_replace(
             "-c", "copy", "-movflags", "+faststart",
             str(joined_path),
         ],
-        capture_output=True, text=True, check=False,
+        # encoding 을 못 박지 않으면 Windows 기본 코덱(cp949)으로 디코드하다 경로에 한글이
+        # 섞이는 순간 UnicodeDecodeError 로 죽는다 — concat 자체는 성공했는데도.
+        capture_output=True, text=True, check=False, encoding="utf-8", errors="replace",
     )
     list_path.unlink(missing_ok=True)
     if result.returncode != 0:
