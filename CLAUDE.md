@@ -212,6 +212,7 @@ Trailer = FastAPI backend (smart train-travel platform). Korean is primary for d
 - **표지는 요청 시점에 만들고 올리는 건 렌더가 끝난 뒤다.** 원본 바이트를 `job_dir/cover_src.bin` 에 남겨 두는 건 인트로를 본편 해상도로 다시 그려야 해서다(540 썸네일을 늘리면 글씨가 뭉갠다). 렌더가 실패하면 `job_dir` 째 지워져 **고아 GCS 객체가 안 생긴다**.
 - **대표가 GPS 없는 사진이어도 표지로 쓴다** — 사용자가 고른 건 '예쁜 사진'이지 '좌표 있는 사진'이 아니다. 그 사진은 영상 경로에는 안 들어간다.
 - **폰트는 레포에 들어 있다**(`assets/fonts/`, 기본 `Handwriting.ttf` = 이서윤체). 시스템 폰트에 기대면 개발 기기·서버·Modal 이 서로 다른 글씨를 쓰고, 서버에 한글 폰트가 없으면 제목이 통째로 빠진다(경고 로그만 남는다). 글씨체는 `cover_image.TITLE_FONT` 한 줄로 바꾼다. **공개 저장소라 재배포 허용 서체만** 넣는다 — 출처·라이선스는 `assets/fonts/README.md`.
+- **영상 도중 사진 위 장소명도 같은 글씨체다.** 첫 장면 제목과 본편 라벨이 다른 글씨면 한 영상으로 안 보인다. 다만 렌더러(`services/videoMaker/render_video.py`)는 Modal 컨테이너에서 **단독으로** 돌아가 `utils` 를 import 할 수 없어 상수가 둘로 나뉘어 있다(`cover_image.TITLE_FONT` ↔ `render_video.LABEL_FONT`) — **한쪽만 고치면 조용히 갈린다**(`tests/test_label_font.py` 가 잡는다). 폰트 파일도 렌더러 디렉터리 밖이라 `modal_render.py` 가 따로 `/app/assets/fonts` 로 올리고, **바꾸면 `modal deploy` 를 다시 해야** 한다 — 안 하면 컨테이너의 Noto 고딕으로 에러 없이 떨어져 배포 영상의 라벨만 글씨가 다르다.
 - **흰 제목이 묻히는지는 상수가 아니라 실제 픽셀로 판단한다** — 상단 띠의 평균 휘도를 재서 밝을수록 어두운 그라데이션을 진하게 깐다(`_scrim_strength`). 어두운 사진엔 아무것도 깔지 않는다.
 - **인트로 합성은 실패해도 조용하다**(경고 로그 + 본편 그대로 업로드). 그래서 경로 문제가 눈에 안 띈다 — concat 목록 파일은 상대 경로를 목록 파일 기준으로 풀고, 결과를 `os.replace` 로 덮어쓰므로 **절대 경로 · 같은 볼륨**이어야 한다(둘 다 방어해 뒀다).
 
