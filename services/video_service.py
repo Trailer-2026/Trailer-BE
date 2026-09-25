@@ -512,8 +512,8 @@ def _build_command(
         command += ["--theme", theme]
     if max_video_seconds is not None:
         command += ["--max-video-seconds", str(max_video_seconds), "--max-chunks", "1"]
-    # TRAILER 인트로·아웃트로는 항상 붙인다.
-    command += ["--intro", "--outro"]
+    # TRAILER 인트로는 항상 붙이고, 아웃트로는 붙이지 않는다.
+    command += ["--intro"]
     return command
 
 
