@@ -1,0 +1,43 @@
+# 표지(썸네일) 글씨체
+
+`utils/cover_image.py` 가 릴스 표지에 제목을 그릴 때 쓰는 폰트들. **레포에 넣어 둔다** —
+개발 기기·배포 서버(GCP VM)·Modal 컨테이너가 저마다 다른 폰트를 갖고 있어서, 시스템
+폰트에 기대면 같은 제목이 환경마다 다르게 나오고 서버에 한글 폰트가 없으면 제목이 통째로
+사라진다(경고 로그만 남고 사진만 나간다).
+
+## 바꾸는 법
+
+`utils/cover_image.py` 의 `TITLE_FONT` 한 줄만 고친다.
+
+```python
+TITLE_FONT = "SeoulAlrim-Medium.otf"   # 이 폴더 안의 파일명
+```
+
+새 폰트를 추가할 땐 파일을 이 폴더에 넣고, 아래 표에 **출처와 라이선스를 반드시 적는다**
+— 이 저장소는 공개라 커밋한 폰트 파일이 그대로 재배포된다. "상업적 이용 무료"만으로는
+부족하고 **재배포(redistribution)가 허용**되어야 한다.
+
+## 들어 있는 폰트
+
+| 파일 | 서체 | 저작권자 | 라이선스 | 출처 |
+|---|---|---|---|---|
+| `Handwriting.ttf` | **이서윤체 (LeeSeoyun)** | 흥국생명 | 개인·기업 상업적 이용 무료, 폰트 파일 유료 판매 금지 | https://www.heungkuklife.co.kr |
+| `SeoulAlrim-Medium.otf` | 서울알림체 Medium | 서울특별시 | 서울서체 — 무료 사용·복제·배포 허용, 폰트 파일 자체의 유료 판매만 금지 | https://www.seoul.go.kr/seoul/font.do |
+| `Paperlogy-4Regular.ttf` | Paperlogy Regular | Lee Juim | **SIL Open Font License 1.1** (→ `OFL.txt`) | https://paperlogy.co.kr |
+
+`Handwriting.ttf` 는 **파일 이름만** 용도에 맞게 바꾼 것이다. 서체의 진짜 이름은 이서윤체
+(`LeeSeoyun`)이고 폰트 안의 name 테이블·저작권 표기도 원본 그대로다 — 무료 배포 조건이
+출처 유지라 **이 표의 저작권자·출처를 지우면 안 된다**. 우리가 만든 서체인 것처럼 쓰지 말 것.
+
+`OFL.txt` 는 Paperlogy 가 따르는 SIL OFL 1.1 전문이다. OFL 은 라이선스 전문 동봉을
+요구하므로 **Paperlogy 를 지우지 않는 한 같이 지우면 안 된다**.
+
+## 주의
+
+- **폰트 이름을 바꿔 쓰거나 판매하지 않는다.** 세 폰트 모두 무료 배포지만 폰트 파일
+  자체를 유료로 파는 것은 금지다. 우리는 글자를 이미지로 구워 쓸 뿐이라 해당 없음.
+- 서울서체·이서윤체는 OFL 이 아니라 **각 기관의 자체 약관**이다. 약관이 바뀔 수 있으니
+  새 폰트를 넣을 땐 그 시점의 조건을 다시 확인한다.
+- 무게(weight)가 더 필요하면 원본 배포처에서 받아 이 폴더에 추가한다. 서울알림은
+  Medium/Bold/ExtraBold/Heavy, Paperlogy 는 Thin~Black 9종이 있는데 **쓰는 것만 넣는다**
+  (안 쓰는 무게까지 넣으면 레포만 무거워진다).
