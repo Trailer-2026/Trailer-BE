@@ -19,6 +19,16 @@ logger = logging.getLogger(__name__)
 # ffmpeg grab 경로도 scale=540:-2 로 같은 급을 만든다.
 WIDTH, HEIGHT = 540, 960
 
+# 디코드를 허용할 원본 픽셀 수 상한. **draft 로 줄인 뒤** 재므로 사진은 사실상 다 통과한다
+# (48MP 아이폰 JPEG 도 1/8 로 축소 디코드되어 1MP 남짓이 된다). 걸리는 건 draft 가 안 먹는
+# 포맷(PNG·WebP)의 비정상적으로 큰 이미지뿐이다.
+#
+# 바이트 상한(10MB)은 **압축된 크기**만 막아서 작은 PNG 하나가 수억 픽셀로 풀릴 수 있다.
+# 표지는 렌더 슬롯을 잡기 전(요청 경로)에 만들어져 RENDER_CONCURRENCY 로도 안 묶이므로,
+# 동시에 몇 건만 들어와도 워커 메모리가 바닥난다. Pillow 의 MAX_IMAGE_PIXELS(약 89M)는
+# 극단적인 폭탄만 막고 그 아래(= RGB 수백 MB)는 그대로 통과시킨다.
+MAX_SOURCE_PIXELS = 30_000_000
+
 # --- 청량한 보정 계수 (결과 보고 조정하는 값들) ------------------------------- #
 SATURATION = 1.12
 BRIGHTNESS = 1.08
@@ -219,6 +229,12 @@ def build_cover(
     width, height = size or (WIDTH, HEIGHT)
     try:
         with Image.open(io.BytesIO(image_bytes)) as raw:
+            # JPEG 는 여기서 1/2~1/8 로 **축소 디코드**된다 — 어차피 표지 크기로 줄일 것이라
+            # 원본 해상도로 풀 이유가 없다. 다른 포맷엔 아무 일도 안 일어난다.
+            raw.draft("RGB", (width, height))
+            if raw.width * raw.height > MAX_SOURCE_PIXELS:
+                logger.warning("표지 원본이 너무 큽니다(%dx%d) — 생략", raw.width, raw.height)
+                return None
             image = (ImageOps.exif_transpose(raw) or raw).convert("RGB")
             image = ImageOps.fit(
                 image, (width, height), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5)

@@ -84,6 +84,35 @@ def test_long_title_shrinks_to_fit():
         assert ImageStat.Stat(edge).mean[0] < 90, f"{label}: 글씨가 화면 밖으로 넘친다"
 
 
+def test_huge_jpeg_is_downscaled_not_rejected():
+    """고화소 JPEG 는 거부가 아니라 축소 디코드로 통과한다 (요즘 폰 사진이 48MP 다)."""
+    huge = _photo((90, 150, 200), (8000, 6000))  # 48MP
+    assert cover_image.build_cover(huge, "동해"), "48MP JPEG 가 거부됐다"
+    # draft 가 먹었는지 — 상한을 아주 낮춰도 JPEG 는 통과해야 한다.
+    original = cover_image.MAX_SOURCE_PIXELS
+    cover_image.MAX_SOURCE_PIXELS = 4_000_000
+    try:
+        assert cover_image.build_cover(huge, "동해"), "draft 축소 디코드가 안 먹었다"
+    finally:
+        cover_image.MAX_SOURCE_PIXELS = original
+    print("  ok  고화소 JPEG 축소 디코드")
+
+
+def test_oversized_png_is_skipped():
+    """draft 가 안 먹는 포맷의 과대 이미지는 표지를 포기한다 (메모리 보호)."""
+    buffer = io.BytesIO()
+    Image.new("RGB", (3000, 2000), (100, 120, 140)).save(buffer, format="PNG")
+    original = cover_image.MAX_SOURCE_PIXELS
+    cover_image.MAX_SOURCE_PIXELS = 1_000_000  # 6MP 짜리를 넘기게
+    cover_image.logger.disabled = True
+    try:
+        assert cover_image.build_cover(buffer.getvalue(), "동해") is None, "상한을 넘겼는데 통과했다"
+    finally:
+        cover_image.MAX_SOURCE_PIXELS = original
+        cover_image.logger.disabled = False
+    print("  ok  과대 PNG → 생략(폴백)")
+
+
 def test_garbage_bytes_return_none():
     """이미지가 아니면 None — 호출 측이 기존 ffmpeg 경로로 폴백한다."""
     cover_image.logger.disabled = True  # 여기선 경고 트레이스백이 기대된 동작이라 가린다
