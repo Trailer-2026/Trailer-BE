@@ -94,6 +94,14 @@ image = (
             "assets/train.glb",
         ],
     )
+    # 레포 루트의 표지 폰트(assets/fonts) — 사진 위 장소명이 썸네일·인트로와 같은 글씨여야 한다.
+    # 렌더러 디렉터리 밖이라 위 add_local_dir 에 안 딸려 온다. 컨테이너에 한글 폰트가 있어도
+    # (fonts-noto-cjk) 그건 고딕이라, 이 파일이 없으면 라벨만 다른 글씨로 나온다.
+    # 폰트를 바꾸거나 이 경로를 옮기면 `modal deploy modal_render.py` 를 다시 해야 반영된다.
+    .add_local_dir(
+        str(HERE.parent.parent / "assets" / "fonts"),
+        remote_path="/app/assets/fonts",
+    )
 )
 
 app = modal.App(APP_NAME, image=image)

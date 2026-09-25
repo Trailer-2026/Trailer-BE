@@ -491,6 +491,33 @@ def find_font() -> Path | None:
     return None
 
 
+# 사진 위 장소명 글씨체. **표지(썸네일·인트로)와 같은 레포 폰트를 쓴다** — 첫 장면의 제목과
+# 영상 도중의 장소명이 다른 글씨면 한 영상으로 안 보인다. 표지를 그리는 utils/cover_image.py 와
+# 같은 파일을 보지만 import 로 묶지는 않는다(이 파일은 Modal 컨테이너에서 단독으로 돌아간다 —
+# 올라가는 건 이 디렉터리뿐이라 utils 가 없다). 글씨체를 바꿀 땐 두 곳의 상수를 같이 고쳐라.
+LABEL_FONT = "Handwriting.ttf"
+BUNDLED_FONT_DIRS = (
+    ROOT / "assets" / "fonts",  # Modal 컨테이너 — modal_render.py 가 /app/assets/fonts 로 올린다
+    ROOT.parent.parent / "assets" / "fonts",  # 레포 루트 — 로컬 엔진(VIDEO_ENGINE=local)
+)
+
+# 글자 크기 = 폭 × 이 값. 손글씨체는 같은 pt 에서 고딕보다 글자가 작게 앉아(획 높이 기준 약 0.83배)
+# 예전 굵은 고딕의 0.058 을 그대로 쓰면 눈에 띄게 작아진다 — 보이는 크기를 맞춘 값이다.
+LABEL_SIZE = 0.070
+
+
+def find_label_font() -> Path | None:
+    """장소명 띠에 쓸 글씨체. 레포 폰트 → 굵은 시스템 한글 폰트 → 아무 한글 폰트."""
+    for directory in BUNDLED_FONT_DIRS:
+        bundled = directory / LABEL_FONT
+        if bundled.exists():
+            return bundled
+    # 레포 폰트를 못 찾았을 때만. 영상 위 글씨는 굵어야 읽혀서 굵은 쪽을 먼저 본다.
+    bold = (Path("C:/Windows/Fonts/malgunbd.ttf"),
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"))
+    return next((path for path in bold if path.exists()), None) or find_font()
+
+
 def load_font(size: int, font_path: Path | None) -> ImageFont.ImageFont:
     if font_path:
         try:
@@ -1374,10 +1401,7 @@ def place_label_overlay(name: str, width: int, height: int) -> Image.Image | Non
     같은 지점의 사진·클립이 연달아 나오므로 이름·크기별로 캐시한다.
     """
     name = name.strip()
-    # 영상 위 글씨는 굵어야 읽힌다 — 굵은 한글 폰트를 먼저 보고, 없으면 일반 폰트.
-    bold = (Path("C:/Windows/Fonts/malgunbd.ttf"),
-            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"))
-    font_path = next((path for path in bold if path.exists()), None) or find_font()
+    font_path = find_label_font()
     if not name or font_path is None:  # 기본 비트맵 폰트는 한글을 못 그린다 — 라벨을 생략
         return None
     band = round(height * 0.16)
@@ -1385,7 +1409,7 @@ def place_label_overlay(name: str, width: int, height: int) -> Image.Image | Non
     shade = Image.linear_gradient("L").resize((1, band)).point(lambda v: round((255 - v) * 0.55))
     overlay.paste((0, 0, 0, 255), (0, 0, width, band), shade.resize((width, band)))
 
-    size = round(width * 0.058)  # 1080px 폭에서 63px
+    size = round(width * LABEL_SIZE)  # 1080px 폭에서 76px
     font = load_font(size, font_path)
     draw = ImageDraw.Draw(overlay)
     # 긴 이름은 화면 폭의 88% 안에 들어올 때까지 줄인다(너무 작아지면 그대로 둔다).
