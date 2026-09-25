@@ -65,7 +65,7 @@ from schemas.video_schema import (
     ReelsUploadResponse,
     PromoRenderRequest,
 )
-from utils import gcs, kakao_local, tour_place
+from utils import cover_image, gcs, kakao_local, tour_place
 from utils.timezone import KST
 
 logger = logging.getLogger(__name__)
@@ -992,7 +992,7 @@ _MAX_JOBS = 200
 PENDING_REELS_URL = ""
 
 # job dict 에만 두고 상태 응답(_job_snapshot)에서는 빼는 내부 필드.
-_INTERNAL_JOB_KEYS = ("started_at", "user_idx", "job_dir")
+_INTERNAL_JOB_KEYS = ("started_at", "user_idx", "job_dir", "cover_path")
 
 # 사용자에게 내보내는 실패 문구. **렌더 stdout·예외 메시지를 그대로 실어 보내지 않는다** —
 # 서버 경로·Modal 내부 로그가 앱 화면까지 나간다. 원인은 서버 로그에만 남긴다.
@@ -1130,6 +1130,8 @@ def _new_job(reels_idx: int, user_idx: int | None, **overrides) -> dict:
     return {
         "user_idx": user_idx,
         "job_dir": None,
+        # 대표 사진으로 미리 만들어 둔 표지 JPEG (job_dir 안). 없으면 완성 영상에서 뽑는다.
+        "cover_path": None,
         "reels_idx": reels_idx,
         "reels_url": None,
         "status": "running",
@@ -1158,6 +1160,7 @@ def _spawn_render_job(
     title: str | None = None,
     region: str | None = None,
     max_video_seconds: float | None = None,
+    cover_path: Path | None = None,
 ) -> dict[str, object]:
     """릴스 행을 먼저 등록하고, 렌더 서브프로세스를 백그라운드 스레드로 띄운다.
 
@@ -1178,6 +1181,9 @@ def _spawn_render_job(
         user_idx,
         # 렌더 입력(업로드 사진·travel_data.json)이 담긴 디렉터리 — 끝나면 지운다.
         job_dir=str(travel_data_path.parent),
+        # 표지는 job_dir 안에 둔다 — 렌더가 실패하면 디렉터리째 지워져 고아 GCS 객체가
+        # 남지 않는다(성공했을 때만 _publish_reels_video 가 올린다).
+        cover_path=str(cover_path) if cover_path else None,
         theme=theme,
         bgm=bgm_path.name if bgm_path else None,
     )
@@ -1375,6 +1381,67 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * radius * math.asin(math.sqrt(a))
 
 
+# --------------------------------------------------------------------------- #
+# 표지(썸네일) — 사용자가 고른 대표 사진에 청량한 보정 + 제목을 얹는다.
+#
+# 완성 영상에서 프레임을 뽑던 기존 경로(_publish_thumbnail)를 대신한다. 만드는 건
+# 요청 시점이지만 **올리는 건 렌더가 끝난 뒤**다 — 실패한 렌더의 표지가 버킷에 남지
+# 않게(job_dir 이 통째로 지워진다).
+# --------------------------------------------------------------------------- #
+COVER_FILE_NAME = "cover.jpg"
+
+
+def _resolve_cover_index(cover_index: int | None, count: int) -> int:
+    """1-based 대표 번호를 검증해 돌려준다. 안 주면 1번(첫 번째로 보낸 것)."""
+    index = 1 if cover_index is None else cover_index
+    if not 1 <= index <= count:
+        raise BadRequestException(f"대표 사진 번호는 1 ~ {count} 사이여야 합니다.")
+    return index
+
+
+def _first_frame_bytes(video_path: Path) -> bytes | None:
+    """영상 첫 프레임을 JPEG 바이트로 뽑는다 (대표 번호가 영상을 가리킬 때). 실패하면 None."""
+    frame = video_path.with_name(f"{video_path.stem}_first.jpg")
+    try:
+        _run_ffmpeg(["-i", str(video_path), "-frames:v", "1", "-q:v", "3", str(frame)])
+        return frame.read_bytes()
+    except Exception:
+        logger.warning("대표 영상의 첫 프레임 추출 실패(무시): %s", video_path.name)
+        return None
+    finally:
+        frame.unlink(missing_ok=True)
+
+
+def _write_cover(job_dir: Path, source: bytes | None, title: str | None) -> Path | None:
+    """대표 사진 바이트로 표지를 만들어 job_dir 에 저장한다. 못 만들면 None."""
+    if not source:
+        return None
+    cover = cover_image.build_cover(source, title)
+    if cover is None:
+        return None
+    path = job_dir / COVER_FILE_NAME
+    path.write_bytes(cover)
+    return path
+
+
+def _publish_cover(cover_path: str | None) -> str | None:
+    """미리 만들어 둔 표지를 버킷에 올린다 → 공개 URL. 없거나 실패하면 None."""
+    if not cover_path:
+        return None
+    path = Path(cover_path)
+    if not path.exists():
+        return None
+    try:
+        return gcs.upload_bytes(
+            f"{THUMBNAIL_OBJECT_PREFIX}/{uuid.uuid4().hex}.jpg",
+            path.read_bytes(),
+            "image/jpeg",
+        )
+    except Exception:
+        logger.warning("릴스 표지 업로드 실패(무시): %s", path.name)
+        return None
+
+
 def _new_job_dir() -> Path:
     """이번 렌더 작업의 입력을 담을 uploads/ 하위 디렉터리를 만든다."""
     job_dir = UPLOADS_DIR / uuid.uuid4().hex[:12]
@@ -1491,6 +1558,7 @@ def start_render_photos_only(
     start_longitude: float | None = None,
     sort_by_time: bool = True,
     title: str | None = None,
+    cover_index: int | None = None,
 ) -> dict[str, object]:
     """사진들의 EXIF(GPS·촬영시각)만으로 여행 경로 영상 렌더링을 시작한다.
 
@@ -1507,6 +1575,12 @@ def start_render_photos_only(
 
     start_latitude/longitude 를 주면 그 위치(예: 서울역)를 출발지로 삼아
     첫 사진 지점으로 이동하며 시작한다 (출발지에서는 사진 없이 라벨만 표시).
+
+    cover_index 는 릴스 표지로 쓸 파일의 **업로드 순서(1부터)** 다. 안 주면 1번.
+    그 파일에 청량한 보정과 제목을 얹어 썸네일로 쓴다 — GPS 가 없어 영상에는 못 들어가는
+    사진이어도 표지로는 쓸 수 있고(사용자가 고른 건 '예쁜 사진'이지 '좌표 있는 사진'이
+    아니다), 영상이면 첫 프레임을 뽑는다. 표지를 못 만들면 예전처럼 완성 영상에서
+    프레임을 뽑는다.
 
     사진은 바이트가 아니라 **스트림**으로 받아 한 장씩 읽고 job 디렉터리로 흘려보낸다 —
     전량을 메모리에 올리지 않으려는 것이다(travel_service.add_images 와 같은 처리).
@@ -1527,6 +1601,7 @@ def start_render_photos_only(
         )
     if len(photos) < 2:
         raise BadRequestException("사진·영상이 2개 이상 필요합니다.")
+    cover_at = _resolve_cover_index(cover_index, len(photos))
 
     job_dir = _new_job_dir()
     try:
@@ -1535,7 +1610,9 @@ def start_render_photos_only(
         # 업로드 순서(고유 이름을 만드는 용도)일 뿐, 영상의 이동 순서는 _group_render_items 가 정한다.
         items: list[tuple[str, dict]] = []
         clip_seconds = 0.0
+        cover_source: bytes | None = None
         for order, (filename, stream) in enumerate(photos):
+            is_cover = order + 1 == cover_at
             if Path(filename or "").suffix.lower() in RENDER_CLIP_EXTENSIONS:
                 rel, meta = _save_render_clip(job_dir, f"clip_{order}", filename, stream)
                 clip_seconds += float(meta["seconds"])
@@ -1544,6 +1621,8 @@ def start_render_photos_only(
                         f"영상은 합쳐서 {MAX_RENDER_CLIP_TOTAL_SECONDS:.0f}초까지 넣을 수 있습니다 "
                         f"(영상마다 앞 {RENDER_CLIP_SECONDS:.0f}초만 쓰입니다)."
                     )
+                if is_cover:
+                    cover_source = _first_frame_bytes(VIDEO_MAKER_DIR / rel)
                 items.append((rel, meta))
                 continue
             # 상한+1바이트까지만 읽어 초과분을 메모리에 올리지 않는다(대표 사진과 같은 방식).
@@ -1552,6 +1631,8 @@ def start_render_photos_only(
                 raise BadRequestException(
                     f"사진 한 장은 {MAX_RENDER_PHOTO_BYTES // (1024 * 1024)}MB 이하만 가능합니다."
                 )
+            if is_cover:
+                cover_source = content  # GPS 판정보다 먼저 — 아래에서 걸러져도 표지로는 쓴다
             meta = _extract_photo_meta(content)
             if meta is None:
                 continue  # GPS 없는 사진은 지점을 만들 수 없다 — 저장도 하지 않는다
@@ -1596,6 +1677,7 @@ def start_render_photos_only(
         return _spawn_render_job(
             db, travel_data_path, bgm_path, theme, user_idx, title,
             region=_region_of_trip(track_points),
+            cover_path=_write_cover(job_dir, cover_source, title),
         )
     except Exception:
         # 여기까지 못 오면 렌더 job 이 없어 아무도 이 디렉터리를 치우지 않는다
@@ -1887,8 +1969,13 @@ def start_render_promo(db: Session, user_idx: int, req: PromoRenderRequest) -> d
     1장씩 붙인다(둘 다 없거나 다운로드 실패면 사진 없이 지나감). 결과는 요청자 소유의
     보통 릴스 1건이라 공유 링크(/r/{reels_idx})·다운로드·피드 노출이 모두 그대로 된다.
     ponytail: 코스는 저장하지 않는다 — 다시 뽑고 싶으면 다시 부른다. 권한 게이트도 없다.
+
+    cover_index 는 표지로 쓸 **지점 번호(1부터)** 다(안 주면 1번). 사진 업로드가 없는
+    경로라 사용자가 고를 수 있는 단위가 지점뿐이다 — 그 지점의 이미지가 없으면
+    표지도 없고 완성 영상에서 프레임을 뽑는다.
     """
     theme = _validate_render_options(req.theme)
+    cover_at = _resolve_cover_index(req.cover_index, len(req.points))
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         urls = list(pool.map(
@@ -1901,8 +1988,11 @@ def start_render_promo(db: Session, user_idx: int, req: PromoRenderRequest) -> d
     try:
         track_points: list[dict[str, object]] = []
         media_points: list[dict[str, object]] = []
+        cover_source: bytes | None = None
         for i, (point, url) in enumerate(zip(req.points, urls)):
             content = downloaded.get(url) if url else None
+            if i + 1 == cover_at:
+                cover_source = content
             photos = [_save_render_image(job_dir, f"img_{i}", url, content)] if content else []
             _append_stop(
                 track_points, media_points,
@@ -1916,6 +2006,7 @@ def start_render_promo(db: Session, user_idx: int, req: PromoRenderRequest) -> d
             db, travel_data_path, bgm_path, theme, user_idx, req.title,
             region=(req.region or "").strip() or _region_of_trip(track_points),
             max_video_seconds=PROMO_VIDEO_SECONDS,
+            cover_path=_write_cover(job_dir, cover_source, req.title),
         )
     except Exception:
         shutil.rmtree(job_dir, ignore_errors=True)  # 렌더 job 이 안 떴으면 아무도 안 치운다
@@ -2134,7 +2225,7 @@ def _render_job(job: dict, command: list[str]) -> None:
     update(percent=99.0, phase="영상 업로드(버킷)")
     video_path = OUTPUT_DIR / output_name
     try:
-        video_url = _publish_reels_video(job["reels_idx"], video_path)
+        video_url = _publish_reels_video(job["reels_idx"], video_path, job.get("cover_path"))
         # GCS 에 올라갔으므로 로컬 사본은 지운다. 안 지우면 output/ 이 무한히
         # 쌓여 디스크가 찬다(영상 1편이 수십 MB). 실패 시엔 남겨서 받을 수 있게 둔다.
         video_path.unlink(missing_ok=True)
@@ -2163,7 +2254,9 @@ def _render_job(job: dict, command: list[str]) -> None:
     )
 
 
-def _publish_reels_video(reels_idx: int, video_path: Path) -> str:
+def _publish_reels_video(
+    reels_idx: int, video_path: Path, cover_path: str | None = None
+) -> str:
     """완성 영상을 GCS 버킷(reels/)에 올리고 대기 중인 릴스의 url 을 채운다 → 공개 URL.
 
     행은 렌더 시작 때 이미 만들어져 있으므로(작성자 매핑도 그 때 끝) 여기서는
@@ -2178,7 +2271,9 @@ def _publish_reels_video(reels_idx: int, video_path: Path) -> str:
     from databases.database import SessionLocal
 
     url = gcs.upload_file(f"reels/{uuid.uuid4().hex}.mp4", video_path, "video/mp4")
-    thumbnail_url = _publish_thumbnail(video_path)  # 홈 카드용 대표 프레임 (실패해도 None)
+    # 대표 사진으로 만든 표지가 있으면 그걸 쓰고, 없으면 예전처럼 영상에서 프레임을 뽑는다
+    # (표지 생성·업로드가 실패해도 썸네일 없는 릴스가 되진 않게).
+    thumbnail_url = _publish_cover(cover_path) or _publish_thumbnail(video_path)
     db = SessionLocal()
     try:
         reels = reels_dao.get_by_idx(db, reels_idx)

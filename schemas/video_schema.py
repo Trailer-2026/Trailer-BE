@@ -226,4 +226,11 @@ class PromoRenderRequest(BaseModel):
         ..., min_length=2, max_length=6,
         description="코스 지점 순서대로 2~6개. 지점당 사진 1장이 2.8초를 차지한다. 6개면 이동까지 합쳐 24초쯤이라 30초 안에 여유 있게 들어간다",
     )
+    cover_index: int | None = Field(
+        None, ge=1,
+        description="릴스 표지(썸네일)로 쓸 지점 번호 (1부터, 생략하면 1번). 그 지점 이미지에 "
+                    "청량한 보정과 제목을 얹어 썸네일로 씁니다. 이미지가 없는 지점이면 완성 "
+                    "영상에서 프레임을 뽑습니다",
+        examples=[1],
+    )
 

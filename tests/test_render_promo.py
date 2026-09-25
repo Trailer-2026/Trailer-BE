@@ -33,11 +33,12 @@ def _run(req, *, near=None, dead=()):
     near = near or {}
 
     def fake_spawn(db, travel_data_path, bgm_path, theme, user_idx, title=None, region=None,
-                   max_video_seconds=None):
+                   max_video_seconds=None, cover_path=None):
         captured["data"] = json.loads(Path(travel_data_path).read_text(encoding="utf-8"))
         captured["job_dir"] = Path(travel_data_path).parent
         captured["max_video_seconds"] = max_video_seconds
         captured["title"], captured["region"] = title, region
+        captured["cover_path"] = cover_path
         return {"reels_idx": 1}
 
     originals = (video_service._spawn_render_job, video_service._fetch_travel_image,

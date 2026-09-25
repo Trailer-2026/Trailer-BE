@@ -68,9 +68,11 @@ def _run(photos, **kwargs):
     """스텁을 걸고 start_render_photos_only 를 돌린다 → 렌더에 넘어간 travel_data(dict)."""
     captured = {}
 
-    def fake_spawn(db, travel_data_path, bgm_path, theme, user_idx, title=None, region=None):
+    def fake_spawn(db, travel_data_path, bgm_path, theme, user_idx, title=None, region=None,
+                   cover_path=None):
         captured["data"] = json.loads(Path(travel_data_path).read_text(encoding="utf-8"))
         captured["job_dir"] = Path(travel_data_path).parent
+        captured["cover_path"] = cover_path
         return {"reels_idx": 1}
 
     original = (video_service._spawn_render_job, video_service._region_of_trip)
@@ -133,7 +135,10 @@ def main() -> None:
         assert len(data["trackPoints"]) == 2, data["trackPoints"]
         assert abs(lat0 - seoul[0]) < 0.01, f"촬영 시각 순(서울 먼저)이어야: {lat0}"
         saved = sorted(p.name for p in captured["job_dir"].iterdir())
-        assert saved == ["photo_0.jpg", "photo_2.jpg", "travel_data.json"], saved
+        # cover.jpg = 대표 사진(기본 1번)으로 만든 표지. GPS 없어 영상에서 빠진 사진이어도
+        # 표지로는 쓰이므로 photo_1 이 없어도 표지는 있다.
+        assert saved == ["cover.jpg", "photo_0.jpg", "photo_2.jpg", "travel_data.json"], saved
+        assert captured["cover_path"], "표지를 만들지 못했다"
         assert all(s.read_sizes for _, s in photos), "스트림을 안 읽었다"
 
         # 6) 순서 지정 모드는 촬영 시각을 무시하고 업로드 순서(부산 먼저)를 그대로 쓴다.
