@@ -64,8 +64,12 @@ def soft_delete_beyond_limit(db: Session, user_idx: int, keep_token: str, limit:
     ).offset(limit - 1).all()
     if not stale:
         return 0
+    # 소유자·삭제 여부를 다시 건다 — 고른 뒤 지우기 전에 다른 계정이 그 토큰을 가져갔으면
+    # (사용자 잠금은 남의 등록을 못 막는다) 이제 남의 기기라 건드리면 안 된다.
     return db.query(FcmToken).filter(
         FcmToken.fcm_token_idx.in_([idx for (idx,) in stale]),
+        FcmToken.user_idx == user_idx,
+        FcmToken.deleted_at.is_(None),
     ).update({"deleted_at": func.now()}, synchronize_session=False)
 
 
