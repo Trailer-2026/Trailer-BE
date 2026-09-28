@@ -22,8 +22,8 @@ venv/
 /services/videoMaker/output/
 # Builder uploads (user-supplied photos + generated travel_data.json)
 /services/videoMaker/assets/uploads/
-# BGM audio — Pixabay Content License allows use in videos but restricts
-# standalone redistribution, so keep the audio files local (not committed).
+# BGM audio — 서비스에 쓰는 트랙은 mp3 로 커밋한다(배포가 git pull 이라 저장소에
+# 없으면 서버에도 없다). 그 밖의 형식은 로컬 작업 파일로 보고 올리지 않는다.
 # CREDITS.md is tracked so attribution stays in the repo.
 /services/videoMaker/bgm/*.m4a
 /services/videoMaker/bgm/*.aac
