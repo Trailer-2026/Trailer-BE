@@ -195,7 +195,7 @@ def _bgm_display_name(filename: str) -> dict[str, str]:
     stem = Path(filename).stem
     if " - " in stem:
         title, artist = stem.rsplit(" - ", 1)
-        return {"title": title.strip(), "artist": artist.strip(), "source": "Pixabay"}
+        return {"title": title.strip(), "artist": artist.strip(), "source": "Free To Use"}
     return {"title": stem, "artist": "", "source": ""}
 
 
