@@ -1,12 +1,20 @@
 import logging
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 
 from databases.daos import fcm_token_dao
 from schemas.fcm_schema import PushResultResponse
 from utils import firebase
 
 logger = logging.getLogger(__name__)
+
+# 사용자당 살아 있는 기기 토큰 상한. 등록에 제한이 없으면 아무 문자열이나 계속 쌓을 수
+# 있고, 500개를 넘기면 send_each_for_multicast 가 ValueError 를 내 그 사용자 푸시가
+# 통째로 멈춘다(notify 가 예외를 삼켜 경고 로그만 남는다). 형식이 틀린 토큰은 발송
+# 실패로도 정리되지 않으므로(UnregisteredError 만 지운다) 여기서 밀어내는 게 유일한 출구다.
+MAX_TOKENS_PER_USER = 10
 
 
 def register_token(db: Session, user_idx: int, token: str) -> None:
@@ -22,20 +30,43 @@ def register_token(db: Session, user_idx: int, token: str) -> None:
     그 기기는 아무 신호 없이 푸시를 영영 못 받는다. 막는 대신 흔적을 남겨 탐지한다.
     """
     existing = fcm_token_dao.get_by_token_including_deleted(db, token)
-    if existing:
-        # 같은 토큰이 이미 있으면 소유 사용자 갱신(기기 주인 변경). soft-delete된
-        # 토큰이면 되살린다 — token UNIQUE 제약 때문에 새로 INSERT할 수 없다.
-        if existing.user_idx != user_idx and existing.deleted_at is None:
-            # 로그아웃을 거친 기기는 deleted_at이 차 있어 여기 안 걸린다 = 정상 인계는 조용하다.
-            logger.warning(
-                "FCM 토큰 소유자 교체(살아 있는 등록) user=%s→%s token=...%s",
-                existing.user_idx, user_idx, token[-8:],
-            )
-        existing.user_idx = user_idx
-        existing.deleted_at = None
-    else:
-        fcm_token_dao.create(db, user_idx, token)
+    if existing is None:
+        try:
+            fcm_token_dao.create(db, user_idx, token)
+            _trim_tokens(db, user_idx, token)
+            db.commit()
+            return
+        except IntegrityError:
+            # 조회와 INSERT 사이에 같은 토큰이 먼저 들어왔다(앱이 등록을 연달아 두 번
+            # 부르면 난다). 500으로 올리지 않고 이미 있는 행을 갱신하는 길로 돌린다.
+            db.rollback()
+            existing = fcm_token_dao.get_by_token_including_deleted(db, token)
+            if existing is None:
+                raise
+
+    # 같은 토큰이 이미 있으면 소유 사용자 갱신(기기 주인 변경). soft-delete된
+    # 토큰이면 되살린다 — token UNIQUE 제약 때문에 새로 INSERT할 수 없다.
+    if existing.user_idx != user_idx and existing.deleted_at is None:
+        # 로그아웃을 거친 기기는 deleted_at이 차 있어 여기 안 걸린다 = 정상 인계는 조용하다.
+        logger.warning(
+            "FCM 토큰 소유자 교체(살아 있는 등록) user=%s→%s token=...%s",
+            existing.user_idx, user_idx, token[-8:],
+        )
+    existing.user_idx = user_idx
+    existing.deleted_at = None
+    # 바뀐 값이 없어도 등록 시각은 갱신한다 — 상한 정리가 '최근 등록순'으로 남기므로,
+    # 안 찍으면 매일 쓰는 기기가 처음 등록한 날짜 그대로라 가장 먼저 밀려난다.
+    existing.updated_at = func.now()
+    _trim_tokens(db, user_idx, token)
     db.commit()
+
+
+def _trim_tokens(db: Session, user_idx: int, token: str) -> None:
+    """사용자당 토큰 수를 상한으로 묶는다. 커밋은 호출한 쪽이 한다."""
+    db.flush()  # 방금 바꾼 소유자·시각이 정리 조회에 보이도록
+    removed = fcm_token_dao.soft_delete_beyond_limit(db, user_idx, token, MAX_TOKENS_PER_USER)
+    if removed:
+        logger.warning("FCM 토큰 상한 초과로 오래된 등록 %d건 해제 user=%s", removed, user_idx)
 
 
 def send_push(

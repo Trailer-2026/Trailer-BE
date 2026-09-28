@@ -118,6 +118,73 @@ def test_relogin_on_same_device_revives_token() -> None:
     print("OK: 로그아웃한 기기의 재등록은 그대로 된다")
 
 
+def test_concurrent_register_does_not_raise() -> None:
+    """조회와 INSERT 사이에 같은 토큰이 먼저 들어와도 500이 아니라 갱신으로 끝난다.
+
+    경합을 실제로 만들 수는 없어, 첫 조회만 '없음'으로 속여 같은 상태를 만든다.
+    """
+    db = _session()
+    fcm_service.register_token(db, USER, "phone")  # 먼저 들어온 요청
+
+    real = fcm_token_dao.get_by_token_including_deleted
+    calls = []
+
+    def stale_first(db_, token):
+        calls.append(token)
+        return None if len(calls) == 1 else real(db_, token)
+
+    fcm_token_dao.get_by_token_including_deleted = stale_first
+    try:
+        fcm_service.register_token(db, USER, "phone")  # 늦은 요청
+    finally:
+        fcm_token_dao.get_by_token_including_deleted = real
+
+    assert fcm_token_dao.get_tokens_by_user(db, USER) == ["phone"]
+    assert db.query(FcmToken).count() == 1, "같은 토큰이 두 행으로 들어갔다"
+    print("OK: 같은 토큰의 동시 등록이 에러 없이 끝난다")
+
+
+def test_tokens_capped_per_user() -> None:
+    """상한을 넘기면 오래된 등록부터 풀리고, 계속 쓰는 기기와 남의 토큰은 남는다."""
+    from datetime import datetime, timedelta, timezone
+
+    db = _session()
+    limit = fcm_service.MAX_TOKENS_PER_USER
+    fcm_service.register_token(db, OTHER, "other-phone")
+    fcm_service.register_token(db, USER, "real-phone")
+    for i in range(limit - 1):
+        fcm_service.register_token(db, USER, f"junk-{i}")
+
+    # 지금까지의 등록을 전부 과거로 민다 — SQLite 시각이 초 단위라 안 밀면 순서가 안 갈린다.
+    old = datetime.now(timezone.utc) - timedelta(days=30)
+    db.query(FcmToken).update({"created_at": old, "updated_at": None})
+    db.commit()
+
+    fcm_service.register_token(db, USER, "real-phone")  # 앱을 다시 연 기기(값 변화 없음)
+    fcm_service.register_token(db, USER, "junk-new")    # 상한 초과
+
+    left = set(fcm_token_dao.get_tokens_by_user(db, USER))
+    assert len(left) == limit, f"상한 {limit}개를 넘겨 남았다: {len(left)}"
+    assert "junk-new" in left, "방금 등록한 토큰이 지워졌다"
+    assert "real-phone" in left, "계속 쓰는 기기가 등록일이 오래됐다고 밀려났다"
+    assert fcm_token_dao.get_tokens_by_user(db, OTHER) == ["other-phone"], "남의 토큰까지 지워졌다"
+    print("OK: 사용자당 토큰은 상한까지만 남고 오래된 것부터 풀린다")
+
+
+def test_token_length_validated() -> None:
+    from pydantic import ValidationError
+    from schemas.fcm_schema import FcmTokenRequest
+
+    FcmTokenRequest(token="a" * 255)
+    for bad in ("", "a" * 256):
+        try:
+            FcmTokenRequest(token=bad)
+        except ValidationError:
+            continue
+        raise AssertionError(f"길이 {len(bad)} 토큰이 통과했다")
+    print("OK: 빈 토큰·255자 초과 토큰은 거절된다")
+
+
 def test_dev_test_send_route_removed() -> None:
     from main import app
 
@@ -131,4 +198,7 @@ if __name__ == "__main__":
     test_logout_with_dead_token_is_noop()
     test_logout_all_and_withdraw_clear_devices()
     test_relogin_on_same_device_revives_token()
+    test_concurrent_register_does_not_raise()
+    test_tokens_capped_per_user()
+    test_token_length_validated()
     test_dev_test_send_route_removed()
