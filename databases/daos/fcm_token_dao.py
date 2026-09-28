@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from databases.models.fcm_token import FcmToken
+from databases.models.user import User
 
 
 def get_by_token_including_deleted(db: Session, token: str):
@@ -42,8 +43,18 @@ def soft_delete_beyond_limit(db: Session, user_idx: int, keep_token: str, limit:
 
     방금 등록한 `keep_token`은 순서와 무관하게 남긴다 — 시각이 같은 행끼리 밀려
     지금 등록한 기기가 지워지는 일을 막는다.
+
+    세기 전에 사용자 행을 잠가 같은 사용자의 등록을 줄 세운다. 안 잠그면 동시에 들어온
+    등록들이 서로의 커밋 전 INSERT 를 못 봐 각자 '상한 이내'로 판단하고 함께 넘긴다.
+    FOR UPDATE 가 아니라 FOR NO KEY UPDATE 인 이유: fcm_token INSERT 가 FK 검사로
+    user 행에 FOR KEY SHARE 를 이미 잡고 있어, FOR UPDATE 면 두 등록이 서로를 기다리다
+    교착된다.
     """
-    stale = db.query(FcmToken.fcm_token_idx).filter(
+    db.query(User.user_idx).filter(
+        User.user_idx == user_idx,
+    ).with_for_update(key_share=True).first()
+
+    stale =db.query(FcmToken.fcm_token_idx).filter(
         FcmToken.user_idx == user_idx,
         FcmToken.deleted_at.is_(None),
         FcmToken.token != keep_token,
