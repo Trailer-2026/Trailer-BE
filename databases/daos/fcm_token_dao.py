@@ -37,6 +37,27 @@ def soft_delete_by_user(db: Session, user_idx: int) -> int:
     ).update({"deleted_at": func.now()}, synchronize_session=False)
 
 
+def soft_delete_beyond_limit(db: Session, user_idx: int, keep_token: str, limit: int) -> int:
+    """사용자의 살아 있는 토큰을 최근 등록순 `limit`개만 남기고 soft delete. 지운 수 반환.
+
+    방금 등록한 `keep_token`은 순서와 무관하게 남긴다 — 시각이 같은 행끼리 밀려
+    지금 등록한 기기가 지워지는 일을 막는다.
+    """
+    stale = db.query(FcmToken.fcm_token_idx).filter(
+        FcmToken.user_idx == user_idx,
+        FcmToken.deleted_at.is_(None),
+        FcmToken.token != keep_token,
+    ).order_by(
+        func.coalesce(FcmToken.updated_at, FcmToken.created_at).desc(),
+        FcmToken.fcm_token_idx.desc(),
+    ).offset(limit - 1).all()
+    if not stale:
+        return 0
+    return db.query(FcmToken).filter(
+        FcmToken.fcm_token_idx.in_([idx for (idx,) in stale]),
+    ).update({"deleted_at": func.now()}, synchronize_session=False)
+
+
 def soft_delete_by_tokens(db: Session, tokens: list[str]) -> int:
     """주어진 토큰들을 soft delete(deleted_at 세팅). 영향받은 행 수 반환."""
     if not tokens:
