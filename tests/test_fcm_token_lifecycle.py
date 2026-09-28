@@ -118,6 +118,46 @@ def test_relogin_on_same_device_revives_token() -> None:
     print("OK: 로그아웃한 기기의 재등록은 그대로 된다")
 
 
+def test_concurrent_register_does_not_raise() -> None:
+    """조회와 INSERT 사이에 같은 토큰이 먼저 들어와도 500이 아니라 갱신으로 끝난다.
+
+    경합을 실제로 만들 수는 없어, 첫 조회만 '없음'으로 속여 같은 상태를 만든다.
+    """
+    db = _session()
+    fcm_service.register_token(db, USER, "phone")  # 먼저 들어온 요청
+
+    real = fcm_token_dao.get_by_token_including_deleted
+    calls = []
+
+    def stale_first(db_, token):
+        calls.append(token)
+        return None if len(calls) == 1 else real(db_, token)
+
+    fcm_token_dao.get_by_token_including_deleted = stale_first
+    try:
+        fcm_service.register_token(db, USER, "phone")  # 늦은 요청
+    finally:
+        fcm_token_dao.get_by_token_including_deleted = real
+
+    assert fcm_token_dao.get_tokens_by_user(db, USER) == ["phone"]
+    assert db.query(FcmToken).count() == 1, "같은 토큰이 두 행으로 들어갔다"
+    print("OK: 같은 토큰의 동시 등록이 에러 없이 끝난다")
+
+
+def test_token_length_validated() -> None:
+    from pydantic import ValidationError
+    from schemas.fcm_schema import FcmTokenRequest
+
+    FcmTokenRequest(token="a" * 255)
+    for bad in ("", "a" * 256):
+        try:
+            FcmTokenRequest(token=bad)
+        except ValidationError:
+            continue
+        raise AssertionError(f"길이 {len(bad)} 토큰이 통과했다")
+    print("OK: 빈 토큰·255자 초과 토큰은 거절된다")
+
+
 def test_dev_test_send_route_removed() -> None:
     from main import app
 
@@ -131,4 +171,6 @@ if __name__ == "__main__":
     test_logout_with_dead_token_is_noop()
     test_logout_all_and_withdraw_clear_devices()
     test_relogin_on_same_device_revives_token()
+    test_concurrent_register_does_not_raise()
+    test_token_length_validated()
     test_dev_test_send_route_removed()

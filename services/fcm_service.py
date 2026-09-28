@@ -1,5 +1,6 @@
 import logging
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from databases.daos import fcm_token_dao
@@ -22,19 +23,29 @@ def register_token(db: Session, user_idx: int, token: str) -> None:
     그 기기는 아무 신호 없이 푸시를 영영 못 받는다. 막는 대신 흔적을 남겨 탐지한다.
     """
     existing = fcm_token_dao.get_by_token_including_deleted(db, token)
-    if existing:
-        # 같은 토큰이 이미 있으면 소유 사용자 갱신(기기 주인 변경). soft-delete된
-        # 토큰이면 되살린다 — token UNIQUE 제약 때문에 새로 INSERT할 수 없다.
-        if existing.user_idx != user_idx and existing.deleted_at is None:
-            # 로그아웃을 거친 기기는 deleted_at이 차 있어 여기 안 걸린다 = 정상 인계는 조용하다.
-            logger.warning(
-                "FCM 토큰 소유자 교체(살아 있는 등록) user=%s→%s token=...%s",
-                existing.user_idx, user_idx, token[-8:],
-            )
-        existing.user_idx = user_idx
-        existing.deleted_at = None
-    else:
-        fcm_token_dao.create(db, user_idx, token)
+    if existing is None:
+        try:
+            fcm_token_dao.create(db, user_idx, token)
+            db.commit()
+            return
+        except IntegrityError:
+            # 조회와 INSERT 사이에 같은 토큰이 먼저 들어왔다(앱이 등록을 연달아 두 번
+            # 부르면 난다). 500으로 올리지 않고 이미 있는 행을 갱신하는 길로 돌린다.
+            db.rollback()
+            existing = fcm_token_dao.get_by_token_including_deleted(db, token)
+            if existing is None:
+                raise
+
+    # 같은 토큰이 이미 있으면 소유 사용자 갱신(기기 주인 변경). soft-delete된
+    # 토큰이면 되살린다 — token UNIQUE 제약 때문에 새로 INSERT할 수 없다.
+    if existing.user_idx != user_idx and existing.deleted_at is None:
+        # 로그아웃을 거친 기기는 deleted_at이 차 있어 여기 안 걸린다 = 정상 인계는 조용하다.
+        logger.warning(
+            "FCM 토큰 소유자 교체(살아 있는 등록) user=%s→%s token=...%s",
+            existing.user_idx, user_idx, token[-8:],
+        )
+    existing.user_idx = user_idx
+    existing.deleted_at = None
     db.commit()
 
 
