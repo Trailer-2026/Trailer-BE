@@ -8,7 +8,7 @@ class BgmTrackResponse(BaseModel):
     file: str = Field(..., description="bgm 폴더 내 파일명 (렌더 요청의 bgm 값으로 사용)")
     title: str = Field(..., description="표시용 곡명")
     artist: str = Field(..., description="아티스트명 (파싱 실패 시 빈 문자열)")
-    source: str = Field(..., description="음원 출처 (예: Pixabay, 없으면 빈 문자열)")
+    source: str = Field(..., description="음원 출처 (예: Free To Use, 없으면 빈 문자열)")
 
 
 class ReelsRecommendResponse(BaseModel):
